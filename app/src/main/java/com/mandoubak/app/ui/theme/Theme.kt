@@ -13,36 +13,36 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val LightColorScheme = lightColorScheme(
-    primary = Emerald40,
-    onPrimary = SurfaceLight,
-    primaryContainer = EmeraldContainer,
-    onPrimaryContainer = OnEmeraldContainer,
-    secondary = Amber40,
-    onSecondary = OnEmeraldContainer,
-    secondaryContainer = AmberContainer,
-    onSecondaryContainer = OnAmberContainer,
-    tertiary = SlateTeal,
-    onTertiary = SurfaceLight,
-    tertiaryContainer = SlateTealContainer,
-    background = BackgroundLight,
-    surface = SurfaceLight,
-    surfaceVariant = SurfaceVariantLight,
-    outline = OutlineLight
+    primary = MedicalTeal,
+    onPrimary = Color.White,
+    primaryContainer = MedicalTealContainer,
+    onPrimaryContainer = OnMedicalTealContainer,
+    secondary = MedicalGold,
+    onSecondary = Color.White,
+    secondaryContainer = MedicalGoldContainer,
+    onSecondaryContainer = OnMedicalGoldContainer,
+    tertiary = ClinicalBlue,
+    onTertiary = Color.White,
+    tertiaryContainer = ClinicalBlueContainer,
+    background = MedicalBackground,
+    surface = MedicalSurface,
+    surfaceVariant = MedicalSurfaceVariant,
+    outline = MedicalOutline
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Emerald80,
-    onPrimary = EmeraldDark,
-    primaryContainer = Emerald40,
-    onPrimaryContainer = EmeraldContainer,
-    secondary = Amber80,
-    onSecondary = OnAmberContainer,
-    secondaryContainer = Amber40,
-    onSecondaryContainer = AmberContainer,
-    background = EmeraldDark,
-    surface = Color(0xFF10271D),
-    surfaceVariant = Color(0xFF18382B),
-    outline = Color(0xFF335C49)
+    primary = Color(0xFF4DD8D8),
+    onPrimary = MedicalTealDark,
+    primaryContainer = MedicalTeal,
+    onPrimaryContainer = MedicalTealContainer,
+    secondary = Color(0xFFFBBF24),
+    onSecondary = Color(0xFF451A03),
+    secondaryContainer = MedicalGold,
+    onSecondaryContainer = MedicalGoldContainer,
+    background = Color(0xFF0F172A),
+    surface = Color(0xFF1E293B),
+    surfaceVariant = Color(0xFF334155),
+    outline = Color(0xFF475569)
 )
 
 @Composable
@@ -56,7 +56,7 @@ fun MandoubakTheme(
         SideEffect {
             val window = (view.context as Activity).window
             window.statusBarColor = colorScheme.primary.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
     }
 

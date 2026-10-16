@@ -19,7 +19,7 @@ import com.mandoubak.app.ui.components.MandoubakTopBar
 import com.mandoubak.app.ui.screens.*
 import com.mandoubak.app.ui.theme.MandoubakTheme
 import com.mandoubak.app.viewmodel.MandoubakViewModel
-import com.mandoubak.app.viewmodel.NavigationTab
+import com.mandoubak.app.viewmodel.MedicalTab
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -38,25 +38,21 @@ class MainActivity : ComponentActivity() {
                 val currentPersona by viewModel.selectedPersona.collectAsState()
                 val activeTab by viewModel.activeTab.collectAsState()
                 val searchQuery by viewModel.searchQuery.collectAsState()
-                val selectedCategory by viewModel.selectedCategory.collectAsState()
-                val orderStatusFilter by viewModel.orderStatusFilter.collectAsState()
+                val selectedDrugCategory by viewModel.selectedDrugCategory.collectAsState()
 
-                val products by viewModel.filteredProducts.collectAsState()
-                val orders by viewModel.filteredOrders.collectAsState()
-                val stores by viewModel.stores.collectAsState()
-                val reps by viewModel.representatives.collectAsState()
-                val visitLogs by viewModel.visitLogs.collectAsState()
+                val drugs by viewModel.filteredDrugs.collectAsState()
+                val rawDrugs by viewModel.drugs.collectAsState()
+                val doctors by viewModel.filteredDoctors.collectAsState()
+                val rawDoctors by viewModel.doctors.collectAsState()
+                val pharmacies by viewModel.filteredPharmacies.collectAsState()
+                val rawPharmacies by viewModel.pharmacies.collectAsState()
+                val visits by viewModel.visits.collectAsState()
+                val notifications by viewModel.notifications.collectAsState()
 
-                val cartItems by viewModel.cartItems.collectAsState()
-                val cartTotalCartons by viewModel.cartTotalCartons.collectAsState()
-
-                val selectedProduct by viewModel.selectedProduct.collectAsState()
-                val selectedInvoiceOrder by viewModel.selectedInvoiceOrder.collectAsState()
-                val selectedStoreForVisit by viewModel.selectedStoreForVisit.collectAsState()
-
-                val isCartOpen by viewModel.isCartOpen.collectAsState()
-                val isCheckoutOpen by viewModel.isCheckoutOpen.collectAsState()
-                val isAddStoreOpen by viewModel.isAddStoreOpen.collectAsState()
+                val selectedVisitForAi by viewModel.selectedVisitForAi.collectAsState()
+                val isScheduleVisitOpen by viewModel.isScheduleVisitOpen.collectAsState()
+                val isBroadcastNotificationOpen by viewModel.isBroadcastNotificationOpen.collectAsState()
+                val pharmacyToOrder by viewModel.isPharmacyOrderOpen.collectAsState()
                 val snackbarMsg by viewModel.snackbarMessage.collectAsState()
 
                 LaunchedEffect(snackbarMsg) {
@@ -68,9 +64,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Handle back button if on non-marketplace tab
-                BackHandler(enabled = activeTab != NavigationTab.MARKETPLACE) {
-                    viewModel.setActiveTab(NavigationTab.MARKETPLACE)
+                BackHandler(enabled = activeTab != MedicalTab.VISITS) {
+                    viewModel.setActiveTab(MedicalTab.VISITS)
                 }
 
                 Scaffold(
@@ -78,18 +73,18 @@ class MainActivity : ComponentActivity() {
                     topBar = {
                         MandoubakTopBar(
                             currentPersona = currentPersona,
-                            cartItemCount = cartTotalCartons,
+                            notificationCount = notifications.size,
                             onPersonaSelected = { viewModel.setPersona(it) },
-                            onOpenCart = { viewModel.openCart() }
+                            onOpenNotifications = { viewModel.setActiveTab(MedicalTab.NOTIFICATIONS) }
                         )
                     },
                     bottomBar = {
                         NavigationBar(
-                            modifier = Modifier.testTag("mandoubak_bottom_nav"),
+                            modifier = Modifier.testTag("medical_bottom_nav"),
                             containerColor = MaterialTheme.colorScheme.surface,
                             tonalElevation = 6.dp
                         ) {
-                            NavigationTab.values().forEach { tab ->
+                            MedicalTab.values().forEach { tab ->
                                 val isSelected = activeTab == tab
                                 NavigationBarItem(
                                     selected = isSelected,
@@ -97,47 +92,51 @@ class MainActivity : ComponentActivity() {
                                     icon = {
                                         Icon(
                                             imageVector = when (tab) {
-                                                NavigationTab.MARKETPLACE -> Icons.Default.Storefront
-                                                NavigationTab.ORDERS -> Icons.Default.ReceiptLong
-                                                NavigationTab.FLEET -> Icons.Default.LocalShipping
-                                                NavigationTab.STORES -> Icons.Default.Store
-                                                NavigationTab.ANALYTICS -> Icons.Default.Assessment
+                                                MedicalTab.VISITS -> Icons.Default.EventNote
+                                                MedicalTab.DOCTORS -> Icons.Default.Person
+                                                MedicalTab.PHARMACIES -> Icons.Default.LocalPharmacy
+                                                MedicalTab.DRUGS -> Icons.Default.Medication
+                                                MedicalTab.NOTIFICATIONS -> Icons.Default.Campaign
                                             },
-                                            contentDescription = tab.labelEn
+                                            contentDescription = tab.titleAr
                                         )
                                     },
-                                    label = { Text("${tab.labelEn}") },
+                                    label = { Text(tab.titleAr) },
                                     colors = NavigationBarItemDefaults.colors(
                                         selectedIconColor = MaterialTheme.colorScheme.primary,
                                         selectedTextColor = MaterialTheme.colorScheme.primary,
                                         indicatorColor = MaterialTheme.colorScheme.primaryContainer
                                     ),
-                                    modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                                    modifier = Modifier.testTag("tab_${tab.name.lowercase()}")
                                 )
                             }
                         }
                     },
                     floatingActionButton = {
-                        if (activeTab == NavigationTab.MARKETPLACE && cartTotalCartons > 0) {
-                            ExtendedFloatingActionButton(
-                                onClick = { viewModel.openCart() },
-                                containerColor = MaterialTheme.colorScheme.secondary,
-                                contentColor = MaterialTheme.colorScheme.onSecondary,
-                                modifier = Modifier.testTag("cart_fab")
-                            ) {
-                                Icon(Icons.Default.ShoppingCart, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Order Cart ($cartTotalCartons Ctns)")
+                        when (activeTab) {
+                            MedicalTab.VISITS -> {
+                                ExtendedFloatingActionButton(
+                                    onClick = { viewModel.openScheduleVisit() },
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = Color.White
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("موعد زيارة جديد")
+                                }
                             }
-                        } else if (activeTab == NavigationTab.STORES) {
-                            FloatingActionButton(
-                                onClick = { viewModel.openAddStore() },
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = Color.White,
-                                modifier = Modifier.testTag("add_store_fab")
-                            ) {
-                                Icon(Icons.Default.AddBusiness, contentDescription = "Add Store")
+                            MedicalTab.NOTIFICATIONS -> {
+                                ExtendedFloatingActionButton(
+                                    onClick = { viewModel.openBroadcastNotification() },
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                    contentColor = Color.White
+                                ) {
+                                    Icon(Icons.Default.Campaign, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("بث إشعار")
+                                }
                             }
+                            else -> {}
                         }
                     },
                     snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -148,110 +147,105 @@ class MainActivity : ComponentActivity() {
                             .padding(paddingValues)
                     ) {
                         when (activeTab) {
-                            NavigationTab.MARKETPLACE -> {
-                                MarketplaceScreen(
-                                    products = products,
-                                    selectedCategory = selectedCategory,
+                            MedicalTab.VISITS -> {
+                                VisitsScreen(
+                                    visits = visits,
+                                    currentPersona = currentPersona,
+                                    onOpenAiSummary = { viewModel.openVisitAiSummary(it) },
+                                    onScheduleNewVisit = { viewModel.openScheduleVisit() }
+                                )
+                            }
+                            MedicalTab.DOCTORS -> {
+                                DoctorsScreen(
+                                    doctors = doctors,
                                     searchQuery = searchQuery,
                                     onSearchChange = { viewModel.setSearchQuery(it) },
-                                    onCategorySelect = { viewModel.setSelectedCategory(it) },
-                                    onProductClick = { viewModel.selectProduct(it) },
-                                    onAddToCart = { prod, qty -> viewModel.addToCart(prod, qty) }
+                                    onSelectDoctor = { doc ->
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("طبيب: ${doc.name} - أوقات الاستقبال: ${doc.repVisitingHours}")
+                                        }
+                                    },
+                                    onScheduleVisitForDoctor = { doc ->
+                                        viewModel.openScheduleVisit()
+                                    }
                                 )
                             }
-                            NavigationTab.ORDERS -> {
-                                OrdersScreen(
-                                    orders = orders,
-                                    statusFilter = orderStatusFilter,
-                                    currentPersona = currentPersona,
-                                    onStatusFilterChange = { viewModel.setOrderStatusFilter(it) },
-                                    onViewInvoice = { viewModel.viewInvoice(it) },
-                                    onUpdateStatus = { id, st -> viewModel.updateOrderStatus(id, st) },
-                                    onMarkDelivered = { id, amt -> viewModel.markOrderDelivered(id, amt) }
+                            MedicalTab.PHARMACIES -> {
+                                PharmaciesScreen(
+                                    pharmacies = pharmacies,
+                                    searchQuery = searchQuery,
+                                    onSearchChange = { viewModel.setSearchQuery(it) },
+                                    onOrderForPharmacy = { pharma ->
+                                        viewModel.openPharmacyOrder(pharma)
+                                    }
                                 )
                             }
-                            NavigationTab.FLEET -> {
-                                FleetAndRepScreen(
-                                    representatives = reps,
-                                    visitLogs = visitLogs
+                            MedicalTab.DRUGS -> {
+                                DrugsScreen(
+                                    drugs = drugs,
+                                    selectedCategory = selectedDrugCategory,
+                                    searchQuery = searchQuery,
+                                    onSearchChange = { viewModel.setSearchQuery(it) },
+                                    onCategoryChange = { viewModel.setSelectedDrugCategory(it) },
+                                    onDrugClick = { drug ->
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("${drug.tradeName}: ${drug.indications}")
+                                        }
+                                    },
+                                    onRequestSample = { drug ->
+                                        viewModel.requestSample("العيادة الحالية", drug.tradeName, 2)
+                                    }
                                 )
                             }
-                            NavigationTab.STORES -> {
-                                StoresScreen(
-                                    stores = stores,
-                                    onOpenAddStore = { viewModel.openAddStore() },
-                                    onOpenVisitStore = { viewModel.openVisitStore(it) }
-                                )
-                            }
-                            NavigationTab.ANALYTICS -> {
-                                AnalyticsScreen(
-                                    orders = orders,
-                                    representatives = reps
+                            MedicalTab.NOTIFICATIONS -> {
+                                NotificationsScreen(
+                                    notifications = notifications,
+                                    onOpenBroadcastDialog = { viewModel.openBroadcastNotification() }
                                 )
                             }
                         }
                     }
                 }
 
-                // Dialogs & Sheets
-                if (isCartOpen) {
-                    CartBottomSheet(
-                        cartItems = cartItems,
-                        onUpdateQuantity = { id, qty -> viewModel.updateCartQuantity(id, qty) },
-                        onRemoveItem = { viewModel.removeFromCart(it) },
-                        onDismiss = { viewModel.closeCart() },
-                        onProceedToCheckout = { viewModel.openCheckout() }
-                    )
-                }
-
-                if (isCheckoutOpen) {
-                    CheckoutDialog(
-                        cartItems = cartItems,
-                        stores = stores,
-                        onDismiss = { viewModel.closeCheckout() },
-                        onSubmitOrder = { store, paymentType, notes ->
-                            viewModel.submitOrder(store, paymentType, notes)
+                // Dialogs
+                if (selectedVisitForAi != null) {
+                    AiVisitDialog(
+                        visit = selectedVisitForAi!!,
+                        onDismiss = { viewModel.closeVisitAiSummary() },
+                        onCompleteVisit = { id, notes, samples ->
+                            viewModel.completeVisitWithAi(id, notes, samples)
                         }
                     )
                 }
 
-                if (selectedProduct != null) {
-                    ProductDetailDialog(
-                        product = selectedProduct!!,
-                        onDismiss = { viewModel.selectProduct(null) },
-                        onAddToCart = { qty ->
-                            selectedProduct?.let { viewModel.addToCart(it, qty) }
+                if (isScheduleVisitOpen) {
+                    ScheduleVisitDialog(
+                        doctors = rawDoctors,
+                        pharmacies = rawPharmacies,
+                        drugs = rawDrugs,
+                        onDismiss = { viewModel.closeScheduleVisit() },
+                        onSchedule = { type, id, name, sub, time, prods ->
+                            viewModel.scheduleVisit(type, id, name, sub, time, prods)
                         }
                     )
                 }
 
-                if (selectedInvoiceOrder != null) {
-                    InvoiceDialog(
-                        order = selectedInvoiceOrder!!,
-                        onDismiss = { viewModel.closeInvoice() },
-                        onShare = {
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Invoice link copied & ready to share with store!")
-                            }
+                if (isBroadcastNotificationOpen) {
+                    BroadcastNotificationDialog(
+                        onDismiss = { viewModel.closeBroadcastNotification() },
+                        onBroadcast = { title, msg, target, cat, urgent ->
+                            viewModel.broadcastNotification(title, msg, target, cat, urgent)
                         }
                     )
                 }
 
-                if (selectedStoreForVisit != null) {
-                    RecordVisitDialog(
-                        store = selectedStoreForVisit!!,
-                        onDismiss = { viewModel.closeVisitStore() },
-                        onSubmitVisit = { purpose, amt, note ->
-                            viewModel.recordVisit(purpose, amt, note)
-                        }
-                    )
-                }
-
-                if (isAddStoreOpen) {
-                    AddStoreDialog(
-                        onDismiss = { viewModel.closeAddStore() },
-                        onAddStore = { name, owner, phone, district, address, limit ->
-                            viewModel.addNewStore(name, owner, phone, district, address, limit)
+                if (pharmacyToOrder != null) {
+                    PharmacyOrderDialog(
+                        pharmacy = pharmacyToOrder!!,
+                        drugs = rawDrugs,
+                        onDismiss = { viewModel.closePharmacyOrder() },
+                        onSubmitOrder = { pharma, drug, qty ->
+                            viewModel.placePharmacyOrder(pharma, drug, qty)
                         }
                     )
                 }

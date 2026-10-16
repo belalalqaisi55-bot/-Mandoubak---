@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,17 +18,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mandoubak.app.model.OrderStatus
-import com.mandoubak.app.model.Persona
+import com.mandoubak.app.model.MedicalPersona
+import com.mandoubak.app.model.VisitStatus
 import com.mandoubak.app.ui.theme.*
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MandoubakTopBar(
-    currentPersona: Persona,
-    cartItemCount: Int,
-    onPersonaSelected: (Persona) -> Unit,
-    onOpenCart: () -> Unit
+    currentPersona: MedicalPersona,
+    notificationCount: Int,
+    onPersonaSelected: (MedicalPersona) -> Unit,
+    onOpenNotifications: () -> Unit
 ) {
     var personaMenuExpanded by remember { mutableStateOf(false) }
 
@@ -49,6 +47,7 @@ fun MandoubakTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                // Logo & Title
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -61,9 +60,9 @@ fun MandoubakTopBar(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.LocalShipping,
+                            imageVector = Icons.Default.MedicalServices,
                             contentDescription = "Mandoubak Logo",
-                            tint = MaterialTheme.colorScheme.onSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -73,29 +72,30 @@ fun MandoubakTopBar(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Mandoubak",
+                                text = "مندوبك",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "مندوبك",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                                fontWeight = FontWeight.Bold
+                                text = "Mandoubak",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                         Text(
-                            text = "B2B Wholesale & Fleet Delivery",
+                            text = "منصة المندوب الطبي والأطباء والصيدليات",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.85f)
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 11.sp
                         )
                     }
                 }
 
+                // Actions: Persona Switcher + Alerts
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Persona Switcher Button
                     Box {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
@@ -104,29 +104,30 @@ fun MandoubakTopBar(
                                 .clip(RoundedCornerShape(20.dp))
                                 .clickable { personaMenuExpanded = true }
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .testTag("persona_switcher_button")
+                                .testTag("medical_persona_button")
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = when (currentPersona) {
-                                        Persona.STORE_OWNER -> Icons.Default.Storefront
-                                        Persona.SALES_REP -> Icons.Default.DirectionsCar
-                                        Persona.DISTRIBUTOR -> Icons.Default.SupervisorAccount
+                                        MedicalPersona.MEDICAL_REP -> Icons.Default.Badge
+                                        MedicalPersona.DOCTOR -> Icons.Default.LocalHospital
+                                        MedicalPersona.PHARMACY -> Icons.Default.LocalPharmacy
+                                        MedicalPersona.SUPERVISOR -> Icons.Default.SupervisorAccount
                                     },
-                                    contentDescription = "Current Persona",
+                                    contentDescription = "Persona",
                                     tint = MaterialTheme.colorScheme.secondary,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = currentPersona.titleEn,
+                                    text = currentPersona.titleAr,
                                     style = MaterialTheme.typography.labelLarge,
                                     color = Color.White,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Icon(
                                     imageVector = Icons.Default.ArrowDropDown,
-                                    contentDescription = "Expand",
+                                    contentDescription = null,
                                     tint = Color.White,
                                     modifier = Modifier.size(18.dp)
                                 )
@@ -137,29 +138,30 @@ fun MandoubakTopBar(
                             expanded = personaMenuExpanded,
                             onDismissRequest = { personaMenuExpanded = false }
                         ) {
-                            Persona.values().forEach { persona ->
+                            MedicalPersona.values().forEach { persona ->
                                 DropdownMenuItem(
                                     leadingIcon = {
                                         Icon(
                                             imageVector = when (persona) {
-                                                Persona.STORE_OWNER -> Icons.Default.Storefront
-                                                Persona.SALES_REP -> Icons.Default.DirectionsCar
-                                                Persona.DISTRIBUTOR -> Icons.Default.SupervisorAccount
+                                                MedicalPersona.MEDICAL_REP -> Icons.Default.Badge
+                                                MedicalPersona.DOCTOR -> Icons.Default.LocalHospital
+                                                MedicalPersona.PHARMACY -> Icons.Default.LocalPharmacy
+                                                MedicalPersona.SUPERVISOR -> Icons.Default.SupervisorAccount
                                             },
                                             contentDescription = null,
-                                            tint = if (persona == currentPersona) MaterialTheme.colorScheme.primary else TextSecondary
+                                            tint = if (persona == currentPersona) MaterialTheme.colorScheme.primary else MedicalTextSecondary
                                         )
                                     },
                                     text = {
                                         Column {
                                             Text(
-                                                text = "${persona.titleEn} (${persona.titleAr})",
+                                                text = "${persona.titleAr} (${persona.titleEn})",
                                                 fontWeight = if (persona == currentPersona) FontWeight.Bold else FontWeight.Normal
                                             )
                                             Text(
                                                 text = persona.subtitle,
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = TextMuted
+                                                color = MedicalTextMuted
                                             )
                                         }
                                     },
@@ -172,28 +174,27 @@ fun MandoubakTopBar(
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
 
-                    // Cart Button with Counter
                     IconButton(
-                        onClick = onOpenCart,
-                        modifier = Modifier.testTag("open_cart_button")
+                        onClick = onOpenNotifications,
+                        modifier = Modifier.testTag("open_alerts_button")
                     ) {
                         BadgedBox(
                             badge = {
-                                if (cartItemCount > 0) {
+                                if (notificationCount > 0) {
                                     Badge(
                                         containerColor = MaterialTheme.colorScheme.secondary,
-                                        contentColor = MaterialTheme.colorScheme.onSecondary
+                                        contentColor = Color.White
                                     ) {
-                                        Text("$cartItemCount", fontWeight = FontWeight.Bold)
+                                        Text("$notificationCount", fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
                         ) {
                             Icon(
-                                imageVector = Icons.Default.ShoppingCart,
-                                contentDescription = "Wholesale Cart",
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = "الإشعارات",
                                 tint = Color.White
                             )
                         }
@@ -205,13 +206,12 @@ fun MandoubakTopBar(
 }
 
 @Composable
-fun OrderStatusBadge(status: OrderStatus) {
+fun VisitStatusBadge(status: VisitStatus) {
     val (bgColor, textColor) = when (status) {
-        OrderStatus.PENDING -> Pair(Color(0xFFFFF3CD), Color(0xFF856404))
-        OrderStatus.CONFIRMED -> Pair(Color(0xFFD1ECF1), Color(0xFF0C5460))
-        OrderStatus.DISPATCHED -> Pair(Color(0xFFE8DAEF), Color(0xFF5B2C6F))
-        OrderStatus.DELIVERED -> Pair(Color(0xFFD4EDDA), Color(0xFF155724))
-        OrderStatus.CANCELLED -> Pair(Color(0xFFF8D7DA), Color(0xFF721C24))
+        VisitStatus.PLANNED -> Pair(Color(0xFFE0F2FE), Color(0xFF0369A1))
+        VisitStatus.COMPLETED -> Pair(Color(0xFFDCFCE7), Color(0xFF15803D))
+        VisitStatus.POSTPONED -> Pair(Color(0xFFFEF3C7), Color(0xFFB45309))
+        VisitStatus.CANCELLED -> Pair(Color(0xFFFEE2E2), Color(0xFFB91C1C))
     }
 
     Surface(
@@ -230,7 +230,7 @@ fun OrderStatusBadge(status: OrderStatus) {
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "${status.titleEn} • ${status.titleAr}",
+                text = "${status.titleAr} • ${status.titleEn}",
                 style = MaterialTheme.typography.labelSmall,
                 color = textColor,
                 fontWeight = FontWeight.SemiBold
@@ -277,18 +277,18 @@ fun MetricStatCard(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
+                    color = MedicalTextSecondary
                 )
                 Text(
                     text = value,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = MedicalTextPrimary
                 )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted,
+                    color = MedicalTextMuted,
                     fontSize = 10.sp
                 )
             }

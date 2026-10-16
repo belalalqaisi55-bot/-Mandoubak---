@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/mandoubak_icon"
+        android:drawable="@drawable/mandoubak_med_icon"
         android:gravity="center" />
 </layer-list>

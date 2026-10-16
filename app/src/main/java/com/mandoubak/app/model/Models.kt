@@ -1,149 +1,116 @@
 package com.mandoubak.app.model
 
-enum class Persona(val titleEn: String, val titleAr: String, val subtitle: String) {
-    STORE_OWNER("Store Owner", "صاحب متجر", "Order wholesale stock & track deliveries"),
-    SALES_REP("Sales Rep", "مندوب توزيع", "Daily routes, drop-offs & cash collection"),
-    DISTRIBUTOR("Distributor", "مشرف المبيعات", "Fleet oversight, catalog & receivables")
+enum class MedicalPersona(val titleEn: String, val titleAr: String, val subtitle: String) {
+    MEDICAL_REP("Medical Rep", "المندوب الطبي", "الزيارات الميدانية والمساعد الذكي"),
+    DOCTOR("Doctor / Clinic", "الطبيب / العيادة", "العينات الدوائية والمواعيد"),
+    PHARMACY("Pharmacy", "الصيدلية", "طلبيات الأدوية والعروض الحصرية"),
+    SUPERVISOR("Pharma Manager", "مشرف الدعاية", "لوحة الإشعارات ومتابعة الفريق")
 }
 
-enum class ProductCategory(val titleEn: String, val titleAr: String) {
+enum class DrugCategory(val titleEn: String, val titleAr: String) {
     ALL("All", "الكل"),
-    GRAINS_RICE("Rice & Grains", "أرز وبقوليات"),
-    OILS_GHEE("Oils & Ghee", "زيوت وسمن"),
-    DAIRY_CHEESE("Dairy & Cheese", "ألبان وأجبان"),
-    BEVERAGES("Beverages", "مشروبات وعصائر"),
-    SNACKS("Snacks & Sweets", "بسكويت وحلويات"),
-    DETERGENTS("Cleaning & Paper", "منظفات وورقيات"),
-    CANNED("Canned Goods", "معلبات وصلصات")
+    ANTIBIOTICS("Antibiotics", "المضادات الحيوية"),
+    CARDIOLOGY("Cardiovascular", "القلب وضغط الدم"),
+    ANALGESICS("Pain & Anti-inflammatory", "المسكنات والالتهابات"),
+    DIABETES("Diabetes & Endocrine", "السكري والغدد"),
+    GASTRO("Gastrointestinal", "الجهاز الهضمي"),
+    DERMATOLOGY("Dermatology", "الجلدية والتجميل"),
+    VITAMINS("Vitamins & Supplements", "المكملات والفيتامينات")
 }
 
-data class BulkDiscountTier(
-    val minCartons: Int,
-    val discountPercent: Double
-)
-
-data class WholesaleProduct(
+data class MedicalDrug(
     val id: String,
-    val nameAr: String,
-    val nameEn: String,
-    val brand: String,
-    val category: ProductCategory,
-    val packagingSpec: String, // e.g. "Carton 24 x 330ml"
-    val unitsPerCarton: Int,
-    val cartonPrice: Double, // Price per carton in USD/EGP/SAR
-    val unitPrice: Double,
-    val stockCartons: Int,
-    val minOrderCartons: Int,
-    val isDeal: Boolean = false,
-    val dealDiscount: Int = 0,
-    val tiers: List<BulkDiscountTier> = listOf(
-        BulkDiscountTier(5, 4.0),
-        BulkDiscountTier(15, 8.0),
-        BulkDiscountTier(30, 12.0)
-    )
+    val tradeName: String,
+    val scientificName: String,
+    val activeIngredient: String,
+    val category: DrugCategory,
+    val dosageForm: String, // e.g. "Film-coated Tablets 500mg (20 Tab)"
+    val pricePharmacy: Double,
+    val pricePublic: Double,
+    val indications: String,
+    val samplesAvailableCount: Int,
+    val inStockPacks: Int,
+    val isNewLaunch: Boolean = false
 )
 
-data class WholesaleCartItem(
-    val product: WholesaleProduct,
-    val cartons: Int
-) {
-    val applicableDiscountPercent: Double
-        get() {
-            val tier = product.tiers.sortedByDescending { it.minCartons }
-                .firstOrNull { cartons >= it.minCartons }
-            return (tier?.discountPercent ?: 0.0) + (if (product.isDeal) product.dealDiscount.toDouble() else 0.0)
-        }
-
-    val subtotal: Double
-        get() = cartons * product.cartonPrice
-
-    val discountAmount: Double
-        get() = subtotal * (applicableDiscountPercent / 100.0)
-
-    val finalPrice: Double
-        get() = subtotal - discountAmount
-}
-
-enum class OrderStatus(val titleEn: String, val titleAr: String) {
-    PENDING("Pending Confirmation", "قيد المراجعة"),
-    CONFIRMED("Confirmed / Packed", "تم التأكيد والتجهيز"),
-    DISPATCHED("Out with Rep", "مع المندوب في الطريق"),
-    DELIVERED("Delivered & Paid", "تم التسليم والتحصيل"),
-    CANCELLED("Cancelled", "ملغي")
-}
-
-enum class PaymentType(val titleEn: String, val titleAr: String) {
-    CASH_ON_DELIVERY("Cash on Delivery (COD)", "نقداً عند الاستلام"),
-    CREDIT_30_DAYS("Net 30-Day Credit", "آجل 30 يوم"),
-    DIGITAL_WALLET("Digital Bank / Wallet", "تحويل إلكتروني / محفظة")
-}
-
-data class OrderItemRecord(
-    val productId: String,
-    val productNameAr: String,
-    val productNameEn: String,
-    val packagingSpec: String,
-    val cartons: Int,
-    val unitPrice: Double,
-    val cartonPrice: Double,
-    val lineTotal: Double
-)
-
-data class WholesaleOrder(
-    val id: String,
-    val invoiceNo: String,
-    val storeId: String,
-    val storeName: String,
-    val storePhone: String,
-    val storeAddress: String,
-    val items: List<OrderItemRecord>,
-    val subtotal: Double,
-    val discountAmount: Double,
-    val totalAmount: Double,
-    val status: OrderStatus,
-    val paymentType: PaymentType,
-    val assignedRepId: String,
-    val assignedRepName: String,
-    val dateString: String,
-    val timeSlot: String = "Morning (09:00 - 13:00)",
-    val notes: String = ""
-)
-
-data class RetailStore(
+data class Doctor(
     val id: String,
     val name: String,
-    val ownerName: String,
+    val title: String, // "Consultant Cardiologist", "استشاري أمراض القلب"
+    val specialty: String,
+    val clinicName: String,
+    val hospitalAffiliation: String,
+    val district: String,
+    val address: String,
+    val phone: String,
+    val repVisitingHours: String,
+    val totalVisitsCount: Int,
+    val lastVisitedDate: String,
+    val preferredDrugs: List<String>,
+    val notes: String
+)
+
+data class Pharmacy(
+    val id: String,
+    val name: String,
+    val pharmacistInCharge: String,
     val phone: String,
     val district: String,
     val address: String,
     val outstandingBalance: Double,
     val creditLimit: Double,
-    val visitDay: String,
-    val lastVisitedDate: String,
-    val totalOrdersCount: Int
+    val ordersCount: Int,
+    val lastOrderDate: String
 )
 
-data class DeliveryRepresentative(
+enum class VisitType(val titleAr: String, val titleEn: String) {
+    DOCTOR("طبيب / عيادة", "Doctor"),
+    PHARMACY("صيدلية", "Pharmacy")
+}
+
+enum class VisitStatus(val titleAr: String, val titleEn: String) {
+    PLANNED("مجدولة", "Planned"),
+    COMPLETED("مكتملة", "Completed"),
+    POSTPONED("مؤجلة", "Postponed"),
+    CANCELLED("ملغاة", "Cancelled")
+}
+
+data class MedicalVisit(
     val id: String,
-    val name: String,
-    val phone: String,
-    val vehiclePlate: String,
-    val vehicleType: String, // "Van 2.5T", "Refrigerated Truck"
-    val assignedDistrict: String,
-    val todayDeliveriesCompleted: Int,
-    val todayDeliveriesTotal: Int,
-    val cashCollected: Double,
-    val cashTarget: Double,
-    val isOnline: Boolean = true
+    val visitType: VisitType,
+    val targetId: String,
+    val targetName: String,
+    val subtitle: String, // Specialty or District
+    val timeSlot: String,
+    val status: VisitStatus,
+    val productsDiscussed: List<String>,
+    val samplesDelivered: Int = 0,
+    val rawRepNotes: String = "",
+    val aiSummary: String = "",
+    val aiDoctorFeedback: String = "",
+    val aiNextActionItems: String = "",
+    val aiNextVisitRecommended: String = ""
 )
 
-data class StoreVisitLog(
+data class MedicalNotification(
     val id: String,
-    val storeId: String,
-    val storeName: String,
-    val repName: String,
+    val title: String,
+    val message: String,
+    val targetGroup: String, // "جميع الأطباء والصيدليات", "أطباء الباطنة والقلب", "الصيدليات"
+    val category: String, // "إطلاق دواء جديد", "تحديث علمي", "عرض صيدلاني", "مؤتمر طبي"
     val dateString: String,
-    val purpose: String,
-    val paymentCollected: Double,
-    val note: String
+    val isUrgent: Boolean = false
+)
+
+data class PharmacyDrugOrder(
+    val id: String,
+    val invoiceNo: String,
+    val pharmacyId: String,
+    val pharmacyName: String,
+    val drugName: String,
+    val quantityPacks: Int,
+    val unitPrice: Double,
+    val totalAmount: Double,
+    val dateString: String,
+    val status: String
 )

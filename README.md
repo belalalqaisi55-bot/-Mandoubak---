@@ -1,61 +1,63 @@
-# Mandoubak (مندوبك) — B2B Wholesale & Fleet Delivery Platform
+# مندوبك (Mandoubak) — منصة المندوب الطبي والأطباء والصيدليات
 
 <div align="center">
-  <h3>سوق الجملة المباشر وإدارة مناديب التوزيع والطلبات</h3>
-  <p>Modern Android Application built with Jetpack Compose & Material 3</p>
+  <h3>منصة رقمية متكاملة لتسهيل التواصل بين المندوب الطبي وعملائه (الصيدليات والأطباء)</h3>
+  <p>مع لوحة تحكم لإرسال الإشعارات ومساعد ذكي مدعوم بالذكاء الاصطناعي لتلخيص الزيارات ومتابعتها</p>
 </div>
 
 ---
 
-## 📦 Overview
+## 🩺 نظرة عامة (Overview)
 
-**Mandoubak (مندوبك)** is an enterprise B2B wholesale marketplace and sales representative fleet management application designed for supermarkets, grocery stores, food distributors, and FMCG delivery representatives.
-
-The app bridges wholesale manufacturers/distributors and retail stores, streamlining bulk ordering, tiered volume discounts, route dispatch, commercial invoicing, and cash collection.
-
----
-
-## ✨ Key Features
-
-### 1. Multi-Persona Workspace
-* **Store Owner (صاحب المتجر)**: Browse wholesale cartons, compute retail profit margins, order FMCG stock, track deliveries, and manage supplier credit statements.
-* **Sales Representative (مندوب التوزيع)**: View today's delivery drops, navigate store routes, confirm deliveries, collect cash/checks, and log store visit notes.
-* **Distributor / Supervisor (مشرف المبيعات)**: Fleet dispatch overview, driver status, inventory health, and commission leaderboards.
-
-### 2. Wholesale Marketplace & Bulk Tier Pricing
-* Full catalog across essential FMCG categories: Grains & Rice, Oils & Ghee, Dairy & Cheese, Beverages, Snacks, Detergents, and Canned Goods.
-* Carton & unit breakdowns with Minimum Order Quantities (MOQ).
-* Automatic bulk tier discounts (e.g., 5+ cartons = 4% off, 15+ cartons = 8% off, 30+ cartons = 12% off).
-* Retailer profit margin calculator simulating shelf resale margin per carton.
-
-### 3. Orders Lifecycle & Commercial Invoicing
-* End-to-end purchase order pipeline: `Pending` ➔ `Confirmed` ➔ `Dispatched` ➔ `Delivered & Paid`.
-* Commercial B2B Tax Invoice modal with itemized carton lines, payment terms, and direct PDF/WhatsApp export.
-* Support for multiple commercial payment terms: Cash on Delivery (COD), Net 30-Day Credit, and Digital Wallet.
-
-### 4. Representative Fleet & Route Delivery Tracking
-* Daily driver route progression (completed drops vs target).
-* Vehicle fleet tracking (cargo vans, 3-ton trucks, refrigerated haulers).
-* Cash & check settlement counters per representative.
-* Direct in-app driver calling and route check-in history.
-
-### 5. Retail Stores & Credit Ledger
-* Store accounts directory with owner contacts, location zones, and scheduled visit days.
-* Net-30 credit lines with outstanding balance tracking and visual utilization indicators.
-* Log store visits with purpose, cash collected, and restocking notes.
-
-### 6. Analytics & Commission Leaderboard
-* Gross wholesale revenue, total cartons moved, and route delivery on-time rate.
-* Representative commission leaderboard ranked by verified cash collections.
-* Warehouse inventory health indicators.
+تطبيق **مندوبك (Mandoubak)** هو تطبيق أندرويد متكامل موجّه لقطاع الدعاية الطبية وشركات الأدوية (Medical Representatives)، يربط بين:
+1. **المندوب الطبي (Medical Representative)**
+2. **الأطباء والعيادات التخصصية (Doctors & Clinics)**
+3. **الصيدليات ومسؤولي التوريد (Pharmacies)**
+4. **مشرفي ومديري الدعاية الطبية (Pharma Supervisors)**
 
 ---
 
-## 🛠️ Technology Stack
+## ✨ المميزات الرئيسية للتطبيق
 
-* **Platform**: Android (minSdk 26, compileSdk 36, targetSdk 36)
-* **Language**: Kotlin 2.2 with built-in AGP 9.1.1 support
-* **UI Toolkit**: Jetpack Compose with Material Design 3 (M3)
-* **Architecture**: MVVM with Repository pattern and Kotlin Coroutines / `StateFlow`
-* **Typography**: Bundled Google Fonts (`Rubik` & `Cairo`) for Latin and Arabic bilingual support
-* **Design & Icons**: Custom adaptive launcher icon (`ic_launcher`), Material Symbols Extended, custom distribution hub illustration
+### 1. المساعد الذكي بالذكاء الاصطناعي (AI Medical Visit Assistant)
+* بعد انتهاء مقابلة الطبيب أو الصيدلي، يدخل المندوب ملاحظاته السريعة (صوتياً أو كتابياً).
+* يقوم المساعد الذكي فورياً بتحليل وتوليد:
+  * **الملخص التنفيذي للزيارة (Executive Summary).**
+  * **ملاحظات واعتراضات الطبيب (Feedback & Objections).**
+  * **خطة العمل والتكليفات (Action Items & Next Steps).**
+  * **تاريخ وموعد المتابعة المقترح تلقائياً.**
+* تسجيل عهدة العينات الطبية المسلمة للعيادة.
+
+### 2. دليل الأطباء والعيادات (Doctors & Clinics Directory)
+* بيانات الأطباء الاستشاريين والتخصصات (قلب، باطنة، أطفال، عظام، إلخ).
+* مواعيد وأيام استقبال مناديب الدعاية الطبية لكل عيادة.
+* تاريخ آخر زيارة وقائمة الأدوية المفضلة للطبيب وملاحظات المتابعة.
+* حجز وجدولة مواعيد الزيارات بضغطة زر.
+
+### 3. دليل الصيدليات وطلبيات الأدوية (Pharmacies & Drug Orders)
+* بيانات الصيدليات والصيادلة المسؤولين ومناطق التوزيع.
+* متابعة الحسابات الآجلة والحدود الائتمانية.
+* تسجيل طلبيات الأدوية المباشرة وحساب إجمالي الفواتير الصيدلانية.
+
+### 4. كتالوج الأدوية والمستحضرات (Pharma & Drug Catalog)
+* الاسم التجاري، الاسم العلمي، المادة الفعالة، والجرعات الصيدلانية.
+* أسعار الصيدليات وأسعار الجمهور.
+* دواعي الاستعمال ودراسات المقارنة الإكلينيكية.
+* رصيد العينات المجانية المتاحة للمندوب.
+
+### 5. لوحة التحكم وبث الإشعارات (Control Panel & Broadcast Alerts)
+* إرسال وبث إشعارات فورية موجهة:
+  * لجميع الأطباء والصيدليات
+  * لأطباء تخصص معين (مثل أطباء القلب أو الباطنة)
+  * للصيدليات المتعاقدة
+* تصنيفات الإشعارات: إطلاق دواء جديد، تحديثات علمية، عروض صيدلانية وبونص، ومؤتمرات طبية.
+
+---
+
+## 🛠️ البنية التقنية (Tech Stack)
+
+* **اللغة**: Kotlin 2.2 مع دعم AGP 9.1.1 المدمج.
+* **واجهة المستخدم**: Jetpack Compose مع Material Design 3 (M3).
+* **المعمارية**: MVVM مع Repository Pattern و Kotlin StateFlow.
+* **الخطوط المدمجة**: Google Fonts محلياً (`Cairo` للعناوين و `Rubik` للنصوص).
+* **الأيقونات والهوية**: أيقونة طبية مخصصة (`ic_launcher`) ورمز السماعة الطبية والجهاز اللوحي.

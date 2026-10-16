@@ -1,13 +1,10 @@
 <resources>
     <string name="app_name">Mandoubak</string>
-    <string name="app_tagline">B2B Wholesale &amp; Representative Delivery</string>
-    <string name="wholesale_market">Wholesale Market</string>
-    <string name="orders">Orders</string>
-    <string name="rep_fleet">Fleet &amp; Reps</string>
-    <string name="stores">Stores &amp; Routes</string>
-    <string name="analytics">Performance</string>
-    <string name="search_wholesale_hint">Search 10,000+ wholesale items, FMCG, brands…</string>
-    <string name="add_to_cart">Add to Wholesale Cart</string>
-    <string name="cart">Wholesale Order</string>
-    <string name="checkout">Submit Purchase Order</string>
+    <string name="app_tagline">منصة المندوب الطبي والأطباء والصيدليات</string>
+    <string name="nav_visits">الزيارات اليومية</string>
+    <string name="nav_doctors">الأطباء والعيادات</string>
+    <string name="nav_pharmacies">الصيدليات</string>
+    <string name="nav_drugs">كتالوج الأدوية</string>
+    <string name="nav_ai_assistant">المساعد الذكي</string>
+    <string name="nav_notifications">لوحة الإشعارات</string>
 </resources>

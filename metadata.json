@@ -1,6 +1,6 @@
 {
   "name": "Mandoubak",
-  "description": "B2B wholesale marketplace, store ordering, and sales representative delivery management app",
+  "description": "منصة رقمية متكاملة لتسهيل التواصل بين المندوب الطبي وعملائه (الصيدليات والأطباء) مع لوحة تحكم لإرسال الإشعارات ومساعد ذكي مدعوم بالذكاء الاصطناعي لتلخيص الزيارات ومتابعتها.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
