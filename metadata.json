@@ -1,0 +1,8 @@
+{
+  "name": "Mandoubak",
+  "description": "B2B wholesale marketplace, store ordering, and sales representative delivery management app",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,1 @@
+# Mandoubak Proguard Rules
