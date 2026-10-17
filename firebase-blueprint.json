@@ -1,0 +1,235 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile (Pharmacy, Doctor, Rep)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["pharmacy", "doctor", "rep"] },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "location": { "type": "string", "maxLength": 256 },
+        "avatar": { "type": "string" },
+        "isApproved": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["approved", "pending_approval", "suspended", "rejected"] },
+        "confirmationCode": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "phone", "name", "role"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Medical product in the pharmaceutical catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "scientificName": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "maxLength": 64 },
+        "price": { "type": "number" },
+        "bonus": { "type": "string", "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "imageUrl": { "type": "string", "maxLength": 512 },
+        "isAvailable": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "price"]
+    },
+    "StockReport": {
+      "title": "StockReport",
+      "description": "Stock availability report submitted by pharmacy or doctor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "productId": { "type": "string", "maxLength": 128 },
+        "productName": { "type": "string", "maxLength": 128 },
+        "quantity": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "productId", "quantity"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Supply order submitted by pharmacy or doctor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "items": { "type": "string", "maxLength": 2000 },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "cancelled"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "items", "status"]
+    },
+    "Visit": {
+      "title": "Visit",
+      "description": "Medical rep visit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 128 },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "clientType": { "type": "string", "enum": ["pharmacy", "doctor"] },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "date": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "clientName", "entityName"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "System or admin notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "targetUserId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "message"]
+    },
+    "Agreement": {
+      "title": "Agreement",
+      "description": "Commercial, bonus, and sample agreements between representative and client",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 128 },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "clientPhone": { "type": "string", "maxLength": 32 },
+        "type": { "type": "string", "enum": ["bonus", "samples", "gift_support", "discount_terms", "other"] },
+        "typeLabel": { "type": "string", "maxLength": 64 },
+        "details": { "type": "string", "maxLength": 3000 },
+        "agreementDate": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["pending", "delivered", "cancelled"] },
+        "deliveredDetails": { "type": "string", "maxLength": 3000 },
+        "deliveredAt": { "type": "string", "maxLength": 64 },
+        "deliveredBy": { "type": "string", "maxLength": 128 },
+        "invoiceNumber": { "type": "string", "maxLength": 64 },
+        "invoiceAttachment": { "type": "string", "maxLength": 500000 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "clientId", "details", "status"]
+    },
+    "Complaint": {
+      "title": "Complaint",
+      "description": "Complaints and suggestions from users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "entityName": { "type": "string", "maxLength": 128 },
+        "userPhone": { "type": "string", "maxLength": 32 },
+        "subject": { "type": "string", "maxLength": 256 },
+        "message": { "type": "string", "maxLength": 3000 },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "resolved"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "message"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "System settings and global profile avatar synchronization",
+      "type": "object",
+      "properties": {
+        "requireApprovalForNewClients": { "type": "boolean" },
+        "singlePhonePerDevice": { "type": "boolean" },
+        "autoApproveKnownNumbers": { "type": "boolean" },
+        "enableVisitTracking": { "type": "boolean" },
+        "drProfileAvatar": { "type": "string" }
+      }
+    },
+    "KeepNote": {
+      "title": "KeepNote",
+      "description": "Medical representative keep notes and reminders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "content": { "type": "string", "maxLength": 10000 },
+        "color": { "type": "string", "maxLength": 64 },
+        "isPinned": { "type": "boolean" },
+        "isArchived": { "type": "boolean" },
+        "labels": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title"]
+    },
+    "TrashItem": {
+      "title": "TrashItem",
+      "description": "Archived deleted records (orders, agreements, products, clients, etc.) reserved for Admin recovery",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "itemType": { "type": "string", "enum": ["order", "agreement", "product", "client", "complaint", "category", "other"] },
+        "title": { "type": "string", "maxLength": 256 },
+        "subtitle": { "type": "string", "maxLength": 256 },
+        "originalId": { "type": "string", "maxLength": 128 },
+        "deletedAt": { "type": "string", "maxLength": 64 },
+        "deletedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "itemType", "title", "originalId", "deletedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Registered user accounts"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Product catalog"
+    },
+    "/stockReports/{reportId}": {
+      "schema": { "$ref": "#/entities/StockReport" },
+      "description": "Stock reports submitted by clients"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Supply orders placed by clients"
+    },
+    "/visits/{visitId}": {
+      "schema": { "$ref": "#/entities/Visit" },
+      "description": "Medical representative visit logs"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Notifications and alerts"
+    },
+    "/agreements/{agreementId}": {
+      "schema": { "$ref": "#/entities/Agreement" },
+      "description": "Agreements and delivery verifications"
+    },
+    "/complaints/{complaintId}": {
+      "schema": { "$ref": "#/entities/Complaint" },
+      "description": "Client complaints and suggestions"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/Settings" },
+      "description": "Application settings and profile branding"
+    },
+    "/keep_notes/{noteId}": {
+      "schema": { "$ref": "#/entities/KeepNote" },
+      "description": "Keep notes and field logs"
+    },
+    "/trash_archive/{itemId}": {
+      "schema": { "$ref": "#/entities/TrashItem" },
+      "description": "Exclusive admin recycle bin and archive for deleted orders, agreements, and records"
+    }
+  }
+}

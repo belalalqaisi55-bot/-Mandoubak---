@@ -1,0 +1,147 @@
+{
+  "users": [
+    {
+      "id": "u_rep",
+      "phone": "+967776600049",
+      "name": "د/ بلال القيسي (المندوب الطبي والمسؤول)",
+      "role": "rep",
+      "createdAt": "2026-09-08T00:17:54.975Z",
+      "email": "belalalqaisi55@gmail.com",
+      "entityName": "المكتب العلمي والمبيعات الطبية (الإدارة)",
+      "location": "صنعاء / جميع المحافظات",
+      "isApproved": true,
+      "status": "approved"
+    }
+  ],
+  "products": [
+    {
+      "id": "p1",
+      "name": "سيبلوكس 500 (Ciplox 500)",
+      "description": "الاسم العلمي: Ciprofloxacine 500",
+      "category": "مضادات حيوية",
+      "price": "660 ريال",
+      "unit": "شريط",
+      "bonus": "10%"
+    },
+    {
+      "id": "p2",
+      "name": "ديراد إم أقراص (Dirad-M Tablets)",
+      "description": "الاسم العلمي: Metronidazole + Diloxanide",
+      "category": "مضادات طفيليات مطهرة",
+      "price": "703 ريال",
+      "unit": "شريط",
+      "bonus": "10%"
+    },
+    {
+      "id": "p3",
+      "name": "ديراد إم شراب (Dirad-M Syrup)",
+      "description": "الاسم العلمي: Metronidazole + Diloxanide",
+      "category": "مضادات طفيليات مطهرة",
+      "price": "770 ريال",
+      "unit": "زجاجة",
+      "bonus": "10%"
+    },
+    {
+      "id": "p4",
+      "name": "ألريد أقراص (Allerid Tablets)",
+      "description": "الاسم العلمي: Cetirizine Tab.",
+      "category": "مضادات الحساسية",
+      "price": "781 ريال",
+      "unit": "شريط",
+      "bonus": "20%"
+    },
+    {
+      "id": "p5",
+      "name": "ألريد شراب (Allerid Syrup)",
+      "description": "الاسم العلمي: Cetirizine Syrp",
+      "category": "مضادات الحساسية",
+      "price": "770 ريال",
+      "unit": "زجاجة",
+      "bonus": "10%"
+    },
+    {
+      "id": "p6",
+      "name": "فوركان 150 كبسول (Forcan 150 Caps)",
+      "description": "الاسم العلمي: Fluconazol 150",
+      "category": "مضادات الفطريات",
+      "price": "508 ريال",
+      "unit": "كبسولة",
+      "bonus": "10%"
+    },
+    {
+      "id": "p7",
+      "name": "نوفاتاكس 1 جم (Novatax 1g)",
+      "description": "الاسم العلمي: Cefotaxime 1g",
+      "category": "حقن مضاد حيوي",
+      "price": "850 ريال",
+      "unit": "حقنة",
+      "bonus": "40%"
+    },
+    {
+      "id": "p13",
+      "name": "نوفاتكس 500 (Novatex 500)",
+      "description": "الاسم العلمي: Cefotaxime 500 mg",
+      "category": "حقن مضاد حيوي",
+      "price": "600 ريال",
+      "unit": "حقنة",
+      "bonus": "40%"
+    },
+    {
+      "id": "p8",
+      "name": "لوماك شرائط (Lomac Strips)",
+      "description": "الاسم العلمي: Omeprazole 20 Tab",
+      "category": "أدوية المعدة والحموضة",
+      "price": "2400 ريال",
+      "unit": "شريط",
+      "bonus": "100%"
+    },
+    {
+      "id": "p9",
+      "name": "لانسك علب (Lansec 30 mg)",
+      "description": "الاسم العلمي: Lansoprazol 30 mg",
+      "category": "أدوية المعدة والحموضة",
+      "price": "1223 ريال",
+      "unit": "علبة",
+      "bonus": "20%"
+    },
+    {
+      "id": "p10",
+      "name": "سيبازول فورت (Cipazole Forte)",
+      "description": "الاسم العلمي: Scenidazole 1000",
+      "category": "مضادات طفيليات وبكتيريا",
+      "price": "550 ريال",
+      "unit": "شريط",
+      "bonus": "40%"
+    },
+    {
+      "id": "p11",
+      "name": "بارفيز فوار (Parfeez Effervescent)",
+      "description": "الاسم العلمي: Paracetamol",
+      "category": "مسكنات ومضادات حمى",
+      "price": "1999 ريال",
+      "unit": "علبة فوار",
+      "bonus": "40%"
+    },
+    {
+      "id": "p12",
+      "name": "بارفيز بلص فوار (Parfeez Plus Effervescent)",
+      "description": "الاسم العلمي: Paracetamol + Codeine + Caffeine",
+      "category": "مسكنات ألم قوية",
+      "price": "2400 ريال",
+      "unit": "علبة فوار",
+      "bonus": "40%"
+    }
+  ],
+  "stockReports": [],
+  "orders": [],
+  "visits": [],
+  "notifications": [],
+  "agreements": [],
+  "settings": {
+    "requireApprovalForNewClients": true,
+    "singlePhonePerDevice": true,
+    "autoApproveKnownNumbers": true,
+    "enableVisitTracking": true,
+    "drProfileAvatar": "/dr-belal.jpg"
+  }
+}

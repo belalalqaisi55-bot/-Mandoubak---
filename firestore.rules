@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.email.lower() == "belalalqaisi55@gmail.com"
+      );
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Products catalog
+    match /products/{productId} {
+      allow read, write: if true;
+    }
+
+    // Stock Reports collection
+    match /stockReports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // Orders collection
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Visits collection
+    match /visits/{visitId} {
+      allow read, write: if true;
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read, write: if true;
+    }
+
+    // Agreements collection (إدارة وتوثيق الاتفاقيات)
+    match /agreements/{agreementId} {
+      allow read, write: if true;
+    }
+
+    // Complaints & Suggestions collection (صندوق الشكاوى والاقتراحات)
+    match /complaints/{complaintId} {
+      allow read, write: if true;
+    }
+
+    // System Settings & Profile Synchronization (إعدادات النظام ومزامنة صورة البروفايل)
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
+
+    match /app_config/{configId} {
+      allow read, write: if true;
+    }
+
+    // Keep Notes collection (مفكرة مندوبك الطبي)
+    match /keep_notes/{noteId} {
+      allow read, write: if true;
+    }
+
+    // Admin Deleted Trash Archive collection (أرشيف وسلة المحذوفات للطلبيات والاتفاقيات الخاصة بالمسؤول د. بلال القيسي)
+    match /trash_archive/{itemId} {
+      allow read, write: if true;
+    }
+
+    // Health / connectivity check
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Diagnostics probe collection
+    match /_diagnostics/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

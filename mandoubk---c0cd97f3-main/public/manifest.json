@@ -1,0 +1,74 @@
+{
+  "name": "مندوبك الطبي - نظام المبيعات والطلبيات الطبية",
+  "short_name": "مندوبك الطبي",
+  "description": "تطبيق مندوب المبيعات والطلبيات الطبية للدكتور بلال القيسي - لإدارة طلبيات الأدوية والمستلزمات الطبية والزيارات للصيدليات والعيادات",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f766e",
+  "lang": "ar",
+  "dir": "rtl",
+  "id": "com.mandoubak.app",
+  "categories": ["medical", "business", "shopping"],
+  "icons": [
+    {
+      "src": "/app-logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "إرسال طلبية جديدة",
+      "short_name": "طلب دواء",
+      "description": "طلب أصناف وأدوية جديدة مباشرة للمندوب",
+      "url": "/?action=new-order",
+      "icons": [{ "src": "/app-logo.jpg", "sizes": "192x192" }]
+    },
+    {
+      "name": "كتالوج الأصناف والأسعار",
+      "short_name": "الكتالوج",
+      "description": "تصفح قائمة الأدوية والمستلزمات الطبية والأسعار",
+      "url": "/?action=catalog",
+      "icons": [{ "src": "/app-logo.jpg", "sizes": "192x192" }]
+    },
+    {
+      "name": "تتبع حالة الطلبيات",
+      "short_name": "طلبياتي",
+      "description": "متابعة حالة استلام وتجهيز الطلبيات",
+      "url": "/?action=my-orders",
+      "icons": [{ "src": "/app-logo.jpg", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [],
+  "related_applications": [],
+  "prefer_related_applications": false
+}

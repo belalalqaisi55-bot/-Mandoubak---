@@ -1,7 +1,10 @@
 {
-  "name": "Mandoubak",
-  "description": "منصة رقمية متكاملة لتسهيل التواصل بين المندوب الطبي وعملائه (الصيدليات والأطباء) مع لوحة تحكم لإرسال الإشعارات ومساعد ذكي مدعوم بالذكاء الاصطناعي لتلخيص الزيارات ومتابعتها.",
-  "requestFramePermissions": [],
+  "name": "مندوبك الطبي - Mandoubak Med",
+  "description": "تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi).",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

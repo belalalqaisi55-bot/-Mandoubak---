@@ -1,0 +1,19 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.mandoubak.app',
+  appName: 'مندوبك الطبي',
+  webDir: 'dist',
+  server: {
+    androidScheme: 'https',
+    cleartext: true,
+    allowNavigation: [
+      '*.run.app',
+      'ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app',
+      'openrouter.ai',
+      'generativelanguage.googleapis.com'
+    ]
+  }
+};
+
+export default config;

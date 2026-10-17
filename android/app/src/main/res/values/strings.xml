@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">مندوبك الطبي</string>
+    <string name="title_activity_main">مندوبك الطبي</string>
+    <string name="package_name">com.mandoubak.app</string>
+    <string name="custom_url_scheme">com.mandoubak.app</string>
+    <string name="app_developer">د. بلال القيسي (Dr. Belal Alqaisi)</string>
+    <string name="developer_email">BelalAlqaisi55@gmail.com</string>
+    <string name="app_version_name">1.0.0</string>
+</resources>

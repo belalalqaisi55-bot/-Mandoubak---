@@ -1,0 +1,30 @@
+name: Node.js & Vite CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    name: Build & Verify Web Application
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run Type Check / Lint
+      run: npm run lint
+
+    - name: Build Web Application
+      run: npm run build

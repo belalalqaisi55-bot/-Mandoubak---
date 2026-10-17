@@ -1,0 +1,160 @@
+import { Product } from "../types";
+
+export const DEFAULT_PRODUCTS: Product[] = [
+  {
+    id: "p1",
+    name: "سيبلوكس 500 (Ciplox 500)",
+    description: "الاسم العلمي: Ciprofloxacine 500",
+    category: "مضادات حيوية",
+    price: "660 ريال",
+    bonus: "10%",
+    unit: "شريط",
+    barcode: "6291001000101",
+    qrCode: "MANDOUBAK-P1-CIPLOX500",
+    activeIngredient: "Ciprofloxacin"
+  },
+  {
+    id: "p2",
+    name: "ديراد إم أقراص (Dirad-M Tablets)",
+    description: "الاسم العلمي: Metronidazole + Diloxanide",
+    category: "مضادات طفيليات مطهرة",
+    price: "703 ريال",
+    bonus: "10%",
+    unit: "شريط",
+    barcode: "6291001000200",
+    qrCode: "MANDOUBAK-P2-DIRADM-TAB",
+    activeIngredient: "Metronidazole, Diloxanide"
+  },
+  {
+    id: "p3",
+    name: "ديراد إم شراب (Dirad-M Syrup)",
+    description: "الاسم العلمي: Metronidazole + Diloxanide",
+    category: "مضادات طفيليات مطهرة",
+    price: "770 ريال",
+    bonus: "10%",
+    unit: "زجاجة",
+    barcode: "6291001000309",
+    qrCode: "MANDOUBAK-P3-DIRADM-SYR",
+    activeIngredient: "Metronidazole, Diloxanide"
+  },
+  {
+    id: "p4",
+    name: "ألريد أقراص (Allerid Tablets)",
+    description: "الاسم العلمي: Cetirizine Tab.",
+    category: "مضادات الحساسية",
+    price: "781 ريال",
+    bonus: "20%",
+    unit: "شريط",
+    barcode: "6291001000408",
+    qrCode: "MANDOUBAK-P4-ALLERID-TAB",
+    activeIngredient: "Cetirizine"
+  },
+  {
+    id: "p5",
+    name: "ألريد شراب (Allerid Syrup)",
+    description: "الاسم العلمي: Cetirizine Syrp",
+    category: "مضادات الحساسية",
+    price: "770 ريال",
+    bonus: "10%",
+    unit: "زجاجة",
+    barcode: "6291001000507",
+    qrCode: "MANDOUBAK-P5-ALLERID-SYR",
+    activeIngredient: "Cetirizine"
+  },
+  {
+    id: "p6",
+    name: "فوركان 150 كبسول (Forcan 150 Caps)",
+    description: "الاسم العلمي: Fluconazol 150",
+    category: "مضادات الفطريات",
+    price: "508 ريال",
+    bonus: "10%",
+    unit: "كبسولة",
+    barcode: "6291001000606",
+    qrCode: "MANDOUBAK-P6-FORCAN150",
+    activeIngredient: "Fluconazole"
+  },
+  {
+    id: "p7",
+    name: "نوفاتاكس 1 جم (Novatax 1g)",
+    description: "الاسم العلمي: Cefotaxime 1g",
+    category: "حقن مضاد حيوي",
+    price: "850 ريال",
+    bonus: "40%",
+    unit: "حقنة",
+    barcode: "6291001000705",
+    qrCode: "MANDOUBAK-P7-NOVATAX1G",
+    activeIngredient: "Cefotaxime"
+  },
+  {
+    id: "p13",
+    name: "نوفاتكس 500 (Novatex 500)",
+    description: "الاسم العلمي: Cefotaxime 500 mg",
+    category: "حقن مضاد حيوي",
+    price: "600 ريال",
+    bonus: "40%",
+    unit: "حقنة",
+    barcode: "6291001000804",
+    qrCode: "MANDOUBAK-P13-NOVATEX500",
+    activeIngredient: "Cefotaxime"
+  },
+  {
+    id: "p8",
+    name: "لوماك شرائط (Lomac Strips)",
+    description: "الاسم العلمي: Omeprazole 20 Tab",
+    category: "أدوية المعدة والحموضة",
+    price: "2400 ريال",
+    bonus: "100%",
+    unit: "شريط",
+    barcode: "6291001000903",
+    qrCode: "MANDOUBAK-P8-LOMAC",
+    activeIngredient: "Omeprazole"
+  },
+  {
+    id: "p9",
+    name: "لانسك علب (Lansec 30 mg)",
+    description: "الاسم العلمي: Lansoprazol 30 mg",
+    category: "أدوية المعدة والحموضة",
+    price: "1223 ريال",
+    bonus: "20%",
+    unit: "علبة",
+    barcode: "6291001001009",
+    qrCode: "MANDOUBAK-P9-LANSEC30",
+    activeIngredient: "Lansoprazole"
+  },
+  {
+    id: "p10",
+    name: "سيبازول فورت (Cipazole Forte)",
+    description: "الاسم العلمي: Scenidazole 1000",
+    category: "مضادات طفيليات وبكتيريا",
+    price: "550 ريال",
+    bonus: "40%",
+    unit: "شريط",
+    barcode: "6291001001108",
+    qrCode: "MANDOUBAK-P10-CIPAZOLE",
+    activeIngredient: "Secnidazole"
+  },
+  {
+    id: "p11",
+    name: "بارفيز فوار (Parfeez Effervescent)",
+    description: "الاسم العلمي: Paracetamol",
+    category: "مسكنات ومضادات حمى",
+    price: "1999 ريال",
+    bonus: "40%",
+    unit: "علبة فوار",
+    barcode: "6291001001207",
+    qrCode: "MANDOUBAK-P11-PARFEEZ",
+    activeIngredient: "Paracetamol"
+  },
+  {
+    id: "p12",
+    name: "بارفيز بلص فوار (Parfeez Plus Effervescent)",
+    description: "الاسم العلمي: Paracetamol + Codeine + Caffeine",
+    category: "مسكنات ألم قوية",
+    price: "2400 ريال",
+    bonus: "40%",
+    unit: "علبة فوار",
+    barcode: "6291001001306",
+    qrCode: "MANDOUBAK-P12-PARFEEZPLUS",
+    activeIngredient: "Paracetamol, Codeine, Caffeine"
+  }
+];

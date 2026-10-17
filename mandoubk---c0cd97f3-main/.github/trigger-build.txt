@@ -1,0 +1,5 @@
+Triggering CI build
+
+This file is auto-created to trigger the GitHub Actions workflow to build the Android APK.
+
+Timestamp: 2026-09-08T09:15:00Z

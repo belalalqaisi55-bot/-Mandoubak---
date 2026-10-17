@@ -1,0 +1,65 @@
+{
+  "id": "/",
+  "name": "مندوبك الطبي | Mandoubak Med",
+  "short_name": "مندوبك الطبي",
+  "description": "منظومة المندوب الطبي وإدارة طلبيات الأدوية والمخزون الصيدلاني للدكتور بلال القيسي",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["medical", "business", "shopping"],
+  "icons": [
+    {
+      "src": "/icons/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "إرسال طلبية جديدة",
+      "short_name": "طلب دواء",
+      "description": "طلب أصناف وأدوية جديدة مباشرة للمندوب",
+      "url": "/?action=new-order",
+      "icons": [{ "src": "/icons/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "كتالوج الأصناف والأسعار",
+      "short_name": "الكتالوج",
+      "description": "تصفح قائمة الأدوية والمستلزمات الطبية والأسعار",
+      "url": "/?action=catalog",
+      "icons": [{ "src": "/icons/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "تتبع حالة الطلبيات",
+      "short_name": "طلبياتي",
+      "description": "متابعة حالة استلام وتجهيز الطلبيات",
+      "url": "/?action=my-orders",
+      "icons": [{ "src": "/icons/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
