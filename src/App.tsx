@@ -34,7 +34,7 @@ import {
   CATEGORY_PALETTE,
   getCategoryColor,
 } from "./data/predefinedCategories";
-import { updateDrBelalOfficialAvatar, updateUserProfile } from "./services/userProfileService";
+import { updateUserProfile } from "./services/userProfileService";
 import {
   saveOfflineOrder,
   saveOfflineStockReports,
@@ -53,6 +53,7 @@ import {
 import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, deleteDoc, onSnapshot } from "firebase/firestore";
 import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState } from "./firebase";
 import { motion, AnimatePresence } from "motion/react";
+import { ConnectionStatusIndicator } from "./components/ConnectionStatusIndicator";
 import {
   Pill,
   Printer,
@@ -154,7 +155,6 @@ import {
   authenticateBiometricNative
 } from "./utils/nativeBridge";
 
-export const drBelalProfileImg = "https://images.unsplash.com/photo-1537368910025-700350fe46c7?auto=format&fit=crop&q=80&w=400";
 
 export const cleanArabicPhone = (phoneStr: string) => {
   if (!phoneStr) return "";
@@ -287,15 +287,15 @@ export default function App() {
     return null;
   });
 
-  // Dr. Belal Profile Photo State - Synchronized across all users, links, and views
-  // Defaults firmly to official drBelalProfileImg
-  const [drProfileAvatar, setDrProfileAvatar] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem("mandoubak_dr_avatar");
-      if (saved && saved.trim()) return saved;
-    } catch (e) {}
-    return drBelalProfileImg;
-  });
+
+  const [googleUser, setGoogleUser] = useState<any>(null);
+
+  useEffect(() => {
+    fetch('/api/me')
+      .then(res => res.json())
+      .then(data => setGoogleUser(data.user))
+      .catch(() => setGoogleUser(null));
+  }, []);
 
   // User Confirmation & Access Control States
   const [pendingApprovalUser, setPendingApprovalUser] = useState<User | null>(() => {
@@ -847,18 +847,16 @@ export default function App() {
     setTimeout(() => setErrorMsg(""), 4000);
   };
 
+
   // Administrator Authorization - Exclusively Dr. Belal Alqaisi
   const isBelalAdmin = Boolean(
     user && (
       user.role === "rep" || 
       user.role === "admin" ||
-      (user.email && user.email.toLowerCase().includes("belalalqaisi55")) ||
+      (user.email && (user.email.toLowerCase().includes("belalalqaisi55") || user.email.toLowerCase().includes("belalqaisi55"))) ||
       (user.phone && user.phone.includes("776600049"))
     )
   );
-
-  // Universal profile avatar synchronized across all clients, doctors, pharmacies, links, and guests
-  const effectiveDrAvatar = drProfileAvatar || drBelalProfileImg;
 
   // Safe client-side image compression to prevent localStorage & Firestore quota errors
   const compressAvatarImage = (file: File, maxWidth = 500, quality = 0.82): Promise<string> => {
@@ -899,65 +897,6 @@ export default function App() {
     });
   };
 
-  const handleUploadCustomAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    let authorized = isBelalAdmin;
-    if (!authorized) {
-      const entered = window.prompt("لتأكيد هويتك وتحديث صورتك الرسمية (د/ بلال القيسي)، يرجى إدخال رمز التحقق أو كلمة السر (مثال: Belal302344 أو 776600049):");
-      const validSecrets = ["Mandoubk302344$", "Belal302344", "302344", "776600049"];
-      if (entered && validSecrets.includes(entered.trim())) {
-        authorized = true;
-      } else {
-        showError("عذراً، رمز التحقق غير صحيح. تعديل الصورة الرسمية محصور بالدكتور بلال القيسي 🛡️");
-        return;
-      }
-    }
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith("image/")) {
-        showError("يرجى اختيار ملف صورة صالح (JPG أو PNG)");
-        return;
-      }
-      try {
-        showSuccess("جاري رفع الصورة إلى مخزن Firebase Storage وتحديث الملف التعريفي... ⏳");
-        const res = await updateDrBelalOfficialAvatar(file);
-        if (res.success && res.avatarUrl) {
-          setDrProfileAvatar(res.avatarUrl);
-          if (user && (user.role === "rep" || isBelalAdmin)) {
-            setUser((prev) => (prev ? { ...prev, avatar: res.avatarUrl } : null));
-          }
-          showSuccess("تم رفع صورتك وحفظها بنجاح في Firebase Storage ومزامنتها على جميع الأجهزة 📸✓");
-        } else {
-          showError(res.error || "حدث خطأ أثناء رفع الصورة إلى مخزن Firebase Storage");
-        }
-      } catch (err) {
-        showError("حدث خطأ أثناء معالجة الصورة، يرجى المحاولة مجدداً");
-      }
-    }
-  };
-
-  const handleResetCustomAvatar = async () => {
-    if (!isBelalAdmin) return;
-    setDrProfileAvatar(drBelalProfileImg);
-    try {
-      localStorage.removeItem("mandoubak_dr_avatar");
-    } catch (e) {}
-
-    try {
-      await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drProfileAvatar: "" }),
-      });
-    } catch (e) {}
-
-    if (isFirebaseConfigured && db) {
-      try {
-        await setDoc(doc(db, "settings", "app_config"), { drProfileAvatar: "" }, { merge: true });
-      } catch (e) {}
-    }
-
-    showSuccess("تمت استعادة الصورة الرسمية الافتراضية ومزامنتها عبر جميع الروابط بنجاح ✓");
-  };
 
   // Enable global WebToApk & Android click sound, haptic interactions & notification action routing
   useEffect(() => {
@@ -1050,6 +989,9 @@ export default function App() {
 
     // Real-time synchronization of Dr. Belal's profile avatar across all open devices and links
     let unsubscribeSettings: (() => void) | null = null;
+    let unsubscribeOrders: (() => void) | null = null;
+    let unsubscribeStockReports: (() => void) | null = null;
+
     if (isFirebaseConfigured && db) {
       try {
         unsubscribeSettings = onSnapshot(doc(db, "settings", "app_config"), (snap) => {
@@ -1089,13 +1031,32 @@ export default function App() {
         }, (err) => {
           console.warn("Settings realtime sync notice:", err.message);
         });
+
+        // Real-time synchronization of orders
+        unsubscribeOrders = onSnapshot(collection(db, "orders"), (snap) => {
+          const ordersList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+          setOrders(ordersList);
+          try {
+            localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+          } catch (e) {}
+        });
+
+        // Real-time synchronization of stock reports
+        unsubscribeStockReports = onSnapshot(collection(db, "stockReports"), (snap) => {
+          const reportsList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as StockReport));
+          setStockReports(reportsList);
+          try {
+            localStorage.setItem("mandoubak_local_stock_reports", JSON.stringify(reportsList));
+          } catch (e) {}
+        });
+
       } catch (e) {}
     }
 
     return () => {
-      if (unsubscribeSettings) {
-        unsubscribeSettings();
-      }
+      if (unsubscribeSettings) unsubscribeSettings();
+      if (unsubscribeOrders) unsubscribeOrders();
+      if (unsubscribeStockReports) unsubscribeStockReports();
     };
   }, [user]);
 
@@ -1258,18 +1219,9 @@ export default function App() {
   const fetchProducts = async () => {
     try {
       let loaded: Product[] = [];
-      try {
-        const r = await fetch("/api/products");
-        const ct = r.headers.get("content-type") || "";
-        if (r.ok && ct.includes("application/json")) {
-          const data = await r.json();
-          if (Array.isArray(data) && data.length > 0) loaded = data;
-        }
-      } catch (e) {
-        console.warn("Backend /api/products unreachable:", e);
-      }
-
-      if (loaded.length === 0 && isFirebaseConfigured && db) {
+      
+      // 1. Prioritize Firestore
+      if (isFirebaseConfigured && db) {
         try {
           const snapshot = await getDocs(collection(db, "products"));
           const fsProducts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
@@ -1279,7 +1231,7 @@ export default function App() {
         }
       }
 
-      // Check IndexedDB and localStorage for offline/cached products
+      // 2. Check IndexedDB/LocalStorage for offline/cached products
       if (loaded.length === 0) {
         try {
           const idbProds = await getCachedProductsOffline();
@@ -1289,38 +1241,32 @@ export default function App() {
         } catch (e) {}
       }
 
-      try {
-        const localProds = localStorage.getItem("mandoubak_local_products");
-        if (localProds) {
-          const parsed = JSON.parse(localProds);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            if (loaded.length === 0) {
-              loaded = parsed;
-            } else {
-              const existingIds = new Set(loaded.map(p => p.id));
-              parsed.forEach((p: Product) => {
-                if (p && p.id && !existingIds.has(p.id)) {
-                  loaded.push(p);
-                }
-              });
-            }
+      // 3. Fallback to API if still empty
+      if (loaded.length === 0) {
+        try {
+          const r = await fetch("/api/products");
+          const ct = r.headers.get("content-type") || "";
+          if (r.ok && ct.includes("application/json")) {
+            const data = await r.json();
+            if (Array.isArray(data) && data.length > 0) loaded = data;
           }
+        } catch (e) {
+          console.warn("Backend /api/products unreachable:", e);
         }
-      } catch (e) {}
+      }
 
-      // Ultimate fallback if API and Firestore return no products
+      // 4. Final fallback
       if (loaded.length === 0) {
         loaded = DEFAULT_PRODUCTS;
       }
 
-      // Normalize bonus strings to always include clear percentages (e.g. 10%, 20%, 40%, 100%)
+      // Normalize and cache
       const normalizedProducts = loaded.map(p => ({
         ...p,
         bonus: p.bonus ? formatBonusDisplay(p.bonus) : p.bonus
       }));
 
       setProducts(normalizedProducts);
-      // Cache products in IndexedDB and localStorage for full offline availability
       cacheProductsOffline(normalizedProducts).catch(() => {});
       try {
         localStorage.setItem("mandoubak_local_products", JSON.stringify(normalizedProducts));
@@ -2221,6 +2167,28 @@ export default function App() {
       showError("حدث خطأ أثناء محاولة اعتماد الحساب");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleManualSync = async () => {
+    if (!isDeviceOnline()) {
+      showError("لا يمكن المزامنة حالياً، أنت غير متصل بالإنترنت.");
+      return;
+    }
+    setIsSyncing(true);
+    showSuccess("بدء المزامنة اليدوية مع السحابة... 🔄");
+    try {
+      const res = await syncPendingWithFirebase(db, (msg) => {
+          console.log("Sync status:", msg);
+      });
+      showSuccess(`تمت المزامنة اليدوية بنجاح (${res.syncedCount} عنصر تم رفعه) ☁️✓`);
+      setPendingSyncCount(0);
+      fetchUserSpecificData(true);
+      fetchAllRegisteredUsers();
+    } catch (err) {
+      showError("حدث خطأ أثناء المزامنة اليدوية");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -4099,7 +4067,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <div className="relative shrink-0">
                   <img
-                    src={effectiveDrAvatar}
+                    src={"/app-logo.png"}
                     alt="شعار التطبيق"
                     className="h-11 w-11 rounded-xl object-cover shadow-md border-2 border-teal-500/40"
                     referrerPolicy="no-referrer"
@@ -4115,6 +4083,10 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
+                <ConnectionStatusIndicator 
+                  onSync={handleManualSync} 
+                  isSyncing={isSyncing} 
+                />
                 <a
                   href={OFFICIAL_APP_URL}
                   target="_blank"
@@ -4140,12 +4112,7 @@ export default function App() {
               className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
             >
               <div className="bg-gradient-to-b from-teal-500/10 to-transparent p-4 sm:p-5 text-center">
-                <img
-                  src={effectiveDrAvatar}
-                  alt="أيقونة تطبيق مندوبك الطبي"
-                  className="mx-auto mb-2.5 h-16 w-16 rounded-2xl object-cover shadow-lg border-2 border-teal-500 ring-4 ring-teal-500/20 transition-transform hover:scale-105"
-                  referrerPolicy="no-referrer"
-                />
+
                 <h2 className="text-xl font-bold text-slate-950">
                   مرحباً بك {phone ? `(${phone})` : ""} في تطبيق مندوبك الطبي
                 </h2>
@@ -4505,7 +4472,7 @@ export default function App() {
               <div className="flex items-center gap-2 overflow-hidden">
                 <div className="relative shrink-0">
                   <img
-                    src={effectiveDrAvatar}
+                    src={"/app-logo.png"}
                     alt="شعار التطبيق"
                     className="h-8 w-8 rounded-lg object-cover shadow-xs border border-teal-500/40"
                     referrerPolicy="no-referrer"
@@ -4543,7 +4510,7 @@ export default function App() {
                       title="اضغط لعرض صورة د/ بلال القيسي بالكامل"
                     >
                       <img
-                        src={effectiveDrAvatar}
+                        src={"/app-logo.png"}
                         alt="د/ بلال القيسي"
                         className="h-10 w-10 rounded-full object-cover border-2 border-teal-500 shadow-sm group-hover:scale-105 transition-transform ring-2 ring-teal-500/20"
                         referrerPolicy="no-referrer"
@@ -5071,7 +5038,7 @@ export default function App() {
                   title="عرض هوية وبطاقة د/ بلال القيسي"
                 >
                   <img
-                    src={effectiveDrAvatar}
+                    src={"/app-logo.png"}
                     alt="د/ بلال القيسي - مندوبك الطبي"
                     className="h-9 w-9 rounded-full object-cover border-2 border-teal-600 shadow-xs group-hover:scale-105 transition-transform ring-1 ring-teal-500/30"
                     referrerPolicy="no-referrer"
@@ -5164,7 +5131,7 @@ export default function App() {
                   <div className="p-4 border-b border-slate-100 flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                       <img
-                        src={effectiveDrAvatar}
+                        src={"/app-logo.png"}
                         alt="شعار"
                         className="h-9 w-9 rounded-xl object-cover border border-teal-500/40 shadow-xs"
                         referrerPolicy="no-referrer"
@@ -5193,7 +5160,7 @@ export default function App() {
                       title="اضغط لعرض صورة وهوية د/ بلال القيسي بالكامل"
                     >
                       <img
-                        src={effectiveDrAvatar}
+                        src={"/app-logo.png"}
                         alt="د/ بلال القيسي"
                         className="h-12 w-12 rounded-full object-cover border-2 border-teal-500 shadow-md group-hover:scale-105 transition-transform ring-2 ring-teal-500/20"
                         referrerPolicy="no-referrer"
@@ -7879,7 +7846,7 @@ export default function App() {
 
               {repTab === "games" && (
                 <div className="p-6">
-                  <PharmaGames repAvatar={effectiveDrAvatar} />
+                  <PharmaGames repAvatar={"/app-logo.png"} />
                 </div>
               )}
 
@@ -8106,7 +8073,7 @@ export default function App() {
                           title="اضغط لعرض صورة وهوية د/ بلال القيسي بالكامل"
                         >
                           <img
-                            src={effectiveDrAvatar}
+                            src={"/app-logo.png"}
                             alt="د/ بلال القيسي"
                             className="h-16 w-16 sm:h-20 sm:w-20 rounded-full object-cover border-3 border-amber-400 shadow-xl shrink-0 ring-4 ring-amber-400/30 group-hover:scale-105 transition-transform"
                             referrerPolicy="no-referrer"
@@ -9708,7 +9675,7 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="flex-1 flex flex-col min-h-0 overflow-y-auto"
                 >
-                  <PharmaGames repAvatar={effectiveDrAvatar} />
+                  <PharmaGames repAvatar={"/app-logo.png"} />
                 </motion.div>
               )}
 
@@ -10014,7 +9981,7 @@ export default function App() {
         onClose={() => setIsPromoVideoOpen(false)}
         repName="د/ بلال القيسي"
         repPhone="+967776600049"
-        repAvatar={effectiveDrAvatar}
+        repAvatar={"/app-logo.png"}
         products={products.length > 0 ? products : DEFAULT_PRODUCTS}
         onOpenGames={() => {
           setActiveTab("games");
@@ -10103,7 +10070,7 @@ export default function App() {
               {/* Full HD Official Image */}
               <div className="relative bg-gradient-to-b from-slate-950 via-slate-900 to-teal-950 p-4 flex flex-col items-center justify-center overflow-hidden">
                 <img
-                  src={effectiveDrAvatar}
+                  src={"/app-logo.png"}
                   alt="د/ بلال القيسي - مندوبك الطبي"
                   className="w-full max-h-[420px] object-contain rounded-2xl shadow-2xl border border-teal-500/30"
                   referrerPolicy="no-referrer"
@@ -10191,6 +10158,7 @@ export default function App() {
         isOpen={isUserProfileModalOpen}
         onClose={() => setIsUserProfileModalOpen(false)}
         currentUser={user}
+        googleUser={googleUser}
         onUserUpdated={(updatedUser) => {
           setUser(updatedUser);
           setRegisteredUsers((prev) =>
@@ -10198,10 +10166,6 @@ export default function App() {
           );
         }}
         isBelalAdmin={isBelalAdmin}
-        currentDrAvatar={drProfileAvatar}
-        onDrAvatarUpdated={(newAvatarUrl) => {
-          setDrProfileAvatar(newAvatarUrl);
-        }}
       />
 
       {/* Product Categories Manager Modal */}

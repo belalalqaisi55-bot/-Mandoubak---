@@ -1,19 +1,7 @@
-# خطة إصلاح خطأ "Invalid hook call" في GeminiChatModal
+# Plan to add fade-in transition to ConnectionStatusIndicator
 
-بناءً على تشخيص الخطأ، يتبين أن هناك محاولة لاستدعاء `useState` أو خطاف آخر بطريقة غير صحيحة عند محاولة فتح `GeminiChatModal`.
+To implement a subtle and quick fade-in transition for the connection status indicator when the online/offline state changes, I will:
 
-## التحليل:
-الخطأ يظهر تحديداً في `src/components/GeminiChatModal.tsx` عند استدعاء `useState`. هذا النوع من الأخطاء عادة ما يحدث بسبب:
-1.  **استيراد React بشكل غير صحيح أو تضارب في النسخ:** قد يكون هناك تضارب بين نسخة `react` المستخدمة في المكون ونسخة `react` الأساسية.
-2.  **استدعاء مكون كدالة:** قد يتم استدعاء `GeminiChatModal` كدالة عادية (مثل `GeminiChatModal()`) بدلاً من استخدامه كمكون React (`<GeminiChatModal />`).
-
-## خطوات الإصلاح المقترحة:
-1.  **مراجعة كيفية الاستدعاء:** التأكد في `src/App.tsx` من أن `GeminiChatModal` يتم استخدامه كـ `<GeminiChatModal ... />` وليس كدالة.
-2.  **التأكد من التوافق:** تحديث طريقة استيراد React في `GeminiChatModal.tsx` لضمان التوافق التام مع React 19.
-
-## الخطة:
-1.  **تturn 1:** سأقوم بفحص ملف `src/App.tsx` للتأكد من كيفية استدعاء المكون.
-2.  **تturn 2:** سأقوم بتعديل `src/components/GeminiChatModal.tsx` للتأكد من الاستيراد الصحيح.
-3.  **تturn 3:** إجراء اختبار للبناء (Build) للتحقق من زوال الخطأ.
-
-هل توافق على هذه الخطة للبدء في الإصلاح؟
+1.  Use `motion` from `motion/react` (which is already imported in `App.tsx` and should be available) to wrap the connection status display in the `ConnectionStatusIndicator` component.
+2.  Update the component to trigger the animation based on the `isOnline` state change.
+3.  Apply a `transition` with a short duration to ensure it is subtle and quick.

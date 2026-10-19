@@ -106,10 +106,10 @@ export async function uploadProfileImageToStorage(
   return await blobToDataUrl(compressedBlob);
 }
 
+
 /**
  * Comprehensive User Profile Update Function.
- * Connects the uploaded image directly to Firebase Storage,
- * updates the user profile in Firestore and Express server, and syncs across all devices.
+ * Connects the profile update in Firestore and Express server.
  */
 export async function updateUserProfile({
   userId,
@@ -120,9 +120,6 @@ export async function updateUserProfile({
   location,
   role,
   notes,
-  avatarFile,
-  avatarUrl: providedAvatarUrl,
-  isDrBelal = false,
 }: {
   userId: string;
   name?: string;
@@ -132,27 +129,12 @@ export async function updateUserProfile({
   location?: string;
   role?: string;
   notes?: string;
-  avatarFile?: File | Blob;
-  avatarUrl?: string;
-  isDrBelal?: boolean;
 }): Promise<{
   success: boolean;
-  avatarUrl?: string;
   user?: Partial<User>;
   error?: string;
 }> {
   try {
-    let finalAvatarUrl = providedAvatarUrl || "";
-
-    // 1. If an image file was uploaded, store it in Firebase Storage
-    if (avatarFile) {
-      const path = isDrBelal
-        ? `profiles/dr_belal_official_${Date.now()}.jpg`
-        : `profiles/user_${userId || "profile"}_${Date.now()}.jpg`;
-
-      finalAvatarUrl = await uploadProfileImageToStorage(avatarFile, path);
-    }
-
     const updates: any = {
       updatedAt: new Date().toISOString(),
     };
@@ -164,54 +146,19 @@ export async function updateUserProfile({
     if (location !== undefined) updates.location = location.trim();
     if (role) updates.role = role;
     if (notes !== undefined) updates.notes = notes.trim();
-    if (finalAvatarUrl) updates.avatar = finalAvatarUrl;
 
-    // 2. If updating Dr. Belal / Main App Representative avatar, sync app_config & settings
-    if (isDrBelal && finalAvatarUrl) {
-      try {
-        localStorage.setItem("mandoubak_dr_avatar", finalAvatarUrl);
-      } catch (e) {
-        console.warn("localStorage write warning", e);
-      }
-
-      // Sync to backend settings API
-      try {
-        const settingsUrl = getApiUrl("/api/settings");
-        await fetch(settingsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ drProfileAvatar: finalAvatarUrl }),
-        });
-      } catch (apiErr) {
-        console.warn("API settings update notice:", apiErr);
-      }
-
-      // Sync to Firestore settings/app_config
-      if (isFirebaseConfigured && db) {
-        try {
-          await setDoc(
-            doc(db, "settings", "app_config"),
-            { drProfileAvatar: finalAvatarUrl, updatedAt: new Date().toISOString() },
-            { merge: true }
-          );
-        } catch (dbErr) {
-          handleFirestoreError(dbErr, OperationType.WRITE, "settings/app_config");
-        }
-      }
-    }
-
-    // 3. Update User Document in Firestore
+    // 1. Update User Document in Firestore
     if (isFirebaseConfigured && db && userId) {
       try {
         const userDocRef = doc(db, "users", userId);
         await setDoc(userDocRef, updates, { merge: true });
-        console.log(`Firestore user profile ${userId} updated successfully with Firebase Storage avatar.`);
+        console.log(`Firestore user profile ${userId} updated successfully.`);
       } catch (firestoreErr) {
         handleFirestoreError(firestoreErr, OperationType.WRITE, `users/${userId}`);
       }
     }
 
-    // 4. Update User in Express Backend Server
+    // 2. Update User in Express Backend Server
     if (userId) {
       try {
         const userApiUrl = getApiUrl(`/api/users/${userId}`);
@@ -221,7 +168,6 @@ export async function updateUserProfile({
           body: JSON.stringify({
             ...updates,
             id: userId,
-            avatar: finalAvatarUrl || updates.avatar,
           }),
         });
       } catch (apiErr) {
@@ -229,7 +175,7 @@ export async function updateUserProfile({
       }
     }
 
-    // 5. Update Local User Session Cache
+    // 3. Update Local User Session Cache
     try {
       const savedUserStr = localStorage.getItem("mandoubak_user");
       if (savedUserStr) {
@@ -245,7 +191,6 @@ export async function updateUserProfile({
 
     return {
       success: true,
-      avatarUrl: finalAvatarUrl,
       user: { id: userId, ...updates },
     };
   } catch (error: any) {
@@ -253,65 +198,6 @@ export async function updateUserProfile({
     return {
       success: false,
       error: error.message || "حدث خطأ أثناء تحديث الملف الشخصي",
-    };
-  }
-}
-
-/**
- * Dedicated function to update Dr. Belal Al-Qaisi's official representative avatar
- * with direct Firebase Storage integration and multi-device broadcasting.
- */
-export async function updateDrBelalOfficialAvatar(file: File | Blob): Promise<{
-  success: boolean;
-  avatarUrl: string;
-  error?: string;
-}> {
-  try {
-    const downloadUrl = await uploadProfileImageToStorage(
-      file,
-      `profiles/dr_belal_official_${Date.now()}.jpg`
-    );
-
-    // Save locally
-    try {
-      localStorage.setItem("mandoubak_dr_avatar", downloadUrl);
-    } catch (e) {}
-
-    // Save to Firestore app_config
-    if (isFirebaseConfigured && db) {
-      try {
-        await setDoc(
-          doc(db, "settings", "app_config"),
-          { drProfileAvatar: downloadUrl, updatedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, "settings/app_config");
-      }
-    }
-
-    // Save to server backend
-    try {
-      const settingsUrl = getApiUrl("/api/settings");
-      await fetch(settingsUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drProfileAvatar: downloadUrl }),
-      });
-    } catch (e) {
-      console.warn("Server settings sync notice:", e);
-    }
-
-    return {
-      success: true,
-      avatarUrl: downloadUrl,
-    };
-  } catch (err: any) {
-    console.error("Error updating Dr. Belal official avatar:", err);
-    return {
-      success: false,
-      avatarUrl: "",
-      error: err.message || "فشل تحديث الصورة الرسمية في Firebase Storage",
     };
   }
 }

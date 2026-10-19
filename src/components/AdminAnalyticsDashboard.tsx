@@ -38,6 +38,7 @@ import {
   Pill,
   ShoppingCart
 } from "lucide-react";
+import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
 
 interface AdminAnalyticsDashboardProps {
   initialUsers?: User[];
@@ -801,6 +802,10 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
                       </span>
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-4">
+                  <PharmacyOrdersChart orders={orders} />
                 </div>
 
                 {/* Visit Tracking Highlights Summary */}

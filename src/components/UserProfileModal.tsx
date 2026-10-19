@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   X,
-  Camera,
-  Upload,
   User as UserIcon,
   Building,
   Phone,
@@ -23,30 +21,25 @@ interface UserProfileModalProps {
   currentUser: User | null;
   onUserUpdated: (updatedUser: User) => void;
   isBelalAdmin: boolean;
-  currentDrAvatar: string;
-  onDrAvatarUpdated?: (avatarUrl: string) => void;
+  googleUser?: any;
 }
 
-export const UserProfileModal: React.FC<UserProfileModalProps> = ({
+export const UserProfileModal = ({
   isOpen,
   onClose,
   currentUser,
   onUserUpdated,
   isBelalAdmin,
-  currentDrAvatar,
-  onDrAvatarUpdated,
-}) => {
+  googleUser,
+}: UserProfileModalProps) => {
   const [name, setName] = useState("");
   const [entityName, setEntityName] = useState("");
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (currentUser) {
@@ -55,34 +48,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       setPhone(currentUser.phone || "");
       setLocation(currentUser.location || "");
       setNotes(currentUser.notes || "");
-      // The official application avatar is exclusively Dr. Belal Alqaisi's avatar
-      const existingAvatar = currentDrAvatar || currentUser.avatar || "/app-logo.jpg";
-      setPreviewUrl(existingAvatar || "/app-logo.jpg");
-      setAvatarFile(null);
       setStatusMessage("");
       setErrorMessage("");
     }
-  }, [currentUser, isOpen, isBelalAdmin, currentDrAvatar]);
+  }, [currentUser, isOpen, isBelalAdmin]);
 
   if (!isOpen || !currentUser) return null;
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isBelalAdmin) {
-      setErrorMessage("عذراً، رفع وتغيير الصورة الرسمية للتطبيق مقتصر حصرياً على حساب الإدارة (د/ بلال القيسي).");
-      return;
-    }
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith("image/")) {
-        setErrorMessage("يرجى اختيار ملف صورة صالح (JPG, PNG, WebP)");
-        return;
-      }
-      setErrorMessage("");
-      setAvatarFile(file);
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-    }
-  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,15 +66,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       return;
     }
 
-    // Protect against non-admin changing the official avatar
-    if (avatarFile && !isBelalAdmin) {
-      setErrorMessage("عذراً، رفع وتغيير الصورة الرسمية للتطبيق مقتصر حصرياً على د/ بلال القيسي.");
-      return;
-    }
-
     setIsSaving(true);
     setErrorMessage("");
-    setStatusMessage(avatarFile && isBelalAdmin ? "جاري رفع الصورة إلى Firebase Storage وتحديث الملف التعريفي... ⏳" : "جاري حفظ التعديلات في Firebase... ⏳");
+    setStatusMessage("جاري حفظ التعديلات في Firebase... ⏳");
 
     try {
       const res = await updateUserProfile({
@@ -113,8 +78,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         phone,
         location,
         notes,
-        avatarFile: isBelalAdmin ? (avatarFile || undefined) : undefined,
-        avatarUrl: isBelalAdmin ? (!avatarFile ? previewUrl : undefined) : currentDrAvatar,
         isDrBelal: isBelalAdmin,
       });
 
@@ -124,11 +87,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           onUserUpdated({
             ...currentUser,
             ...res.user,
-            avatar: isBelalAdmin ? (res.avatarUrl || currentUser.avatar) : currentDrAvatar,
           } as User);
-        }
-        if (isBelalAdmin && res.avatarUrl && onDrAvatarUpdated) {
-          onDrAvatarUpdated(res.avatarUrl);
         }
         setTimeout(() => {
           onClose();
@@ -191,80 +150,28 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
 
           <form onSubmit={handleSave} className="p-5 sm:p-6 space-y-4">
-            {/* Avatar Section */}
-            <div className="flex flex-col sm:flex-row items-center gap-4 p-4 rounded-2xl bg-teal-50/50 border border-teal-100">
-              <div className="relative group shrink-0">
-                <div className="h-20 w-20 sm:h-24 sm:w-24 rounded-full overflow-hidden border-3 border-teal-600 ring-4 ring-teal-500/20 shadow-md bg-slate-100 flex items-center justify-center">
-                  {previewUrl ? (
-                    <img
-                      src={previewUrl || "/app-logo.jpg"}
-                      alt="الصورة الرسمية المعتمدة"
-                      className="h-full w-full object-cover"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = "/app-logo.jpg";
-                      }}
-                    />
-                  ) : (
-                    <UserIcon className="h-10 w-10 text-slate-400" />
-                  )}
-                </div>
-                {isBelalAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="absolute bottom-0 right-0 p-2 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-md border-2 border-white cursor-pointer transition-transform hover:scale-105"
-                    title="تغيير الصورة الرسمية"
-                  >
-                    <Camera className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
 
-              <div className="flex-1 text-center sm:text-right space-y-1.5">
-                {isBelalAdmin ? (
-                  <>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileChange}
-                      className="hidden"
-                      id="profile-avatar-file-input"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-teal-800 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
-                    >
-                      <Upload className="h-3.5 w-3.5 text-amber-300" />
-                      <span>تغيير صورتي الرسمية للتطبيق 📸</span>
-                    </button>
-                    <p className="text-3xs text-slate-500 leading-relaxed font-medium">
-                      أنت المسؤول الإداري (د/ بلال القيسي). عند تغيير صورتك هنا، تصبح فوراً هي الصورة الرسمية المعتمدة والوحيدة على شاشات كافة الصيادلة والأطباء والعملاء.
-                    </p>
-                    {avatarFile && (
-                      <span className="inline-block text-3xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                        ✓ تم اختيار: {avatarFile.name}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-1">
-                    <div className="inline-flex items-center gap-1.5 bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-lg text-amber-900 text-3xs font-black">
-                      <Sparkles className="h-3.5 w-3.5 text-amber-700" />
-                      <span>الصورة الرسمية المعتمدة: د/ بلال القيسي</span>
-                    </div>
-                    <p className="text-3xs text-slate-600 leading-relaxed font-medium">
-                      صورة التطبيق مخصصة للمندوب الطبي د/ بلال القيسي لتوثيق الهوية وضمان المصداقية.
-                    </p>
+            {/* Google OAuth Section */}
+            <div className="p-4 rounded-2xl bg-sky-50 border border-sky-100 mt-4">
+              <h4 className="text-xs font-bold text-sky-900 mb-2">حساب Google المرتبط</h4>
+              {googleUser ? (
+                <div className="flex items-center gap-3">
+                  <img src={googleUser.picture} alt={googleUser.name} className="h-10 w-10 rounded-full" />
+                  <div className="text-xs">
+                    <p className="font-bold text-slate-900">{googleUser.name}</p>
+                    <p className="text-slate-500">{googleUser.email}</p>
                   </div>
-                )}
-              </div>
+                  <button onClick={() => window.location.href = '/auth/logout'} className="mr-auto text-rose-600 text-xs font-bold">تسجيل الخروج</button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => window.location.href = '/auth/google'} className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold shadow-sm">
+                  <span>ربط حساب Google</span>
+                </button>
+              )}
             </div>
 
             {/* Form Fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
                   <UserIcon className="h-3.5 w-3.5 text-teal-700" />

@@ -6,6 +6,9 @@ import dotenv from "dotenv";
 import admin from "firebase-admin";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
+import session from 'express-session';
+import axios from 'axios';
+import qs from 'qs';
 
 dotenv.config();
 process.env.DISABLE_HMR = "true";
@@ -70,6 +73,17 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'none',
+    secure: true
+  }
+}));
+
 // Cookie diagnostics & verification endpoint
 app.get("/api/diagnostics/cookies", (req, res) => {
   const clientCookies = req.headers.cookie || "";
@@ -106,6 +120,88 @@ app.get("/sw.js", (req, res) => {
 });
 
 app.use(express.static(path.join(process.cwd(), "public")));
+
+// OAuth routes
+app.get('/auth/google', (req, res) => {
+  const state = Math.random().toString(36).slice(2);
+  (req.session as any).oauth_state = state;
+
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID!,
+    redirect_uri: process.env.GOOGLE_REDIRECT_URI!,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    prompt: 'consent',
+    state
+  });
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  res.redirect(authUrl);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      return res.status(400).send('Google OAuth error: ' + error);
+    }
+
+    if (!code || state !== (req.session as any).oauth_state) {
+      return res.status(400).send('Invalid request');
+    }
+
+    const tokenResponse = await axios.post(
+      'https://oauth2.googleapis.com/token',
+      qs.stringify({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code'
+      }),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      }
+    );
+
+    const { access_token } = tokenResponse.data;
+    const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${access_token}` }
+    });
+
+    (req.session as any).user = userResponse.data;
+
+    res.send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          </script>
+          <p>Authentication successful. This window should close automatically.</p>
+        </body>
+      </html>
+    `);
+  } catch (err: any) {
+    res.status(500).send('Authentication failed');
+  }
+});
+
+app.get('/api/me', (req, res) => {
+  res.json({ user: (req.session as any).user || null });
+});
+
+app.get('/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.redirect(process.env.FRONTEND_ORIGIN || '/');
+  });
+});
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

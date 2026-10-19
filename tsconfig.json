@@ -6,6 +6,7 @@
     "module": "ESNext",
     "lib": [
       "ES2022",
+      "ES2021",
       "DOM",
       "DOM.Iterable"
     ],
@@ -15,6 +16,7 @@
     "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
+    "resolveJsonModule": true,
     "paths": {
       "@/*": [
         "./*"
