@@ -37,6 +37,8 @@ export const UserProfileModal = ({
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmationCode, setConfirmationCode] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -48,6 +50,8 @@ export const UserProfileModal = ({
       setPhone(currentUser.phone || "");
       setLocation(currentUser.location || "");
       setNotes(currentUser.notes || "");
+      setPassword(currentUser.password || "");
+      setConfirmationCode(currentUser.confirmationCode || "");
       setStatusMessage("");
       setErrorMessage("");
     }
@@ -79,6 +83,8 @@ export const UserProfileModal = ({
         location,
         notes,
         isDrBelal: isBelalAdmin,
+        password: password.trim() || undefined,
+        confirmationCode: confirmationCode.trim() || undefined,
       });
 
       if (res.success) {
@@ -246,6 +252,31 @@ export const UserProfileModal = ({
               />
             </div>
 
+            {isBelalAdmin && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4 border-t border-slate-100 pt-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">رمز التأكيد الافتراضي</label>
+                  <input
+                    type="text"
+                    value={confirmationCode}
+                    onChange={(e) => setConfirmationCode(e.target.value)}
+                    placeholder="رمز التأكيد"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">كلمة المرور</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="كلمة المرور"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-900"
+                  />
+                </div>
+              </div>
+            )}
+            
             {/* Status & Error Alerts */}
             {statusMessage && (
               <div className="p-3 rounded-xl bg-teal-50 border border-teal-200 text-teal-900 text-xs font-bold flex items-center gap-2">

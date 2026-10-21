@@ -53,6 +53,7 @@ export interface User {
   isApproved?: boolean;
   status?: UserStatus;
   confirmationCode?: string;
+  password?: string;
   deviceRegistered?: boolean;
   createdAt: string;
 }

@@ -118,244 +118,244 @@ export const MILLIONAIRE_QUESTIONS_BY_LEVEL: Record<DifficultyLevel, Millionaire
   beginner: [
     {
       id: 1,
-      question: "ما هو الاستخدام الأبرز والأكثر شيوعاً لدواء الباراسيتامول (Paracetamol)؟",
-      options: ["موسع للشرايين التاجية", "مسكن للألم وخافض للحرارة", "مضاد حيوي للالتهاب البكتيري", "مدر للبول حاد"],
+      question: "What is the most prominent and common use of the drug Paracetamol?",
+      options: ["Coronary artery vasodilator", "Analgesic and antipyretic", "Antibiotic for bacterial infection", "Acute diuretic"],
       correctIndex: 1,
-      explanation: "الباراسيتامول خيار خط أول مسكن وخافض حرارة آمن نسبياً للجهاز الهضمي.",
-      drBelalTip: "إجابة سهلة دكتور! الباراسيتامول مسكن وخافض حرارة ذو أمان ممتاز."
+      explanation: "Paracetamol is a first-line analgesic and antipyretic, relatively safe for the gastrointestinal tract.",
+      drBelalTip: "Easy question, Doctor! Paracetamol is an analgesic and antipyretic with excellent safety."
     },
     {
       id: 2,
-      question: "أي من الفئات التالية تنتمي إليها أدوية مثل Omeprazole و Pantoprazole؟",
-      options: ["مضادات الهيستامين H1", "مضادات الفطريات", "مثبطات مضخة البروتون (PPIs)", "حاصرات بيتا"],
+      question: "Which of the following classes do drugs like Omeprazole and Pantoprazole belong to?",
+      options: ["H1 antihistamines", "Antifungals", "Proton Pump Inhibitors (PPIs)", "Beta blockers"],
       correctIndex: 2,
-      explanation: "تثبط هذه الأدوية إنزيم H+/K+ ATPase لتثبيط إفراز حمض المعدة.",
-      drBelalTip: "مقطع prazole يرمز لمضخات البروتون لحماية وتقليل حموضة المعدة."
+      explanation: "These drugs inhibit the H+/K+ ATPase enzyme to suppress gastric acid secretion.",
+      drBelalTip: "The suffix '-prazole' denotes Proton Pump Inhibitors for stomach protection and acid reduction."
     },
     {
       id: 3,
-      question: "ما هو الخط الأول المعتمد في علاج السكري من النوع الثاني لتقليل مقاومة الأنسولين؟",
+      question: "What is the first-line therapy for type 2 diabetes to reduce insulin resistance?",
       options: ["Glibenclamide", "Insulin Glargine", "Aspirin", "Metformin"],
       correctIndex: 3,
-      explanation: "الميتفورمين يقلل إنتاج الجلوكوز كبدياً ويزيد الحساسية للأنسولين دون هبوط حاد بالسكر.",
-      drBelalTip: "الميتفورمين صديق مريض السكري الأول."
+      explanation: "Metformin reduces hepatic glucose production and increases insulin sensitivity without severe hypoglycemia.",
+      drBelalTip: "Metformin is the diabetic patient's first friend."
     },
     {
       id: 4,
-      question: "ما هو العرض الجانبي المشهور لمسكنات NSAIDs مثل Ibuprofen على المعدة؟",
-      options: ["تهيج بطانة المعدة والخطر التقرحي", "تساقط الشعر الشديد", "انخفاض دائم للسمع", "ارتفاع السكر"],
+      question: "What is the well-known gastrointestinal side effect of NSAIDs like Ibuprofen?",
+      options: ["Gastric lining irritation and ulcer risk", "Severe hair loss", "Permanent hearing loss", "Increased blood sugar"],
       correctIndex: 0,
-      explanation: "تثبيط COX-1 يقلل البروستاغلاندينات الحامية لبطانة المعدة المخاطية.",
-      drBelalTip: "تُؤخذ NSAIDs بعد الطعام للحفاظ على سلامة بطانة المعدة."
+      explanation: "Inhibition of COX-1 reduces prostaglandins that protect the gastric mucosa.",
+      drBelalTip: "NSAIDs should be taken after meals to protect the stomach lining."
     },
     {
       id: 5,
-      question: "أي من الأدوية التالية يستخدم كموسع قصبي سريع في أزمات الربو الحادة؟",
+      question: "Which of the following drugs is used as a rapid bronchodilator in acute asthma attacks?",
       options: ["Amlodipine", "Salbutamol (Ventolin)", "Atorvastatin", "Warfarin"],
       correctIndex: 1,
-      explanation: "السالبوتامول محفز سريع لمستقبلات Beta-2 يوسع الشعب الهوائية فوراً.",
-      drBelalTip: "الفنتولين هو بخاخ الإنقاذ السريع بمشيئة الله في نوبات الربو."
+      explanation: "Salbutamol is a rapid-acting Beta-2 receptor agonist that immediately dilates airways.",
+      drBelalTip: "Ventolin is the rapid rescue inhaler, God willing, for asthma attacks."
     },
     {
       id: 6,
-      question: "أي من الفيتامينات التالية يذوب في الماء ويُفرز الفائض منه بسهولة في البول؟",
+      question: "Which of the following vitamins is water-soluble, and excess is easily excreted in urine?",
       options: ["Vitamin D", "Vitamin A", "Vitamin C (Ascorbic Acid)", "Vitamin K"],
       correctIndex: 2,
-      explanation: "فيتامين C وفيتامينات B قابلة للذوبان في الماء ولا تتراكم بكميات سامة في الجسم كالفيتامينات الذائبة في الدهون (A, D, E, K).",
-      drBelalTip: "الفيتامينات الذائبة في الماء أمانها عالي لأن الجسم يتخلص من الزائد منها."
+      explanation: "Vitamin C and B vitamins are water-soluble and do not accumulate in toxic amounts like fat-soluble vitamins (A, D, E, K).",
+      drBelalTip: "Water-soluble vitamins are safer because the body gets rid of excess."
     },
     {
       id: 7,
-      question: "ما هو المضاد الحيوي الأكثر أماناً واستخداماً كخط أول في علاج التهاب اللوزتين البكتيري لدى الحوامل؟",
+      question: "What is the safest and most commonly used first-line antibiotic for bacterial tonsillitis in pregnant women?",
       options: ["Ciprofloxacin", "Doxycycline", "Clarithromycin", "Amoxicillin"],
       correctIndex: 3,
-      explanation: "أموكسيسيلين هو البنسلين الآمن والمفضل للحوامل والأطفال في التهابات الجهاز التنفسي العلوي البكتيرية.",
-      drBelalTip: "البنسلينات والسيفالوسبورينات هي أأمن المضادات الحيوية خلال الحمل."
+      explanation: "Amoxicillin is the safe penicillin preferred for pregnant women and children for upper respiratory bacterial infections.",
+      drBelalTip: "Penicillins and cephalosporins are the safest antibiotics during pregnancy."
     },
     {
       id: 8,
-      question: "أي من الأدوية التالية يستخدم كمضاد للحساسية من الجيل الثاني ولا يسبب النعاس الشديد؟",
+      question: "Which of the following drugs is a second-generation antihistamine that does not cause severe drowsiness?",
       options: ["Loratadine", "Diphenhydramine", "Chlorpheniramine", "Hydroxyzine"],
       correctIndex: 0,
-      explanation: "اللوراتادين والسيتريزين من الجيل الثاني لا يعبران الحاجز الدموي الدماغي بسهولة مقارنة بالجيل الأول.",
-      drBelalTip: "أدوية الحساسية من الجيل الثاني مناسبة لمن يقودون السيارات أو يحتاجون للتركيز."
+      explanation: "Loratadine and Cetirizine (second-generation) do not easily cross the blood-brain barrier compared to the first generation.",
+      drBelalTip: "Second-generation allergy medications are suitable for those driving or needing focus."
     }
   ],
 
   intermediate: [
     {
       id: 1,
-      question: "أي من المضادات الحيوية التالية يُمنع للأطفال دون سن 8 سنوات لمنع التصبغ الدائم للأسنان؟",
+      question: "Which of the following antibiotics is contraindicated in children under 8 years of age to prevent permanent tooth discoloration?",
       options: ["Amoxicillin", "Doxycycline / Tetracyclines", "Azithromycin", "Cefalexin"],
       correctIndex: 1,
-      explanation: "التتراسيكلينات ترتبط بالكالسيوم وتترسب في العظام والأسنان النامية.",
-      drBelalTip: "ظاهرة التخلب Chelation مع الكالسيوم يسبب تصبغ أسنان الأطفال."
+      explanation: "Tetracyclines bind to calcium and deposit in developing bones and teeth.",
+      drBelalTip: "Chelation phenomenon with calcium causes tooth discoloration in children."
     },
     {
       id: 2,
-      question: "أي فئة من أدوية الضغط تسبب السعال الجاف الشائع نتيجة تراكم البراكينين (Bradykinin)؟",
-      options: ["Beta Blockers (مثل Atenolol)", "Calcium Channel Blockers", "ACE Inhibitors (مثل Captopril)", "Diuretics"],
+      question: "Which class of blood pressure medications causes a common dry cough due to bradykinin accumulation?",
+      options: ["Beta Blockers (e.g., Atenolol)", "Calcium Channel Blockers", "ACE Inhibitors (e.g., Captopril)", "Diuretics"],
       correctIndex: 2,
-      explanation: "مثبطات ACE تمنع تفكيك البراكينين في الرئتين مما يسبب السعال الجاف.",
-      drBelalTip: "في حال السعال الجاف نتحول إلى فئة ARBs مثل Valsartan."
+      explanation: "ACE inhibitors prevent the breakdown of bradykinin in the lungs, causing a dry cough.",
+      drBelalTip: "In case of a dry cough, we switch to an ARB class like Valsartan."
     },
     {
       id: 3,
-      question: "ما هو العرض الجانبي الشهير لحاصرات قنوات الكالسيوم مثل 'Amlodipine'؟",
-      options: ["فقدان التذوق", "نزيف لثوي", "جفاف العين", "تورم ووذمة الكاحلين (Ankle Edema)"],
+      question: "What is the well-known side effect of calcium channel blockers like 'Amlodipine'?",
+      options: ["Loss of taste", "Gingival bleeding", "Dry eyes", "Ankle edema"],
       correctIndex: 3,
-      explanation: "توسع الشرايين المحيطية يؤدي لزيادة الضغط الهيدروستاتيكي وتجمع السوائل بالكاحل.",
-      drBelalTip: "وذمة الكاحل عرض شائع ومشهور للأملوديبين."
+      explanation: "Peripheral vasodilation increases hydrostatic pressure, leading to fluid accumulation in the ankles.",
+      drBelalTip: "Ankle edema is a common and well-known side effect of Amlodipine."
     },
     {
       id: 4,
-      question: "ما هي المادة المضادة (Antidote) الترياق المباشر لحالات التسمم بالباراسيتامول؟",
+      question: "What is the direct antidote for Paracetamol overdose?",
       options: ["N-Acetylcysteine (NAC)", "Naloxone", "Atropine", "Vitamin K"],
       correctIndex: 0,
-      explanation: "يعيد بناء الجلوتاثيون للكبد ويحيد المادة السامة NAPQI.",
-      drBelalTip: "الأسيتيل سيستين يحمي الكبد من السمية الحادة."
+      explanation: "It replenishes hepatic glutathione and neutralizes the toxic substance NAPQI.",
+      drBelalTip: "Acetylcysteine protects the liver from acute toxicity."
     },
     {
       id: 5,
-      question: "دواء Clopidogrel هو دواء خامل ينشط بإنزيم CYP2C19. ما الدواء الذي يقلل فاعليته؟",
+      question: "Clopidogrel is a prodrug activated by the CYP2C19 enzyme. Which drug reduces its efficacy?",
       options: ["Paracetamol", "Omeprazole", "Amoxicillin", "Vitamin C"],
       correctIndex: 1,
-      explanation: "الأوميبرازول يثبط CYP2C19 ويمنع تحول الكلوبيدوغريل لشكله النشط.",
-      drBelalTip: "نفضل Pantoprazole مع الكلوبيدوغريل لتفادي هذا التداخل."
+      explanation: "Omeprazole inhibits CYP2C19, preventing Clopidogrel's conversion to its active form.",
+      drBelalTip: "We prefer Pantoprazole with Clopidogrel to avoid this interaction."
     },
     {
       id: 6,
-      question: "أي من خافضات الكوليسترول التالية يرتبط بأعلى خطر للإصابة بآلام والتهاب العضلات (Myopathy)؟",
+      question: "Which of the following cholesterol-lowering drugs has the highest risk of muscle pain and inflammation (Myopathy)?",
       options: ["Ezetimibe", "Omega-3", "Atorvastatin / Statins", "Colestipol"],
       correctIndex: 2,
-      explanation: "الستاتينات قد تسبب اعتلالاً عضلياً ويتطلب فحص إنزيم Creatine Kinase (CK) عند حدوث ألم عضلي مجهول.",
-      drBelalTip: "تناول CoQ10 قد يخفف من آلام عضلات الستاتين لدى بعض المرضى."
+      explanation: "Statins may cause myopathy, requiring a Creatine Kinase (CK) test in cases of unexplained muscle pain.",
+      drBelalTip: "Taking CoQ10 might alleviate statin-related muscle pain in some patients."
     },
     {
       id: 7,
-      question: "ما هو الهرمون المستخدم كمضاد لنقص السكر الحاد الشديد عند مريض السكري الفاقد للوعي؟",
+      question: "Which hormone is used as an emergency antidote for severe hypoglycemia in a diabetic patient who has lost consciousness?",
       options: ["Insulin", "Metformin", "Thyroxine", "Glucagon"],
       correctIndex: 3,
-      explanation: "الجلوكاجون يحفز تحلل الجليكوجين الكبدي إلى جلوكوز لرفع سكر الدم بسرعة في الطوارئ.",
-      drBelalTip: "حقنة الجلوكاجون الإسعافية منقذة لحياة مريض السكري عند الإغماء."
+      explanation: "Glucagon stimulates hepatic glycogenolysis into glucose to rapidly raise blood sugar in emergencies.",
+      drBelalTip: "Emergency glucagon injection is lifesaving for a diabetic patient upon fainting."
     }
   ],
 
   advanced: [
     {
       id: 1,
-      question: "تُمنع المضادات الحيوية الفلوروكينولونات (مثل Ciprofloxacin) مع مكملات الكالسيوم بسبب:",
-      options: ["تحول الدواء لسم كبدي", "تدمير خلايا الدم", "حدوث التخلب (Chelation) وتقليل الامتصاص حاداً", "زيادة التجلط"],
+      question: "Fluoroquinolone antibiotics (e.g., Ciprofloxacin) are contraindicated with calcium supplements because of:",
+      options: ["Conversion of the drug to a liver toxin", "Destruction of blood cells", "Chelation and severely reduced absorption", "Increased clotting"],
       correctIndex: 2,
-      explanation: "تتحد الكينولونات مع الأيونات ثنائية التكافؤ وتمنع الامتصاص المعوي.",
-      drBelalTip: "اترك فارق ساعتين على الأقل بين الكينولونات والحديد أو الكالسيوم."
+      explanation: "Quinolones bind with divalent ions, preventing intestinal absorption.",
+      drBelalTip: "Leave a gap of at least two hours between quinolones and iron or calcium supplements."
     },
     {
       id: 2,
-      question: "ما هو الدواء الذي يمتلك نطاقاً علاجياً ضيقاً ويتطلب متابعة دورية لمعامل INR وتأثره بـ Vitamin K؟",
+      question: "Which drug has a narrow therapeutic range, requires periodic INR monitoring, and is affected by Vitamin K intake?",
       options: ["Aspirin", "Clopidogrel", "Enoxaparin", "Warfarin"],
       correctIndex: 3,
-      explanation: "الوارفارين يعاكس فيتامين K وتغيير تناول الخضار يغير الـ INR.",
-      drBelalTip: "مراقبة الـ INR أساسية جداً لسلامة مريض الوارفارين."
+      explanation: "Warfarin antagonizes Vitamin K, and changes in vegetable intake alter the INR.",
+      drBelalTip: "Monitoring INR is essential for the safety of Warfarin patients."
     },
     {
       id: 3,
-      question: "ما هو الهرمون المستخدم فوراً بالحقن العضلي لعلاج الصدمة التحسسية الحادة (Anaphylaxis)؟",
+      question: "Which hormone is used immediately by intramuscular injection to treat acute anaphylaxis?",
       options: ["Epinephrine (Adrenaline)", "Hydrocortisone Oral", "Cetirizine", "Salbutamol"],
       correctIndex: 0,
-      explanation: "الإبينفرين يرفع ضغط الدم عبر alpha-1 ويوسع الشعب عبر beta-2 فوراً.",
-      drBelalTip: "حقنة الأدرينالين هي المنقذ الأول في الصدمات التحسسية."
+      explanation: "Epinephrine increases blood pressure via alpha-1 and dilates airways via beta-2 immediately.",
+      drBelalTip: "Epinephrine injection is the first savior in anaphylactic shocks."
     },
     {
       id: 4,
-      question: "ما هو الإنزيم الكبدي الذي تثبطه أدوية الستاتين (Statins) لتقليل تصنيع الكوليسترول؟",
+      question: "Which liver enzyme is inhibited by statins to reduce cholesterol synthesis?",
       options: ["ACE Enzyme", "HMG-CoA Reductase", "Cyclooxygenase-2", "PDE-5"],
       correctIndex: 1,
-      explanation: "الستاتينات تثبط HMG-CoA Reductase الممر الرئيسي لتصنيع الدهون.",
-      drBelalTip: "تثبيط HMG-CoA هو الأساس العلمي لتخفيض الدهون الضارة LDL."
+      explanation: "Statins inhibit HMG-CoA Reductase, the main pathway for fat synthesis.",
+      drBelalTip: "Inhibiting HMG-CoA is the scientific basis for lowering bad LDL cholesterol."
     },
     {
       id: 5,
-      question: "أي من المضادات الحيوية التالية يسبب متلازمة الرجل الأحمر (Red Man Syndrome) عند حقنه بسرعة؟",
+      question: "Which of the following antibiotics causes 'Red Man Syndrome' when injected rapidly?",
       options: ["Gentamicin", "Meropenem", "Vancomycin", "Ceftriaxone"],
       correctIndex: 2,
-      explanation: "الحقن السريع للفانكوميسين يحفز إفراز الهيستامين المباشر مما يسبب احمرار الجلد والوجه.",
-      drBelalTip: "يُعطى الفانكوميسين بالتقطير الوريدي البطيء على مدار ساعة على الأقل."
+      explanation: "Rapid injection of Vancomycin stimulates direct histamine release, causing skin and facial redness.",
+      drBelalTip: "Vancomycin is given by slow intravenous drip over at least an hour."
     },
     {
       id: 6,
-      question: "ما هو التأثير الدوائي لجرعة الأسبرين المنخفضة (81-100 مجم) على الصفائح الدموية؟",
-      options: ["تثبيط عكوس لإنزيم COX-2 فقط", "تحفيز البروستاغلاندين E2", "تنشيط الثرومبوكسان A2", "تثبيط غير عكوس لإنزيم COX-1 يمنع تخليق Thromboxane A2 طوال عمر الصفيحة"],
+      question: "What is the pharmacological effect of low-dose aspirin (81-100 mg) on platelets?",
+      options: ["Reversible inhibition of COX-2 only", "Stimulation of Prostaglandin E2", "Activation of Thromboxane A2", "Irreversible inhibition of COX-1 preventing Thromboxane A2 synthesis for the platelet's lifespan"],
       correctIndex: 3,
-      explanation: "الأسبرين يربط أستيل إنزيم COX-1 برابطة تساهمية غير عكوسة مما يمنع تجلط الصفائح لمدة 7-10 أيام.",
-      drBelalTip: "تأثير الأسبرين على الصفيحة دائم طوال حياتها لعدم قدرتها على تصنيع إنزيمات جديدة."
+      explanation: "Aspirin acetylates COX-1 with an irreversible covalent bond, preventing platelet aggregation for 7-10 days.",
+      drBelalTip: "Aspirin's effect on the platelet is permanent for its entire lifespan because platelets cannot synthesize new enzymes."
     },
     {
       id: 7,
-      question: "ما هو الترياق المحدد لعكس تأثير الهيبارين غير المجزأ (Unfractionated Heparin) عند النزف؟",
+      question: "What is the specific antidote for reversing the effect of Unfractionated Heparin in case of bleeding?",
       options: ["Protamine Sulfate", "Vitamin K", "Idarucizumab", "Flumazenil"],
       correctIndex: 0,
-      explanation: "كبريتات البروتامين مادة قاعدية ترتبط بقوة مع الهيبارين الحمضي لمعادلته فوراً.",
-      drBelalTip: "كل 1 مجم من البروتامين يعادل حوالي 100 وحدة من الهيبارين."
+      explanation: "Protamine sulfate is a basic substance that strongly binds with acidic Heparin to neutralize it immediately.",
+      drBelalTip: "Every 1 mg of Protamine neutralizes about 100 units of Heparin."
     }
   ],
 
   expert: [
     {
       id: 1,
-      question: "ما هو الترياق المباشر (Antidote) للتسمم الحاد بجرعة زائدة من الأفيونات (Opioids) مثل Morphine؟",
+      question: "What is the direct antidote for acute overdose of Opioids like Morphine?",
       options: ["Flumazenil", "Naloxone", "Atropine", "Protamine Sulfate"],
       correctIndex: 1,
-      explanation: "النالوكسون حاصر تنافسي لمستقبلات Mu-opioid يعكس هبوط التنفس فوراً.",
-      drBelalTip: "النالوكسون ينقذ مركز التنفس بالدماغ فوراً في حالات جرعات الأفيون الزائدة."
+      explanation: "Naloxone is a competitive antagonist of Mu-opioid receptors, reversing respiratory depression immediately.",
+      drBelalTip: "Naloxone immediately rescues the brain's respiratory center in cases of opioid overdose."
     },
     {
       id: 2,
-      question: "ما هو الترياق المحدد لإلغاء تأثير مهدئات البنزوديازيبين (Benzodiazepines) في العناية المركزة؟",
+      question: "What is the specific antidote to reverse the effect of Benzodiazepines in the intensive care unit?",
       options: ["Naloxone", "Digibind", "Flumazenil", "Physostigmine"],
       correctIndex: 2,
-      explanation: "فلومازينيل يحظر موقع ارتباط البنزوديازيبين على مستقبلات GABA-A.",
-      drBelalTip: "فلومازينيل هو المعاكس النمطي للبنزوديازيبينات."
+      explanation: "Flumazenil blocks the benzodiazepine binding site on GABA-A receptors.",
+      drBelalTip: "Flumazenil is the classic reversal agent for benzodiazepines."
     },
     {
       id: 3,
-      question: "دواء Digoxin ذو نطاق علاجي ضيق جداً. أي من الاضطرابات الشاردية تزيد من سميته القاتلة؟",
-      options: ["ارتفاع الصوديوم", "نقص المغنيسيوم الحاد فقط", "ارتفاع السكر", "نقص بوتاسيوم الدم (Hypokalemia)"],
+      question: "Digoxin has a very narrow therapeutic range. Which electrolyte disturbance increases its lethal toxicity?",
+      options: ["High sodium", "Severe hypomagnesemia only", "High blood sugar", "Hypokalemia"],
       correctIndex: 3,
-      explanation: "Hypokalemia تزيد ارتباط الديجوكسين بمضخة Na+/K+ ATPase وتضاعف سميته القلبية.",
-      drBelalTip: "انتبه لمستوى البوتاسيوم دائماً عند مرضى الديجوكسين!"
+      explanation: "Hypokalemia increases digoxin binding to the Na+/K+ ATPase pump, doubling its cardiotoxicity.",
+      drBelalTip: "Always watch the potassium level in Digoxin patients!"
     },
     {
       id: 4,
-      question: "أي من الأدوية التالية يتطلب مراقبة مستوى 'Serum Creatinine' وتعديل الجرعة بدقة لمنع السمية الكلوية والسمية السمعية (Ototoxicity)؟",
+      question: "Which of the following drugs requires monitoring of 'Serum Creatinine' and dose adjustment to prevent nephrotoxicity and ototoxicity?",
       options: ["Gentamicin / Amikacin (Aminoglycosides)", "Amoxicillin", "Metformin", "Paracetamol"],
       correctIndex: 0,
-      explanation: "الأمينوجليكوزيدات تتركز في الكلى والأذن الداخلية وتتطلب تعديل الجرعة حسب تصفية الكرياتينين.",
-      drBelalTip: "فحص وظائف الكلى أساسي قبل وأثناء العلاج بالأمينوجليكوزيدات."
+      explanation: "Aminoglycosides concentrate in the kidneys and inner ear, requiring dose adjustment based on creatinine clearance.",
+      drBelalTip: "Kidney function test is essential before and during aminoglycoside therapy."
     },
     {
       id: 5,
-      question: "ما هو التداخل الدوائي الخطير بين أدوية MAO Inhibitors والأطعمة الغنية بالـ Tyramine (كال أجبان المعتقة)؟",
-      options: ["هبوط السكر", "أزمة ارتفاع ضغط الدم الحاد القاتل (Hypertensive Crisis)", "فشل كبدي حاد", "نزيف رحمي"],
+      question: "What is the dangerous drug interaction between MAO Inhibitors and Tyramine-rich foods (like aged cheeses)?",
+      options: ["Low blood sugar", "Fatal hypertensive crisis", "Acute liver failure", "Uterine bleeding"],
       correctIndex: 1,
-      explanation: "التيرامين يطلق النورأدرينالين بكثرة وبغياب إنزيم MAO يحدث ارتفاع ضغط صاعق.",
-      drBelalTip: "حمية خالية من التيرامين ضرورية جداً مع مثبطات المونوأمين أكسيديز."
+      explanation: "Tyramine releases excess norepinephrine, and in the absence of the MAO enzyme, a sudden, lethal increase in blood pressure occurs.",
+      drBelalTip: "A tyramine-free diet is essential with MAO inhibitors."
     },
     {
       id: 6,
-      question: "ما هو الترياق المستخدم لعلاج التسمم الحاد بأدوية حاصرات قنوات الكالسيوم (CCB Toxicity)؟",
-      options: ["Atropine فقط", "N-Acetylcysteine", "High-dose Insulin Euglycemia Therapy (HIET) مع Calcium Gluconate", "Deferoxamine"],
+      question: "What is the antidote used to treat acute Calcium Channel Blocker (CCB) toxicity?",
+      options: ["Atropine only", "N-Acetylcysteine", "High-dose Insulin Euglycemia Therapy (HIET) with Calcium Gluconate", "Deferoxamine"],
       correctIndex: 2,
-      explanation: "علاج الأنسولين بجرعات عالية مع الجلوكوز والكالسيوم يحسن استخدام الطاقة داخل خلايا عضلة القلب المتضررة من CCB.",
-      drBelalTip: "HIET هو المعيار الذهبي الحديث لإنقاذ حالات التسمم الشديد بحاصرات قنوات الكالسيوم."
+      explanation: "High-dose insulin therapy with glucose and calcium improves energy utilization within myocardial cells damaged by CCB.",
+      drBelalTip: "HIET is the modern gold standard for rescuing severe Calcium Channel Blocker toxicity cases."
     },
     {
       id: 7,
-      question: "ما هو التداخل الدوائي القاتل بين دواء Allopurinol ودواء Azathioprine؟",
-      options: ["ارتفاع البوتاسيوم", "تدمير الغدة الدرقية", "تجلط رئوي حاد", "تثبيط حاد وشديد لنخاع العظام (Pancytopenia) نتيجة تثبيط Xanthine Oxidase"],
+      question: "What is the lethal drug interaction between Allopurinol and Azathioprine?",
+      options: ["High potassium", "Thyroid gland destruction", "Acute pulmonary embolism", "Severe bone marrow suppression (Pancytopenia) due to Xanthine Oxidase inhibition"],
       correctIndex: 3,
-      explanation: "الألوبيورينول يثبط إنزيم زانثين أوكسيديز وهو الإنزيم الأساسي لتفكيك 6-Mercaptopurine فيتراكم وتحدث سمية نخاعية مميتة.",
-      drBelalTip: "يجب تخفيض جرعة الأزاثيوبرين بمقدار 75% إذا اضطررنا لجمعه مع ألوبيورينول."
+      explanation: "Allopurinol inhibits Xanthine Oxidase, the primary enzyme for breaking down 6-Mercaptopurine, leading to accumulation and lethal bone marrow toxicity.",
+      drBelalTip: "You must reduce the Azathioprine dose by 75% if you must combine it with Allopurinol."
     }
   ]
 };
@@ -1186,6 +1186,7 @@ export const PharmaGames: React.FC<PharmaGamesProps> = ({ onBackToApp, repAvatar
                     <Trophy className="h-6 w-6" />
                   </div>
                   <span className="rounded-full bg-amber-200/80 px-2.5 py-1 text-3xs font-extrabold text-amber-900 border border-amber-300">
+                    <Medal className="h-3 w-3 inline mr-1" />
                     الأكثر شعبية 🔥
                   </span>
                 </div>
@@ -1238,6 +1239,7 @@ export const PharmaGames: React.FC<PharmaGamesProps> = ({ onBackToApp, repAvatar
                     <Zap className="h-6 w-6" />
                   </div>
                   <span className="rounded-full bg-rose-200/80 px-2.5 py-1 text-3xs font-extrabold text-rose-900 border border-rose-300">
+                    <ShieldAlert className="h-3 w-3 inline mr-1" />
                     تحدي السرعة ⚡
                   </span>
                 </div>
@@ -1290,6 +1292,7 @@ export const PharmaGames: React.FC<PharmaGamesProps> = ({ onBackToApp, repAvatar
                     <Brain className="h-6 w-6" />
                   </div>
                   <span className="rounded-full bg-indigo-200/80 px-2.5 py-1 text-3xs font-extrabold text-indigo-900 border border-indigo-300">
+                    <Lightbulb className="h-3 w-3 inline mr-1" />
                     لغز علمي 🔍
                   </span>
                 </div>

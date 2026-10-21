@@ -8,7 +8,7 @@
           if (!arg) return false;
           const msg = (arg instanceof Error) ? (arg.message + ' ' + (arg.stack || '')) : String(arg);
           const lower = msg.toLowerCase();
-          return lower.includes('[vite]') || lower.includes('websocket') || lower.includes('closed without opened');
+          return lower.includes('[vite]') || lower.includes('websocket') || lower.includes('closed without opened') || lower.includes('@vite/client');
         };
         const origError = console.error;
         const origWarn = console.warn;
@@ -20,20 +20,45 @@
           if (args.some((arg) => suppress(arg))) return;
           origWarn.apply(console, args);
         };
+
+        window.onerror = (message, source, lineno, colno, error) => {
+          if (suppress(message) || suppress(error) || (source && suppress(source))) {
+            return true;
+          }
+        };
+
         window.addEventListener('error', (event) => {
-          const errText = (event.error ? (event.error.message + ' ' + (event.error.stack || '')) : '') + ' ' + (event.message || '');
-          if (suppress(errText) || suppress(event.error)) {
+          const errText = (event.error ? (event.error.message + ' ' + (event.error.stack || '')) : '') + ' ' + (event.message || '') + ' ' + (event.filename || '');
+          if (suppress(errText) || suppress(event.error) || (event.filename && suppress(event.filename))) {
             event.preventDefault();
             event.stopImmediatePropagation();
             return true;
           }
         }, true);
+
         window.addEventListener('unhandledrejection', (event) => {
           if (event.reason && suppress(event.reason)) {
             event.preventDefault();
             event.stopImmediatePropagation();
           }
         }, true);
+
+        // Intercept WebSocket creation for Vite HMR to suppress connection failures gracefully
+        try {
+          const OrigWS = window.WebSocket;
+          if (OrigWS) {
+            window.WebSocket = function(url, protocols) {
+              const ws = new OrigWS(url, protocols);
+              ws.addEventListener('error', (e) => {
+                if (typeof url === 'string' && (url.includes('vite') || url.includes('ais-dev'))) {
+                  try { e.preventDefault?.(); e.stopImmediatePropagation?.(); } catch (_) {}
+                }
+              });
+              return ws;
+            };
+            window.WebSocket.prototype = OrigWS.prototype;
+          }
+        } catch (_) {}
 
         // Resilient storage & cookie protection against third-party iframe blocking
         try {

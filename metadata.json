@@ -3,7 +3,8 @@
   "description": "تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi).",
   "requestFramePermissions": [
     "geolocation",
-    "camera"
+    "camera",
+    "microphone"
   ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

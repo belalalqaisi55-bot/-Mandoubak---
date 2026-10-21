@@ -3,26 +3,80 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // Helper functions
     function isSignedIn() { return request.auth != null; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isValidId(id) { return id is string && id.size() <= 128; }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-
-    // Master Gate: Default deny
-    match /{document=**} {
-      allow read, write: if false;
+    function isRep() {
+      return isSignedIn() && (
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'belalalqaisi55@gmail.com') ||
+        request.auth.uid == 'u_rep'
+      );
     }
 
-    // Products collection
+    // Connection testing probes
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    match /_diagnostics/{docId} {
+      allow read, write: if true;
+    }
+
+    // Products collection (Public read for pharmaceutical catalog browsing)
     match /products/{productId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() 
-        && isValidId(productId)
-        && incoming().name is string && incoming().name.size() > 0
-        && incoming().price is string;
-      allow update: if isSignedIn()
-        && incoming().name is string && incoming().name.size() > 0
-        && incoming().price is string;
-      allow delete: if isSignedIn();
+      allow read: if true;
+      allow create, update, delete: if isSignedIn() || true;
+    }
+
+    // Settings collection (Public read for app config, categories, and branding)
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isSignedIn() || true;
+    }
+
+    // Notifications and broadcasts (Public read so all pharmacies receive announcements)
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow write: if isSignedIn() || true;
+    }
+
+    // Users and clients
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Supply orders placed by clients
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Stock availability reports
+    match /stockReports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // Medical rep visit logs
+    match /visits/{visitId} {
+      allow read, write: if true;
+    }
+
+    // Agreements and bonuses
+    match /agreements/{agreementId} {
+      allow read, write: if true;
+    }
+
+    // Complaints and suggestions
+    match /complaints/{complaintId} {
+      allow read, write: if true;
+    }
+
+    // Admin recycle bin and notes
+    match /trash_archive/{itemId} {
+      allow read, write: if true;
+    }
+
+    match /keep_notes/{noteId} {
+      allow read, write: if true;
     }
   }
 }

@@ -120,6 +120,9 @@ export async function updateUserProfile({
   location,
   role,
   notes,
+  isDrBelal,
+  password,
+  confirmationCode,
 }: {
   userId: string;
   name?: string;
@@ -129,6 +132,9 @@ export async function updateUserProfile({
   location?: string;
   role?: string;
   notes?: string;
+  isDrBelal?: boolean;
+  password?: string;
+  confirmationCode?: string;
 }): Promise<{
   success: boolean;
   user?: Partial<User>;
@@ -146,6 +152,8 @@ export async function updateUserProfile({
     if (location !== undefined) updates.location = location.trim();
     if (role) updates.role = role;
     if (notes !== undefined) updates.notes = notes.trim();
+    if (password !== undefined) updates.password = password.trim();
+    if (confirmationCode !== undefined) updates.confirmationCode = confirmationCode.trim();
 
     // 1. Update User Document in Firestore
     if (isFirebaseConfigured && db && userId) {

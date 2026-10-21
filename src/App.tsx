@@ -28,6 +28,8 @@ import { DownloadApkModal } from "./components/DownloadApkModal";
 import { fetchOnboardingFlow, OnboardingFlowType } from "./services/remoteConfigService";
 import { ExcelDataPreview } from "./components/ExcelDataPreview";
 import { PrintOrderModal } from "./components/PrintOrderModal";
+import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer";
+import { AudioTranscriberModal } from "./components/AudioTranscriberModal";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -139,7 +141,10 @@ import {
   Camera,
   Tags,
   Palette,
-  Eye
+  Eye,
+  Mic,
+  Volume2,
+  FlaskConical
 } from "lucide-react";
 import {
   initNativeInteractions,
@@ -250,7 +255,80 @@ function SidebarNavItem({
   );
 }
 
+const drBelalProfileImg = "/dr-belal.jpg";
+
 export default function App() {
+  // Dr. Belal Profile Avatar state
+  const [drProfileAvatar, setDrProfileAvatar] = useState<string>(() => {
+    try {
+      return localStorage.getItem("mandoubak_dr_avatar") || drBelalProfileImg;
+    } catch {
+      return drBelalProfileImg;
+    }
+  });
+
+  const [isAudioTranscriberOpen, setIsAudioTranscriberOpen] = useState(false);
+  const [showBioscienceExplorer, setShowBioscienceExplorer] = useState(false);
+
+  const handleUploadCustomAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const base64 = ev.target?.result as string;
+        if (base64) {
+          setDrProfileAvatar(base64);
+          try {
+            localStorage.setItem("mandoubak_dr_avatar", base64);
+          } catch {}
+
+          try {
+            await fetch("/api/settings", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ drProfileAvatar: base64 })
+            });
+          } catch {}
+
+          if (isFirebaseConfigured && db) {
+            try {
+              await setDoc(doc(db, "settings", "app_config"), { drProfileAvatar: base64 }, { merge: true });
+            } catch (err) {
+              console.warn("Error updating avatar in Firestore:", err);
+            }
+          }
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.warn("Avatar upload failed:", err);
+    }
+  };
+
+  const handleResetCustomAvatar = async () => {
+    setDrProfileAvatar(drBelalProfileImg);
+    try {
+      localStorage.removeItem("mandoubak_dr_avatar");
+    } catch {}
+
+    try {
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drProfileAvatar: "" })
+      });
+    } catch {}
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await setDoc(doc(db, "settings", "app_config"), { drProfileAvatar: "" }, { merge: true });
+      } catch (err) {
+        console.warn("Error resetting avatar in Firestore:", err);
+      }
+    }
+  };
+
   // Authentication states
   const [user, setUser] = useState<User | null>(() => {
     try {
@@ -3811,7 +3889,39 @@ export default function App() {
   const renderScientificSearchTool = () => {
     return (
       <div className="p-5 space-y-6 text-right">
-        {/* Search Input Card */}
+        {/* Sub-navigation tabs: Monograph vs Bioscience Skills */}
+        <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 w-fit">
+          <button
+            type="button"
+            onClick={() => setShowBioscienceExplorer(false)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              !showBioscienceExplorer
+                ? "bg-teal-700 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <BookOpen className="h-4 w-4" />
+            <span>المراجعة الدوائية والسريرية 💊</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowBioscienceExplorer(true)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              showBioscienceExplorer
+                ? "bg-teal-700 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Sparkles className="h-4 w-4 text-amber-300" />
+            <span>مختبر العلوم الحيوية والأدوية (Bioscience Skills) 🧬🔬</span>
+          </button>
+        </div>
+
+        {showBioscienceExplorer ? (
+          <BioscienceSkillsExplorer />
+        ) : (
+          <>
+            {/* Search Input Card */}
         <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-6 space-y-4">
           <div className="space-y-1">
             <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5 justify-start">
@@ -4020,6 +4130,8 @@ export default function App() {
 
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
     );
@@ -4718,10 +4830,34 @@ export default function App() {
                     <SidebarNavItem
                       icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
                       label="البحث العلمي الطبي"
-                      active={repTab === "scientific"}
-                      onClick={() => setRepTab("scientific")}
+                      active={repTab === "scientific" && !showBioscienceExplorer}
+                      onClick={() => {
+                        setRepTab("scientific");
+                        setShowBioscienceExplorer(false);
+                      }}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-scientific"
+                    />
+                    <SidebarNavItem
+                      icon={<FlaskConical className="h-4.5 w-4.5 text-cyan-600 animate-pulse" />}
+                      label="مختبر العلوم الحيوية والأدوية 🧬🔬"
+                      active={repTab === "scientific" && showBioscienceExplorer}
+                      onClick={() => {
+                        setRepTab("scientific");
+                        setShowBioscienceExplorer(true);
+                      }}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-rep-bioscience"
+                    />
+                    <SidebarNavItem
+                      icon={<Mic className="h-4.5 w-4.5 text-purple-600" />}
+                      label="النسخ الصوتي الذكي (Gemini Transcribe) 🎙️"
+                      active={isAudioTranscriberOpen}
+                      onClick={() => setIsAudioTranscriberOpen(true)}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-rep-transcribe"
                     />
                     <SidebarNavItem
                       icon={<GraduationCap className="h-4.5 w-4.5 text-emerald-600" />}
@@ -4865,10 +5001,43 @@ export default function App() {
                     <SidebarNavItem
                       icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
                       label="البحث العلمي الطبي"
-                      active={activeTab === "scientific"}
-                      onClick={() => setActiveTab("scientific")}
+                      active={activeTab === "scientific" && !showBioscienceExplorer}
+                      onClick={() => {
+                        setActiveTab("scientific");
+                        setShowBioscienceExplorer(false);
+                      }}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-pharmacy-scientific"
+                    />
+                    <SidebarNavItem
+                      icon={<FlaskConical className="h-4.5 w-4.5 text-cyan-600 animate-pulse" />}
+                      label="مختبر العلوم الحيوية والأدوية 🧬🔬"
+                      active={activeTab === "scientific" && showBioscienceExplorer}
+                      onClick={() => {
+                        setActiveTab("scientific");
+                        setShowBioscienceExplorer(true);
+                      }}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-pharmacy-bioscience"
+                    />
+                    <SidebarNavItem
+                      icon={<Mic className="h-4.5 w-4.5 text-purple-600" />}
+                      label="النسخ الصوتي الذكي (Gemini Transcribe) 🎙️"
+                      active={isAudioTranscriberOpen}
+                      onClick={() => setIsAudioTranscriberOpen(true)}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-pharmacy-transcribe"
+                    />
+                    <SidebarNavItem
+                      icon={<Sparkles className="h-4.5 w-4.5 text-teal-600 animate-pulse" />}
+                      label="المساعد الذكي (Gemini AI) 🤖"
+                      active={isGeminiChatModalOpen}
+                      onClick={() => setIsGeminiChatModalOpen(true)}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-pharmacy-gemini"
                     />
                     <SidebarNavItem
                       icon={<GraduationCap className="h-4.5 w-4.5 text-emerald-600" />}
@@ -5382,8 +5551,43 @@ export default function App() {
                           <SidebarNavItem
                             icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
                             label="البحث العلمي الطبي"
-                            active={activeTab === "scientific"}
-                            onClick={() => { setActiveTab("scientific"); setIsMobileSidebarOpen(false); }}
+                            active={activeTab === "scientific" && !showBioscienceExplorer}
+                            onClick={() => {
+                              setActiveTab("scientific");
+                              setShowBioscienceExplorer(false);
+                              setIsMobileSidebarOpen(false);
+                            }}
+                          />
+                          <SidebarNavItem
+                            icon={<FlaskConical className="h-4.5 w-4.5 text-cyan-600 animate-pulse" />}
+                            label="مختبر العلوم الحيوية والأدوية 🧬🔬"
+                            active={activeTab === "scientific" && showBioscienceExplorer}
+                            onClick={() => {
+                              setActiveTab("scientific");
+                              setShowBioscienceExplorer(true);
+                              setIsMobileSidebarOpen(false);
+                            }}
+                            highlight
+                          />
+                          <SidebarNavItem
+                            icon={<Mic className="h-4.5 w-4.5 text-purple-600" />}
+                            label="النسخ الصوتي الذكي (Gemini Transcribe) 🎙️"
+                            active={isAudioTranscriberOpen}
+                            onClick={() => {
+                              setIsAudioTranscriberOpen(true);
+                              setIsMobileSidebarOpen(false);
+                            }}
+                            highlight
+                          />
+                          <SidebarNavItem
+                            icon={<Sparkles className="h-4.5 w-4.5 text-teal-600 animate-pulse" />}
+                            label="المساعد الذكي (Gemini AI) 🤖"
+                            active={isGeminiChatModalOpen}
+                            onClick={() => {
+                              setIsGeminiChatModalOpen(true);
+                              setIsMobileSidebarOpen(false);
+                            }}
+                            highlight
                           />
                           <SidebarNavItem
                             icon={<GraduationCap className="h-4.5 w-4.5 text-emerald-600" />}
@@ -10242,6 +10446,16 @@ export default function App() {
       <DownloadApkModal
         isOpen={isDownloadApkModalOpen}
         onClose={() => setIsDownloadApkModalOpen(false)}
+      />
+
+      {/* Audio Transcriber Modal (Powered by gemini-3.5-transcribe) */}
+      <AudioTranscriberModal
+        isOpen={isAudioTranscriberOpen}
+        onClose={() => setIsAudioTranscriberOpen(false)}
+        onApplyTranscription={(transcription) => {
+          setSearchTerm(transcription);
+          showSuccess("تم نقل وتطبيق النص الصوتي بنجاح! 🎙️");
+        }}
       />
 
       {/* Compact Footer */}

@@ -124,7 +124,7 @@ app.use(express.static(path.join(process.cwd(), "public")));
 // OAuth routes
 app.get('/auth/google', (req, res) => {
   const state = Math.random().toString(36).slice(2);
-  (req.session as any).oauth_state = state;
+  (req as any).session.oauth_state = state;
 
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
@@ -148,7 +148,7 @@ app.get('/auth/google/callback', async (req, res) => {
       return res.status(400).send('Google OAuth error: ' + error);
     }
 
-    if (!code || state !== (req.session as any).oauth_state) {
+    if (!code || state !== (req as any).session.oauth_state) {
       return res.status(400).send('Invalid request');
     }
 
@@ -171,7 +171,7 @@ app.get('/auth/google/callback', async (req, res) => {
       headers: { Authorization: `Bearer ${access_token}` }
     });
 
-    (req.session as any).user = userResponse.data;
+    (req as any).session.user = userResponse.data;
 
     res.send(`
       <html>
@@ -194,11 +194,11 @@ app.get('/auth/google/callback', async (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  res.json({ user: (req.session as any).user || null });
+  res.json({ user: (req as any).session?.user || null });
 });
 
 app.get('/auth/logout', (req, res) => {
-  req.session.destroy(() => {
+  (req as any).session?.destroy(() => {
     res.redirect(process.env.FRONTEND_ORIGIN || '/');
   });
 });
@@ -3747,8 +3747,8 @@ app.post("/api/chat", async (req, res) => {
     let preferredModel = "gemini-3.8-flash";
 
     if (mode === "complex" || mode === "thinking") {
-      // Use gemini-3.1-pro-preview for particularly complex tasks
-      preferredModel = "gemini-3.1-pro-preview";
+      // Use gemini-4-argon for particularly complex tasks
+      preferredModel = "gemini-4-argon";
     } else if (mode === "fast") {
       // Use gemini-3.1-flash-lite for tasks that should happen fast
       preferredModel = "gemini-3.1-flash-lite";
@@ -3797,55 +3797,28 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const { response, modelUsed, fallbackSearchUsed } = await robustGenerateContent(
-      ai,
-      preferredModel,
-      formattedContents,
-      config,
-      true
-    );
+    // streaming flow
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
 
-    const replyText = response.text || "عذراً، لم أستطع توليد إجابة في الوقت الحالي.";
-    const searchChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-
-    res.json({
-      success: true,
-      provider: "gemini",
-      modelUsed,
-      reply: replyText,
-      groundingChunks: searchChunks || null,
-      searchFallback: Boolean(fallbackSearchUsed)
+    const stream = await ai.models.generateContentStream({
+      model: preferredModel,
+      contents: formattedContents,
+      config: config
     });
-  } catch (err: any) {
-    console.error("Gemini Chat API Error:", err);
 
-    // If Gemini fails (e.g. quota limit, 429) and OpenRouter is configured, seamlessly fallback to OpenRouter
-    if (process.env.OPENROUTER_API_KEY) {
-      try {
-        console.log("Seamlessly falling back to OpenRouter AI...");
-        const { reply, modelUsed } = await callOpenRouterChat({
-          messages,
-          model: openRouterModel || "deepseek/deepseek-chat",
-          systemInstruction: systemInstruction || defaultSysInstruction
-        });
-
-        return res.json({
-          success: true,
-          provider: "openrouter",
-          modelUsed,
-          reply,
-          groundingChunks: null,
-          searchFallback: false
-        });
-      } catch (fallbackErr: any) {
-        console.error("OpenRouter fallback attempt also failed:", fallbackErr);
+    for await (const chunk of stream) {
+      if (chunk.text) {
+        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
       }
     }
-
-    res.status(500).json({
-      success: false,
-      error: "حدث خطأ أثناء الاتصال بالمساعد الذكي: " + (err.message || "عطل في الخدمة")
-    });
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (err: any) {
+    console.error("Gemini Chat API Error:", err);
+    res.write(`data: ${JSON.stringify({ error: err.message || "عطل في الخدمة" })}\n\n`);
+    res.end();
   }
 });
 
@@ -4189,6 +4162,206 @@ app.post("/api/ai/edit-image", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "فشل تعديل الصورة: " + (err.message || "عطل في الخدمة")
+    });
+  }
+});
+
+// --- AUDIO TRANSCRIPTION API (gemini-3.5-transcribe) ---
+app.post("/api/ai/transcribe-audio", async (req, res) => {
+  const { audioBase64, mimeType = "audio/webm", prompt } = req.body;
+  if (!audioBase64 || typeof audioBase64 !== "string") {
+    return res.status(400).json({ error: "بيانات الصوت (audioBase64) مطلوبة للتفريغ الصوتي" });
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+
+    // Remove data URL prefix if present
+    const cleanAudioBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9.-]+;base64,/, "");
+
+    const audioPart = {
+      inlineData: {
+        mimeType: mimeType || "audio/webm",
+        data: cleanAudioBase64,
+      },
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-transcribe",
+      contents: {
+        parts: [
+          audioPart,
+          {
+            text: prompt || "قم بتفريغ هذا التسجيل الصوتي بدقة متناهية إلى نص مكتوب باللغة العربية أو الإنجليزية كما نُطق تماماً بدون أي اختصار أو تحريف في المعنى."
+          }
+        ]
+      },
+    });
+
+    const transcriptionText = (response.text || "").trim();
+
+    res.json({
+      success: true,
+      modelUsed: "gemini-3.5-transcribe",
+      text: transcriptionText,
+      transcription: transcriptionText
+    });
+  } catch (err: any) {
+    console.error("Gemini Audio Transcription Error:", err);
+    res.status(500).json({
+      success: false,
+      error: "فشل تفريغ الصوت بالذكاء الاصطناعي (gemini-3.5-transcribe): " + (err.message || "عطل في الخدمة")
+    });
+  }
+});
+
+// --- BIOSCIENCE SKILLS API (PubChem PUG REST, openFDA, Europe PMC) ---
+app.get("/api/science/compound-lookup", async (req, res) => {
+  const queryName = (req.query.name as string || "").trim();
+  if (!queryName) {
+    return res.status(400).json({ error: "اسم المركب أو الدواء مطلوب للبحث العلمي" });
+  }
+
+  try {
+    let cid: number | null = null;
+    let properties: any = null;
+    let structurePngUrl: string | null = null;
+
+    // 1. Resolve CID from PubChem PUG REST
+    try {
+      const cidRes = await axios.get(
+        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(queryName)}/cids/JSON`,
+        { timeout: 5000 }
+      );
+      if (cidRes.data?.IdentifierList?.CID?.[0]) {
+        cid = cidRes.data.IdentifierList.CID[0];
+        structurePngUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/PNG?image_size=300x300`;
+      }
+    } catch (e: any) {
+      console.warn("PubChem CID lookup fallback notice:", e.message);
+    }
+
+    // 2. Fetch Calculated Physicochemical Properties if CID found
+    if (cid) {
+      try {
+        const propRes = await axios.get(
+          `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,MolecularWeight,CanonicalSMILES,IsomericSMILES,InChIKey,XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount,Complexity/JSON`,
+          { timeout: 5000 }
+        );
+        properties = propRes.data?.PropertyTable?.Properties?.[0] || null;
+      } catch (e: any) {
+        console.warn("PubChem properties lookup fallback notice:", e.message);
+      }
+    }
+
+    // 3. Query openFDA for official clinical drug labeling and boxed warnings
+    let fdaLabel: any = null;
+    try {
+      const fdaRes = await axios.get(
+        `https://api.fda.gov/drug/label.json?search=openfda.generic_name:"${encodeURIComponent(queryName)}"+openfda.brand_name:"${encodeURIComponent(queryName)}"&limit=1`,
+        { timeout: 5000 }
+      );
+      const doc = fdaRes.data?.results?.[0];
+      if (doc) {
+        fdaLabel = {
+          brandName: doc.openfda?.brand_name?.[0] || queryName,
+          genericName: doc.openfda?.generic_name?.[0] || queryName,
+          substanceName: doc.openfda?.substance_name?.[0],
+          pharmClass: doc.openfda?.pharm_class_epc || doc.openfda?.pharm_class_cs,
+          indications: doc.indications_and_usage?.[0] || doc.description?.[0],
+          boxedWarning: doc.boxed_warning?.[0],
+          contraindications: doc.contraindications?.[0],
+          dosageAndAdministration: doc.dosage_and_administration?.[0],
+          drugInteractions: doc.drug_interactions?.[0]
+        };
+      }
+    } catch (e: any) {
+      // openFDA returns 404 if no exact match, which is fine
+    }
+
+    // 4. Query Europe PMC for recent open-access clinical literature
+    let literature: any[] = [];
+    try {
+      const epmcRes = await axios.get(
+        `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(queryName)}+AND+SRC:MED&format=json&pageSize=4&sort=P_PD_D`,
+        { timeout: 5000 }
+      );
+      const resultList = epmcRes.data?.resultList?.result || [];
+      literature = resultList.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        authorString: r.authorString,
+        journalTitle: r.journalTitle,
+        pubYear: r.pubYear,
+        doi: r.doi,
+        isOpenAccess: r.isOpenAccess === "Y",
+        url: r.doi ? `https://doi.org/${r.doi}` : `https://europepmc.org/article/MED/${r.id}`
+      }));
+    } catch (e: any) {
+      console.warn("Europe PMC literature search fallback notice:", e.message);
+    }
+
+    // 5. Evaluate Lipinski Rule of 5 and Veber's oral bioavailability rules
+    let lipinskiEvaluation: any = null;
+    if (properties) {
+      const mw = parseFloat(properties.MolecularWeight) || 0;
+      const xlogp = parseFloat(properties.XLogP) || 0;
+      const hbd = parseInt(properties.HBondDonorCount, 10) || 0;
+      const hba = parseInt(properties.HBondAcceptorCount, 10) || 0;
+      const rotatableBonds = parseInt(properties.RotatableBondCount, 10) || 0;
+      const tpsa = parseFloat(properties.TPSA) || 0;
+
+      const violations: string[] = [];
+      if (mw > 500) violations.push(`الوزن الجزيئي (${mw} Da) يتجاوز 500`);
+      if (xlogp > 5) violations.push(`معامل الارتباط الدهني LogP (${xlogp}) يتجاوز 5`);
+      if (hbd > 5) violations.push(`روابط الهيدروجين المانحة (${hbd}) تتجاوز 5`);
+      if (hba > 10) violations.push(`روابط الهيدروجين المستقبلة (${hba}) تتجاوز 10`);
+
+      const veberViolations: string[] = [];
+      if (rotatableBonds > 10) veberViolations.push(`الروابط القابلة للدوران (${rotatableBonds}) تتجاوز 10`);
+      if (tpsa > 140) veberViolations.push(`المساحة السطحية القطبية (${tpsa} Å²) تتجاوز 140 Å²`);
+
+      lipinskiEvaluation = {
+        passed: violations.length <= 1,
+        violationsCount: violations.length,
+        violations,
+        veberPassed: veberViolations.length === 0,
+        veberViolations,
+        isOrallyBioavailable: violations.length <= 1 && veberViolations.length === 0,
+        summaryArabic: violations.length === 0
+          ? "مطابق تماماً لقواعد ليبينسكي وفايبر للتوافر الحيوي الفموي الممتاز (Rule of 5 compliant)"
+          : violations.length === 1
+          ? "مقبول صيدلانياً مع خرق طفيف واحد فقط لقاعدة ليبينسكي"
+          : "قد يواجه تحديات في الامتصاص المعوي الفموي وفقاً لقواعد ليبينسكي"
+      };
+    }
+
+    res.json({
+      success: true,
+      query: queryName,
+      cid,
+      structurePngUrl,
+      properties,
+      lipinskiEvaluation,
+      fdaLabel,
+      literature,
+      provenance: {
+        databases: ["PubChem PUG REST", "openFDA API", "Europe PMC"],
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error("Science Compound Lookup Error:", err);
+    res.status(500).json({
+      success: false,
+      error: "فشل استرداد البيانات العلمية للمركب: " + (err.message || "عطل في الاتصال")
     });
   }
 });

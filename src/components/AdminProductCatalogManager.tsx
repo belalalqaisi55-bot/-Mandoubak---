@@ -41,7 +41,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
   onUpdateProduct,
   onDeleteProduct,
   onOpenCategoryManager,
-  onPreviewClientCatalog
+  onPreviewClientCatalog,
+  onAddCategory
 }) => {
   // New Product Form State
   const [formData, setFormData] = useState({
@@ -129,6 +130,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
       if (onAddCategory && !availableCategories.includes(finalCategory)) {
         onAddCategory(finalCategory);
       }
+
+      const finalImage = formData.image || imagePreview || undefined;
 
       await onAddProduct({
         name: formData.name.trim(),
@@ -460,7 +463,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                     </div>
                   </div>
                 )}
-                </div>
 
                 {/* Price */}
                 <div>

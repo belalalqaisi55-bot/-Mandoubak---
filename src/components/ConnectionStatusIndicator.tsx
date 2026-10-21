@@ -35,7 +35,7 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
           className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold border ${isOnline ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-rose-50 text-rose-800 border-rose-200"}`}
         >
           <div className={`h-1.5 w-1.5 rounded-full ${isOnline ? "bg-emerald-500" : "bg-rose-500"}`} />

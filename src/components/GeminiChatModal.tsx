@@ -24,7 +24,9 @@ import {
   Navigation,
   ExternalLink,
   BookOpen,
-  Briefcase
+  Briefcase,
+  Mic,
+  Square
 } from "lucide-react";
 
 interface GroundingMapSource {
@@ -114,12 +116,13 @@ export function GeminiChatModal({
     {
       id: "init_1",
       role: "assistant",
-      text: `أهلاً بك دكتور/أستاذ ${userName}! 👨‍⚕️✨ أنا مساعد الذكاء الاصطناعي لمنصة **مندوبك الطبي** (مدعوم بنماذج Gemini المتقدمة: gemini-3.1-pro-preview للمهام المعقدة، gemini-3.5-flash للمهام العامة مع البحث والخرائط، و gemini-3.1-flash-lite للاستجابة السريعة).
+      text: `أهلاً بك دكتور/أستاذ ${userName}! 👨‍⚕️✨ أنا مساعد الذكاء الاصطناعي لمنصة **مندوبك الطبي** (مدعوم بنماذج Gemini المتقدمة: gemini-4-argon للمهام المعقدة، gemini-3.8-flash للمهام العامة مع بحث جوجل وخرائط جوجل، و gemini-3.1-flash-lite للاستجابة السريعة، بالإضافة إلى مفرّغ الصوت gemini-3.5-transcribe).
 
 يمكنك سؤالي عن:
-• الاستشارات الدوائية والتداخلات السريرية 💊
-• البحث الحي عن أحدث الدراسات عبر Google Search 🔍
-• مواقع الصيدليات والمستشفيات عبر Google Maps 📍
+• الاستشارات الدوائية والتداخلات السريرية 💊 (gemini-4-argon)
+• البحث الحي عن أحدث الدراسات عبر Google Search 🔍 (gemini-3.8-flash)
+• مواقع الصيدليات والمستشفيات عبر Google Maps 📍 (gemini-3.8-flash)
+• التحدث الصوتي بالميكروفون والتفريغ الفوري 🎙️ (gemini-3.5-transcribe)
 • استراتيجيات تسويق وتطوير مبيعات المندوب 📈`,
       timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
     }
@@ -132,6 +135,10 @@ export function GeminiChatModal({
   const [openRouterModel, setOpenRouterModel] = useState<string>("deepseek/deepseek-chat");
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const [selectedCity, setSelectedCity] = useState<string>("sanaa");
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
   const [userCoordinates, setUserCoordinates] = useState<{ latitude: number; longitude: number } | null>({
     latitude: 15.3547,
     longitude: 44.2000
@@ -219,27 +226,47 @@ export function GeminiChatModal({
         })
       });
 
-      const data = await response.json();
+      if (!response.body) throw new Error("لا توجد استجابة من الخادم");
 
-      if (data.success) {
-        const botMsg: ChatMessage = {
-          id: "b_" + Date.now(),
-          role: "assistant",
-          text: data.reply,
-          provider: data.provider,
-          modelUsed: data.modelUsed,
-          groundingSources: data.groundingChunks,
-          timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
-        };
-        setMessages((prev) => [...prev, botMsg]);
-      } else {
-        throw new Error(data.error || "خطأ في الاتصال بالذكاء الاصطناعي");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let botMsg: ChatMessage = {
+        id: "b_" + Date.now(),
+        role: "assistant",
+        text: "",
+        provider: "gemini",
+        timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
+      };
+      setMessages((prev) => [...prev, botMsg]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.replace('data: ', '');
+            if (data === '[DONE]') break;
+            try {
+              const json = JSON.parse(data);
+              if (json.text) {
+                botMsg.text += json.text;
+                setMessages((prev) => prev.map(m => m.id === botMsg.id ? {...botMsg} : m));
+              } else if (json.error) {
+                throw new Error(json.error);
+              }
+            } catch (e) {
+              console.error("Error parsing stream data:", e);
+            }
+          }
+        }
       }
     } catch (err: any) {
       const errorMsg: ChatMessage = {
         id: "err_" + Date.now(),
         role: "assistant",
-        text: `عذراً، حدث خطأ: ${err.message || "تعذر الحصول على إجابة. يرجى المحاولة لاحقاً."}`,
+        text: `عذراً، حدث خطأ أثناء البث: ${err.message || "تعذر الحصول على إجابة. يرجى المحاولة لاحقاً."}`,
         timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -258,6 +285,64 @@ export function GeminiChatModal({
           timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
         }
       ]);
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    setIsVoiceRecording(true);
+    voiceChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      voiceRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) voiceChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const mimeType = mediaRecorder.mimeType || "audio/webm";
+        const blob = new Blob(voiceChunksRef.current, { type: mimeType });
+        setIsTranscribingVoice(true);
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64Data = (reader.result as string).split(",")[1];
+          if (base64Data) {
+            try {
+              const res = await fetch("/api/ai/transcribe-audio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ audioBase64: base64Data, mimeType })
+              });
+              const data = await res.json();
+              if (data.success && data.text) {
+                setInput((prev) => (prev ? `${prev} ${data.text}` : data.text));
+              }
+            } catch (err) {
+              console.warn("Voice transcribe failed", err);
+            } finally {
+              setIsTranscribingVoice(false);
+            }
+          } else {
+            setIsTranscribingVoice(false);
+          }
+        };
+        reader.readAsDataURL(blob);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start(200);
+    } catch (e: any) {
+      console.warn("Could not start audio recording", e);
+      setIsVoiceRecording(false);
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (voiceRecorderRef.current && isVoiceRecording) {
+      voiceRecorderRef.current.stop();
+      setIsVoiceRecording(false);
     }
   };
 
@@ -348,10 +433,10 @@ export function GeminiChatModal({
                 ? "bg-white text-teal-800 shadow-xs border border-teal-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="مهام عامة باستخدام gemini-3.5-flash"
+            title="مهام عامة باستخدام gemini-3.8-flash"
           >
             <Bot className="h-3.5 w-3.5 text-teal-600" />
-            <span>عام (3.5 Flash)</span>
+            <span>عام (3.8 Flash)</span>
           </button>
 
           <button
@@ -361,10 +446,10 @@ export function GeminiChatModal({
                 ? "bg-white text-purple-800 shadow-xs border border-purple-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="مهام معقدة واستشارات سريرية متقدمة باستخدام gemini-3.1-pro-preview"
+            title="مهام معقدة واستشارات سريرية متقدمة باستخدام gemini-4-argon"
           >
             <Brain className="h-3.5 w-3.5 text-purple-600" />
-            <span>معقد (3.1 Pro)</span>
+            <span>معقد (4 Argon)</span>
           </button>
 
           <button
@@ -387,7 +472,7 @@ export function GeminiChatModal({
                 ? "bg-white text-sky-800 shadow-xs border border-sky-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="بحث جوجل الحي باستخدام gemini-3.5-flash مع googleSearch"
+            title="بحث جوجل الحي باستخدام gemini-3.8-flash مع googleSearch"
           >
             <Globe className="h-3.5 w-3.5 text-sky-600" />
             <span>بحث (Google Search)</span>
@@ -400,7 +485,7 @@ export function GeminiChatModal({
                 ? "bg-white text-emerald-800 shadow-xs border border-emerald-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="خرائط ومواقع الصيدليات والمستشفيات باستخدام gemini-3.5-flash مع googleMaps"
+            title="خرائط ومواقع الصيدليات والمستشفيات باستخدام gemini-3.8-flash مع googleMaps"
           >
             <MapPin className="h-3.5 w-3.5 text-emerald-600" />
             <span>خرائط (Google Maps)</span>
@@ -538,14 +623,14 @@ export function GeminiChatModal({
                 <span>جاري معالجة السؤال والتحليل السريري الذكي...</span>
                 <span className="text-2xs font-mono text-emerald-800">
                   {chatMode === "complex"
-                    ? "(gemini-3.1-pro-preview)"
+                    ? "(gemini-4-argon)"
                     : chatMode === "fast"
                     ? "(gemini-3.1-flash-lite)"
                     : chatMode === "search"
-                    ? "(gemini-3.5-flash + Google Search)"
+                    ? "(gemini-3.8-flash + Google Search)"
                     : chatMode === "maps"
-                    ? "(gemini-3.5-flash + Google Maps)"
-                    : "(gemini-3.5-flash)"}
+                    ? "(gemini-3.8-flash + Google Maps)"
+                    : "(gemini-3.8-flash)"}
                 </span>
               </div>
             </div>
@@ -599,10 +684,34 @@ export function GeminiChatModal({
               disabled={loading}
               className="flex-1 rounded-2xl border-2 border-emerald-300 bg-emerald-50/40 px-4 py-3 text-xs sm:text-sm text-black font-semibold placeholder-slate-500 focus:border-emerald-600 focus:bg-white focus:outline-hidden transition-all text-right"
             />
+
+            {/* Microphone Transcription Button using gemini-3.5-transcribe */}
+            <button
+              type="button"
+              onClick={isVoiceRecording ? stopVoiceRecording : startVoiceRecording}
+              disabled={loading || isTranscribingVoice}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition-all cursor-pointer ${
+                isVoiceRecording
+                  ? "bg-rose-600 text-white animate-pulse shadow-md shadow-rose-500/30"
+                  : isTranscribingVoice
+                  ? "bg-amber-500 text-white"
+                  : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 shadow-2xs"
+              }`}
+              title={isVoiceRecording ? "إيقاف التسجيل وتفريغ الصوت" : "تحدث بالصوت وتفريغه عبر gemini-3.5-transcribe 🎙️"}
+            >
+              {isVoiceRecording ? (
+                <Square className="h-4 w-4" />
+              ) : isTranscribingVoice ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
+            </button>
+
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-700 to-teal-800 text-white shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-r from-emerald-700 to-teal-800 text-white shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
             >
               <Send className="h-4 w-4 rotate-180" />
             </button>
