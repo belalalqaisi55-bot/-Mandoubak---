@@ -1176,163 +1176,95 @@ export const PharmaGames: React.FC<PharmaGamesProps> = ({ onBackToApp, repAvatar
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Card 1: Millionaire */}
-            <motion.div
-              whileHover={{ y: -4 }}
-              className="rounded-2xl border border-amber-200 bg-gradient-to-b from-amber-50/80 to-amber-100/30 p-6 flex flex-col justify-between shadow-md relative overflow-hidden"
+            <motion.button
+              whileHover={{ y: -8, scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => startMillionaire(selectedLevel)}
+              className="rounded-2xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white p-6 flex flex-col justify-between shadow-md relative overflow-hidden group text-right"
             >
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg shadow-amber-500/30">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lg shadow-amber-500/30">
                     <Trophy className="h-6 w-6" />
                   </div>
-                  <span className="rounded-full bg-amber-200/80 px-2.5 py-1 text-3xs font-extrabold text-amber-900 border border-amber-300">
-                    <Medal className="h-3 w-3 inline mr-1" />
-                    الأكثر شعبية 🔥
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-3xs font-extrabold text-amber-900 border border-amber-200">
+                    🔥 الأكثر شعبية
                   </span>
                 </div>
 
                 <div>
                   <h3 className="text-base font-bold text-slate-900">من سيربح المليون الصيدلانية 💰</h3>
                   <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                    15 سؤالاً متدرجاً في علم الأدوية! استخدم وسائل المساعدة (50:50، نصيحة الخبير الطبي، وتصويت الصيادلة) للوصول للمليون.
+                    15 سؤالاً متدرجاً في علم الأدوية! استخدم وسائل المساعدة للوصول للمليون.
                   </p>
                 </div>
-
-                <div className="space-y-1.5 text-2xs font-semibold text-slate-700 bg-white/80 p-3 rounded-xl border border-amber-100">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">المرحلة المختارة:</span>
-                    <span className="font-extrabold text-amber-800">{currentLevelDetails.title} {currentLevelDetails.icon}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 pt-1">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-amber-600" />
-                    <span>أسئلة متخصصة بحسب المرحلة المختارة</span>
-                  </div>
-                </div>
               </div>
-
-              <div className="space-y-2 mt-6">
-                <button
-                  onClick={() => startMillionaire(selectedLevel)}
-                  className="w-full rounded-xl bg-gradient-to-r from-amber-600 to-yellow-500 py-3 text-xs font-bold text-white shadow-md transition-all hover:brightness-105 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Play className="h-4 w-4" />
-                  ابدأ لعبة المليون ({currentLevelDetails.badge})
-                </button>
-                <button
-                  onClick={() => openLevelSelector("millionaire")}
-                  className="w-full rounded-xl border border-amber-300 bg-amber-50 py-2 text-3xs font-extrabold text-amber-900 hover:bg-amber-100 transition-all flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  تغيير المرحلة قبل البدء
-                </button>
+              <div className="mt-6 flex items-center justify-end text-amber-700 font-bold text-xs group-hover:translate-x-1 transition-transform">
+                ابدأ التحدي ({currentLevelDetails.badge}) <ChevronRight className="h-4 w-4 mr-1" />
               </div>
-            </motion.div>
+            </motion.button>
+
 
             {/* Card 2: Interaction Matcher */}
-            <motion.div
-              whileHover={{ y: -4 }}
-              className="rounded-2xl border border-rose-200 bg-gradient-to-b from-rose-50/80 to-rose-100/30 p-6 flex flex-col justify-between shadow-md relative overflow-hidden"
+            {/* Card 2: Speed */}
+            <motion.button
+              whileHover={{ y: -8, scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => startSpeedMatch(selectedLevel)}
+              className="rounded-2xl border border-rose-200 bg-gradient-to-b from-rose-50 to-white p-6 flex flex-col justify-between shadow-md relative overflow-hidden group text-right"
             >
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-600 text-white shadow-lg shadow-rose-600/30">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-400 to-rose-600 text-white shadow-lg shadow-rose-500/30">
                     <Zap className="h-6 w-6" />
                   </div>
-                  <span className="rounded-full bg-rose-200/80 px-2.5 py-1 text-3xs font-extrabold text-rose-900 border border-rose-300">
-                    <ShieldAlert className="h-3 w-3 inline mr-1" />
-                    تحدي السرعة ⚡
+                  <span className="rounded-full bg-rose-100 px-2.5 py-1 text-3xs font-extrabold text-rose-900 border border-rose-200">
+                    ⚡ سرعة وبديهة
                   </span>
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">تحدي كشف التداخل الدوائي ⚡</h3>
+                  <h3 className="text-base font-bold text-slate-900">تحدي التداخلات السريعة ⚡</h3>
                   <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                    يتم إظهار علاجين معاً، هل يمكنك اتخاذ القرار السريع؟ حدد فوراً إذا كان التجمع خطيراً وممنوعاً أو آمناً!
+                    حدد مدى خطورة التداخلات الدوائية في أسرع وقت ممكن! كل إجابة صحيحة متتالية تضاعف نقاطك.
                   </p>
                 </div>
-
-                <div className="space-y-1.5 text-2xs font-semibold text-slate-700 bg-white/80 p-3 rounded-xl border border-rose-100">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">المرحلة المختارة:</span>
-                    <span className="font-extrabold text-rose-800">{currentLevelDetails.title} {currentLevelDetails.icon}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 pt-1">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-rose-600" />
-                    <span>تداخلات سريرية تناسب مستواك العلمي</span>
-                  </div>
-                </div>
               </div>
-
-              <div className="space-y-2 mt-6">
-                <button
-                  onClick={() => startSpeedMatch(selectedLevel)}
-                  className="w-full rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 py-3 text-xs font-bold text-white shadow-md transition-all hover:brightness-105 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Play className="h-4 w-4" />
-                  ابدأ تحدي التداخلات ({currentLevelDetails.badge})
-                </button>
-                <button
-                  onClick={() => openLevelSelector("speed")}
-                  className="w-full rounded-xl border border-rose-300 bg-rose-50 py-2 text-3xs font-extrabold text-rose-900 hover:bg-rose-100 transition-all flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  تغيير المرحلة قبل البدء
-                </button>
+              <div className="mt-6 flex items-center justify-end text-rose-700 font-bold text-xs group-hover:translate-x-1 transition-transform">
+                ابدأ التحدي ({currentLevelDetails.badge}) <ChevronRight className="h-4 w-4 mr-1" />
               </div>
-            </motion.div>
+            </motion.button>
 
-            {/* Card 3: Active Molecule Mystery */}
-            <motion.div
-              whileHover={{ y: -4 }}
-              className="rounded-2xl border border-indigo-200 bg-gradient-to-b from-indigo-50/80 to-indigo-100/30 p-6 flex flex-col justify-between shadow-md relative overflow-hidden"
+
+            {/* Card 3: Mystery */}
+            <motion.button
+              whileHover={{ y: -8, scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => startMystery(selectedLevel)}
+              className="rounded-2xl border border-teal-200 bg-gradient-to-b from-teal-50 to-white p-6 flex flex-col justify-between shadow-md relative overflow-hidden group text-right"
             >
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-400 to-teal-600 text-white shadow-lg shadow-teal-500/30">
                     <Brain className="h-6 w-6" />
                   </div>
-                  <span className="rounded-full bg-indigo-200/80 px-2.5 py-1 text-3xs font-extrabold text-indigo-900 border border-indigo-300">
-                    <Lightbulb className="h-3 w-3 inline mr-1" />
-                    لغز علمي 🔍
+                  <span className="rounded-full bg-teal-100 px-2.5 py-1 text-3xs font-extrabold text-teal-900 border border-teal-200">
+                    🕵️‍♂️ استنتاج
                   </span>
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">لغز المادة الفعالة والجرعة 🔍</h3>
+                  <h3 className="text-base font-bold text-slate-900">لغز الجزيئات الكيميائية 🕵️‍♂️</h3>
                   <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                    كشف تلميح تلو الآخر حول الدواء المخفي! كلما حزرت الدواء بتلميحات أقل، كلما حصدت درجات أعلى.
+                    اكتشف الدواء الخفي من خلال أدلة سريرية. كلما كشفت الدواء بتلميحات أقل، حصدت نقاطاً أكثر!
                   </p>
                 </div>
-
-                <div className="space-y-1.5 text-2xs font-semibold text-slate-700 bg-white/80 p-3 rounded-xl border border-indigo-100">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">المرحلة المختارة:</span>
-                    <span className="font-extrabold text-indigo-800">{currentLevelDetails.title} {currentLevelDetails.icon}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 pt-1">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-indigo-600" />
-                    <span>تلميحات كيميائية وفق المستوى المختار</span>
-                  </div>
-                </div>
               </div>
-
-              <div className="space-y-2 mt-6">
-                <button
-                  onClick={() => startMystery(selectedLevel)}
-                  className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 py-3 text-xs font-bold text-white shadow-md transition-all hover:brightness-105 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Play className="h-4 w-4" />
-                  ابدأ لغز الدواء ({currentLevelDetails.badge})
-                </button>
-                <button
-                  onClick={() => openLevelSelector("mystery")}
-                  className="w-full rounded-xl border border-indigo-300 bg-indigo-50 py-2 text-3xs font-extrabold text-indigo-900 hover:bg-indigo-100 transition-all flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  تغيير المرحلة قبل البدء
-                </button>
+              <div className="mt-6 flex items-center justify-end text-teal-700 font-bold text-xs group-hover:translate-x-1 transition-transform">
+                ابدأ التحدي ({currentLevelDetails.badge}) <ChevronRight className="h-4 w-4 mr-1" />
               </div>
-            </motion.div>
+            </motion.button>
+
           </div>
         </div>
       )}

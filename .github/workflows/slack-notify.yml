@@ -1,0 +1,29 @@
+name: Notify Slack on Build Status
+
+on:
+  workflow_run:
+    workflows: ["Node.js & Vite CI"]
+    types:
+      - completed
+
+jobs:
+  slack-notification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack Notification
+        if: ${{ github.event.workflow_run.conclusion == 'success' }}
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: 'good'
+          SLACK_TITLE: 'Build Succeeded!'
+          SLACK_MESSAGE: 'The web application was successfully built and verified.'
+
+      - name: Send Slack Failure Notification
+        if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: 'danger'
+          SLACK_TITLE: 'Build Failed!'
+          SLACK_MESSAGE: 'The web application build failed. Please check the CI logs.'
