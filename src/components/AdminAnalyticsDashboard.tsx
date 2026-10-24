@@ -39,6 +39,8 @@ import {
   ShoppingCart
 } from "lucide-react";
 import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
+import { GeminiChatModal } from "./GeminiChatModal";
+
 
 interface AdminAnalyticsDashboardProps {
   initialUsers?: User[];
@@ -73,6 +75,7 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
   const [activeSection, setActiveSection] = useState<"overview" | "users" | "notifications" | "visits" | "orders">("overview");
   const [timeFilter, setTimeFilter] = useState<"all" | "month" | "week" | "today">("all");
   const [firestoreStatus, setFirestoreStatus] = useState<"connected" | "connecting" | "offline">("connected");
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   // Keep in sync with parent props when they change
   useEffect(() => {
@@ -441,6 +444,17 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
               <Download className="h-3.5 w-3.5 text-teal-400" />
               <span>تصدير CSV</span>
             </button>
+
+            {/* AI Assistant Button */}
+            <button
+              onClick={() => setIsChatOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white border border-teal-500 text-xs font-bold transition-all shadow-sm active:scale-95"
+              title="تحدث مع المساعد الذكي"
+            >
+              <Bot className="h-3.5 w-3.5" />
+              <span>Ask AI</span>
+            </button>
+
           </div>
         </div>
 

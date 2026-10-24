@@ -56,6 +56,7 @@ import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, delete
 import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState } from "./firebase";
 import { motion, AnimatePresence } from "motion/react";
 import { ConnectionStatusIndicator } from "./components/ConnectionStatusIndicator";
+import { useConnectionStatus } from "./hooks/useConnectionStatus";
 import {
   Pill,
   Printer,
@@ -258,6 +259,7 @@ function SidebarNavItem({
 const drBelalProfileImg = "/dr-belal.jpg";
 
 export default function App() {
+  const { latency } = useConnectionStatus();
   // Dr. Belal Profile Avatar state
   const [drProfileAvatar, setDrProfileAvatar] = useState<string>(() => {
     try {
@@ -4197,7 +4199,8 @@ export default function App() {
               <div className="flex items-center gap-2 flex-wrap">
                 <ConnectionStatusIndicator 
                   onSync={handleManualSync} 
-                  isSyncing={isSyncing} 
+                  isSyncing={isSyncing}
+                  latencyMs={latency}
                 />
                 <a
                   href={OFFICIAL_APP_URL}

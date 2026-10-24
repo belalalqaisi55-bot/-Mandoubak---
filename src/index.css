@@ -226,4 +226,20 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-t
   display: none !important;
 }
 
+/* Dynamic Connection Status Pulsing Animation based on Latency */
+@keyframes connection-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(1.12);
+  }
+}
+
+.animate-connection-pulse {
+  animation: connection-pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
 
