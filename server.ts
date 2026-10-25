@@ -1,14 +1,17 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
+
 import session from 'express-session';
 import axios from 'axios';
 import qs from 'qs';
+import { DEFAULT_PRODUCTS } from "./src/data/defaultProducts";
 
 dotenv.config();
 process.env.DISABLE_HMR = "true";
@@ -99,7 +102,16 @@ app.get("/api/diagnostics/cookies", (req, res) => {
   });
 });
 
-app.use(express.json({ limit: "25mb" }));
+app.use(
+  express.json({
+    limit: "25mb",
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+
 // Explicitly serve Web App Manifest and Service Worker with standard PWA headers
 app.get(["/manifest.webmanifest", "/manifest.json", "/site.webmanifest"], (req, res) => {
   const manifestFile = path.join(process.cwd(), "public", "manifest.webmanifest");
@@ -422,7 +434,9 @@ interface AppSettings {
   enableVisitTracking?: boolean;
   drProfileAvatar?: string;
   productCategories?: string[];
+  geminiWebhookSecret?: string;
 }
+
 
 const DEFAULT_SETTINGS: AppSettings = {
   requireApprovalForNewClients: true,
@@ -432,6 +446,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   enableVisitTracking: true,
   drProfileAvatar: ""
 };
+
+const DEFAULT_USERS: User[] = [
+  {
+    id: "u_rep",
+    phone: "+967776600049",
+    name: "بلال القيسي (مندوب مبيعات طبي)",
+    role: "rep",
+    createdAt: new Date().toISOString()
+  }
+];
 
 interface Product {
   id: string;
@@ -570,6 +594,25 @@ export interface TrashItem {
   data: any;
 }
 
+export interface GeminiWebhookEventRecord {
+  id: string;
+  webhookId?: string;
+  eventType: string;
+  batchId?: string;
+  model?: string;
+  status: "succeeded" | "failed" | "processing" | "received" | "cancelled" | "expired";
+  outputUri?: string;
+  totalCount?: number;
+  completedCount?: number;
+  failedCount?: number;
+  error?: string | null;
+  payload: any;
+  headers?: Record<string, string>;
+  verified: boolean;
+  receivedAt: string;
+  summary?: string;
+}
+
 interface DB {
   users: User[];
   products: Product[];
@@ -581,183 +624,38 @@ interface DB {
   complaints?: Complaint[];
   settings?: AppSettings;
   trashArchive?: TrashItem[];
+  geminiWebhooks?: GeminiWebhookEventRecord[];
 }
 
-const DEFAULT_PRODUCTS: Product[] = [
-  {
-    id: "p1",
-    name: "سيبلوكس 500 (Ciplox 500)",
-    description: "الاسم العلمي: Ciprofloxacine 500",
-    category: "مضادات حيوية",
-    price: "660 ريال",
-    bonus: "10%",
-    unit: "شريط",
-    activeIngredient: "Ciprofloxacin",
-    dosageForm: "أقراص (Tablets)"
-  },
-  {
-    id: "p2",
-    name: "ديراد إم أقراص (Dirad-M Tablets)",
-    description: "الاسم العلمي: Metronidazole + Diloxanide",
-    category: "مضادات طفيليات مطهرة",
-    price: "703 ريال",
-    bonus: "10%",
-    unit: "شريط",
-    activeIngredient: "Metronidazole, Diloxanide",
-    dosageForm: "أقراص (Tablets)"
-  },
-  {
-    id: "p3",
-    name: "ديراد إم شراب (Dirad-M Syrup)",
-    description: "الاسم العلمي: Metronidazole + Diloxanide",
-    category: "مضادات طفيليات مطهرة",
-    price: "770 ريال",
-    bonus: "10%",
-    unit: "زجاجة",
-    activeIngredient: "Metronidazole, Diloxanide",
-    dosageForm: "شراب ومعلق (Syrup)"
-  },
-  {
-    id: "p4",
-    name: "ألريد أقراص (Allerid Tablets)",
-    description: "الاسم العلمي: Cetirizine Tab.",
-    category: "مضادات الحساسية",
-    price: "781 ريال",
-    bonus: "20%",
-    unit: "شريط",
-    activeIngredient: "Cetirizine",
-    dosageForm: "أقراص (Tablets)"
-  },
-  {
-    id: "p5",
-    name: "ألريد شراب (Allerid Syrup)",
-    description: "الاسم العلمي: Cetirizine Syrp",
-    category: "مضادات الحساسية",
-    price: "770 ريال",
-    bonus: "10%",
-    unit: "زجاجة",
-    activeIngredient: "Cetirizine",
-    dosageForm: "شراب ومعلق (Syrup)"
-  },
-  {
-    id: "p6",
-    name: "فوركان 150 كبسول (Forcan 150 Caps)",
-    description: "الاسم العلمي: Fluconazol 150",
-    category: "مضادات الفطريات",
-    price: "508 ريال",
-    bonus: "10%",
-    unit: "كبسولة",
-    activeIngredient: "Fluconazole",
-    dosageForm: "كبسولات (Capsules)"
-  },
-  {
-    id: "p7",
-    name: "نوفاتاكس 1 جم (Novatax 1g)",
-    description: "الاسم العلمي: Cefotaxime 1g",
-    category: "حقن مضاد حيوي",
-    price: "850 ريال",
-    bonus: "40%",
-    unit: "حقنة",
-    activeIngredient: "Cefotaxime",
-    dosageForm: "حقن وفيال (Injections)"
-  },
-  {
-    id: "p13",
-    name: "نوفاتكس 500 (Novatex 500)",
-    description: "الاسم العلمي: Cefotaxime 500 mg",
-    category: "حقن مضاد حيوي",
-    price: "600 ريال",
-    bonus: "40%",
-    unit: "حقنة",
-    activeIngredient: "Cefotaxime",
-    dosageForm: "حقن وفيال (Injections)"
-  },
-  {
-    id: "p8",
-    name: "لوماك شرائط (Lomac Strips)",
-    description: "الاسم العلمي: Omeprazole 20 Tab",
-    category: "أدوية المعدة والحموضة",
-    price: "2400 ريال",
-    bonus: "100%",
-    unit: "شريط",
-    activeIngredient: "Omeprazole",
-    dosageForm: "كبسولات (Capsules)"
-  },
-  {
-    id: "p9",
-    name: "لانسك علب (Lansec 30 mg)",
-    description: "الاسم العلمي: Lansoprazol 30 mg",
-    category: "أدوية المعدة والحموضة",
-    price: "1223 ريال",
-    bonus: "20%",
-    unit: "علبة",
-    activeIngredient: "Lansoprazole",
-    dosageForm: "كبسولات (Capsules)"
-  },
-  {
-    id: "p10",
-    name: "سيبازول فورت (Cipazole Forte)",
-    description: "الاسم العلمي: Scenidazole 1000",
-    category: "مضادات طفيليات وبكتيريا",
-    price: "550 ريال",
-    bonus: "40%",
-    unit: "شريط",
-    activeIngredient: "Secnidazole",
-    dosageForm: "أقراص (Tablets)"
-  },
-  {
-    id: "p11",
-    name: "بارفيز فوار (Parfeez Effervescent)",
-    description: "الاسم العلمي: Paracetamol",
-    category: "مسكنات ومضادات حمى",
-    price: "1999 ريال",
-    bonus: "40%",
-    unit: "علبة فوار",
-    activeIngredient: "Paracetamol",
-    dosageForm: "فوار وحبيبات (Effervescent)"
-  },
-  {
-    id: "p12",
-    name: "بارفيز بلص فوار (Parfeez Plus Effervescent)",
-    description: "الاسم العلمي: Paracetamol + Codeine + Caffeine",
-    category: "مسكنات ألم قوية",
-    price: "2400 ريال",
-    bonus: "40%",
-    unit: "علبة فوار",
-    activeIngredient: "Paracetamol, Codeine, Caffeine",
-    dosageForm: "فوار وحبيبات (Effervescent)"
-  }
-];
 
-const DEFAULT_USERS: User[] = [
-  {
-    id: "u_rep",
-    email: "belalalqaisi55@gmail.com",
-    phone: "+967776600049",
-    name: "د/ بلال القيسي",
-    entityName: "المكتب العلمي والمبيعات الطبية (الإدارة)",
-    location: "صنعاء / جميع المحافظات",
-    role: "rep",
-    isApproved: true,
-    status: "approved",
-    createdAt: new Date().toISOString()
+// Helper to get default data
+function getDefaults() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src', 'defaults.json'), 'utf8'));
+    data.users = data.users.map((u: any) => ({ ...u, createdAt: new Date().toISOString() }));
+    return data;
+  } catch (e) {
+    console.error("Error reading defaults.json", e);
+    return { products: [], users: [] };
   }
-];
+}
 
 // Read database
 function getDB(): DB {
   try {
+    const defaults = getDefaults();
     if (!fs.existsSync(DB_FILE)) {
       const initialDB: DB = {
-        users: DEFAULT_USERS,
-        products: DEFAULT_PRODUCTS,
+        users: defaults.users,
+        products: defaults.products,
         stockReports: [],
         orders: [],
         visits: [],
         notifications: [],
         agreements: [],
         complaints: [],
-        trashArchive: []
+        trashArchive: [],
+        geminiWebhooks: []
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(initialDB, null, 2), "utf8");
       return initialDB;
@@ -771,7 +669,7 @@ function getDB(): DB {
     const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
     parsed.users = parsed.users.filter((u) => !defaultClientIds.has(u.id));
 
-    if (!parsed.products || parsed.products.length === 0) parsed.products = DEFAULT_PRODUCTS;
+    if (!parsed.products || parsed.products.length === 0) parsed.products = defaults.products;
     if (!parsed.stockReports) parsed.stockReports = [];
     if (!parsed.orders) parsed.orders = [];
     if (!parsed.visits) parsed.visits = [];
@@ -779,23 +677,26 @@ function getDB(): DB {
     if (!parsed.agreements) parsed.agreements = [];
     if (!parsed.complaints) parsed.complaints = [];
     if (!parsed.trashArchive) parsed.trashArchive = [];
+    if (!parsed.geminiWebhooks) parsed.geminiWebhooks = [];
 
     return parsed;
   } catch (err) {
     console.error("Error reading database", err);
     return {
       users: [],
-      products: DEFAULT_PRODUCTS,
+      products: [],
       stockReports: [],
       orders: [],
       visits: [],
       notifications: [],
       agreements: [],
       complaints: [],
-      trashArchive: []
+      trashArchive: [],
+      geminiWebhooks: []
     };
   }
 }
+
 
 // Save database
 function saveDB(db: DB) {
@@ -4384,31 +4285,46 @@ app.post("/api/generate-video", async (req, res) => {
     });
 
     const videoConfig: any = {
-      numberOfVideos: 1,
-      resolution: resolution === "1080p" ? "1080p" : "720p",
       aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
     };
 
     let videoPayload: any = {
-      model: "veo-3.1-lite-generate-preview",
-      prompt: prompt || "Cinematic promotional pharmaceutical showcase video with gentle lighting and floating medical elements",
-      config: videoConfig
+      model: "gemini-omni-1.1-flash",
+      input: [
+        {
+          type: "text",
+          text: prompt || "Cinematic promotional pharmaceutical showcase video with gentle lighting and floating medical elements",
+        }
+      ],
+      response_format: {
+        type: 'video',
+        aspect_ratio: videoConfig.aspectRatio,
+        duration: '5s',
+        resolution: resolution
+      }
     };
 
     if (imageBase64) {
       const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, "");
-      videoPayload.image = {
-        imageBytes: cleanBase64,
-        mimeType: mimeType || "image/png"
-      };
+      videoPayload.input.unshift({
+        type: "image",
+        mime_type: mimeType || "image/png",
+        data: cleanBase64
+      });
     }
 
-    const operation = await ai.models.generateVideos(videoPayload);
+    const interaction = await ai.interactions.create(videoPayload, { timeout: 300000 });
+    const videoPart = interaction.output_video;
+
+    if (!videoPart || !videoPart.data) {
+      throw new Error("لم يتم إرجاع الفيديو من النموذج");
+    }
 
     res.json({
       success: true,
-      operationName: operation.name
+      videoUrl: `data:${videoPart.mime_type || "video/mp4"};base64,${videoPart.data}`
     });
+
   } catch (err: any) {
     console.error("Veo Video Start Error:", err);
     res.status(500).json({
@@ -4418,97 +4334,402 @@ app.post("/api/generate-video", async (req, res) => {
   }
 });
 
-app.post("/api/video-status", async (req, res) => {
-  const { operationName } = req.body;
-  if (!operationName) {
-    return res.status(400).json({ error: "اسم العملية (operationName) مطلوب" });
-  }
+// ---------------- GEMINI BATCH & GENAI WEBHOOK INTEGRATION ----------------
+// Specification: Standard Webhooks (HMAC-SHA256)
+// Supporting: https://my-api.com/gemini-callback and /api/gemini-callback
+// Events: batch.succeeded, batch.failed, batch.cancelled, batch.expired, video.generated, interaction.completed
 
-  try {
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
+async function fetchGeminiWebhooksFromDB(): Promise<GeminiWebhookEventRecord[]> {
+  const db = getDB();
+  let list = db.geminiWebhooks || [];
+
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      const snap = await dbAdmin.collection("gemini_webhooks").orderBy("receivedAt", "desc").limit(100).get();
+      if (!snap.empty) {
+        const fbList: GeminiWebhookEventRecord[] = [];
+        snap.forEach((doc) => {
+          fbList.push(doc.data() as GeminiWebhookEventRecord);
+        });
+        const map = new Map<string, GeminiWebhookEventRecord>();
+        list.forEach((item) => map.set(item.id, item));
+        fbList.forEach((item) => map.set(item.id, item));
+        list = Array.from(map.values());
       }
-    });
+    } catch (e: any) {
+      console.warn("Firebase fetch gemini webhooks fallback:", e.message);
+    }
+  }
 
-    const op = new GenerateVideosOperation();
-    op.name = operationName;
-    const updated = await ai.operations.getVideosOperation({ operation: op });
+  list.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+  return list;
+}
 
-    res.json({
-      success: true,
-      done: Boolean(updated.done),
-      error: updated.error ? updated.error.message : undefined
-    });
-  } catch (err: any) {
-    console.error("Veo Video Status Error:", err);
-    res.status(500).json({
+async function saveGeminiWebhookToDB(item: GeminiWebhookEventRecord): Promise<void> {
+  const db = getDB();
+  if (!db.geminiWebhooks) db.geminiWebhooks = [];
+  db.geminiWebhooks.unshift(item);
+  if (db.geminiWebhooks.length > 200) {
+    db.geminiWebhooks = db.geminiWebhooks.slice(0, 200);
+  }
+  saveDB(db);
+
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      await dbAdmin.collection("gemini_webhooks").doc(item.id).set(item);
+    } catch (e: any) {
+      console.warn("Firebase save gemini webhook fallback:", e.message);
+    }
+  }
+}
+
+async function clearGeminiWebhooksFromDB(): Promise<void> {
+  const db = getDB();
+  db.geminiWebhooks = [];
+  saveDB(db);
+
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      const snap = await dbAdmin.collection("gemini_webhooks").get();
+      const batch = dbAdmin.batch();
+      snap.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    } catch (e: any) {
+      console.warn("Firebase clear gemini webhooks fallback:", e.message);
+    }
+  }
+}
+
+function verifyStandardWebhookSignature(
+  rawBody: Buffer | string,
+  headers: Record<string, any>,
+  secretKeyString?: string
+): { verified: boolean; reason?: string } {
+  const secret = secretKeyString || process.env.GEMINI_WEBHOOK_SECRET || process.env.GEMINI_WEBHOOK_SIGNING_SECRET || getDB().settings?.geminiWebhookSecret;
+
+  if (!secret || !secret.trim()) {
+    return {
+      verified: false,
+      reason: "مفتاح التوقيع السري غير مهيأ في بيئة الخادم (GEMINI_WEBHOOK_SECRET)"
+    };
+  }
+
+  const webhookId = (headers["webhook-id"] || headers["x-webhook-id"] || "") as string;
+  const webhookTimestamp = (headers["webhook-timestamp"] || headers["x-webhook-timestamp"] || "") as string;
+  const webhookSignatureHeader = (headers["webhook-signature"] || headers["x-goog-signature"] || headers["x-signature"] || "") as string;
+
+  if (!webhookSignatureHeader) {
+    return {
+      verified: false,
+      reason: "ترويسة التوقيع مفقودة من الطلب (webhook-signature)"
+    };
+  }
+
+  // Parse secret (Standard Webhooks format: whsec_ followed by base64)
+  let secretBuffer: Buffer;
+  const cleanSecret = secret.trim();
+  if (cleanSecret.startsWith("whsec_")) {
+    try {
+      secretBuffer = Buffer.from(cleanSecret.slice(6), "base64");
+    } catch {
+      secretBuffer = Buffer.from(cleanSecret, "utf-8");
+    }
+  } else {
+    const isBase64 = /^[A-Za-z0-9+/=]+$/.test(cleanSecret) && cleanSecret.length % 4 === 0;
+    secretBuffer = isBase64 ? Buffer.from(cleanSecret, "base64") : Buffer.from(cleanSecret, "utf-8");
+  }
+
+  const rawBodyStr = typeof rawBody === "string" ? rawBody : (rawBody ? rawBody.toString("utf8") : "");
+
+  // Check timestamp drift tolerance (10 minutes)
+  if (webhookTimestamp) {
+    const timestampSec = parseInt(webhookTimestamp, 10);
+    if (!isNaN(timestampSec)) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const diff = Math.abs(nowSec - timestampSec);
+      if (diff > 600) {
+        console.warn(`[Gemini Webhook] Timestamp drift notice: diff=${diff}s`);
+      }
+    }
+  }
+
+  // Standard Webhooks signature payload format: "${webhook_id}.${webhook_timestamp}.${body}"
+  const toSign = webhookId && webhookTimestamp
+    ? `${webhookId}.${webhookTimestamp}.${rawBodyStr}`
+    : rawBodyStr;
+
+  const expectedHmacBase64 = crypto.createHmac("sha256", secretBuffer).update(toSign).digest("base64");
+  const expectedHmacHex = crypto.createHmac("sha256", secretBuffer).update(toSign).digest("hex");
+
+  // Signatures can be a space-delimited list of candidate signatures: e.g. "v1,abc= v1,def="
+  const sigTokens = webhookSignatureHeader.split(/\s+/);
+  for (const token of sigTokens) {
+    const sigValue = token.startsWith("v1,") ? token.slice(3) : token;
+    try {
+      const sigBuf = Buffer.from(sigValue, "base64");
+      const expBuf = Buffer.from(expectedHmacBase64, "base64");
+      if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
+        return { verified: true };
+      }
+    } catch {
+      // Continue to next token
+    }
+
+    if (sigValue === expectedHmacBase64 || sigValue === expectedHmacHex) {
+      return { verified: true };
+    }
+  }
+
+  return {
+    verified: false,
+    reason: "عدم تطابق التوقيع الرقمي (Signature mismatch)"
+  };
+}
+
+async function handleGeminiWebhook(req: express.Request, res: express.Response) {
+  const rawBody = (req as any).rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  const headers = req.headers;
+  const body = req.body || {};
+
+  const webhookId = (headers["webhook-id"] || headers["x-webhook-id"] || `wh_${Date.now()}`) as string;
+  const webhookTimestamp = (headers["webhook-timestamp"] || new Date().toISOString()) as string;
+
+  // Verify signature
+  const verification = verifyStandardWebhookSignature(rawBody, headers);
+  const secretConfigured = Boolean(
+    process.env.GEMINI_WEBHOOK_SECRET ||
+    process.env.GEMINI_WEBHOOK_SIGNING_SECRET ||
+    getDB().settings?.geminiWebhookSecret
+  );
+
+  // If secret is set AND signature was provided, reject invalid signatures
+  if (secretConfigured && (headers["webhook-signature"] || headers["x-goog-signature"]) && !verification.verified) {
+    console.warn("[Gemini Webhook] Rejected invalid signature:", verification.reason);
+    return res.status(401).json({
       success: false,
-      error: "فشل فحص حالة الفيديو: " + (err.message || "عطل في الخدمة")
+      error: "فشل التحقق من التوقيع الرقمي للويب هوك",
+      reason: verification.reason
     });
   }
+
+  // Extract Event Details
+  const eventType = body.type || body.event || body.event_type || headers["webhook-event-type"] || "batch.succeeded";
+  const batchId = body.data?.batch_id || body.data?.name || body.batch_id || body.data?.id || body.name || "batch_" + Math.random().toString(36).substr(2, 7);
+  const model = body.data?.model || body.model || "gemini-3.8-flash";
+  const outputUri = body.data?.output_uri || body.output_uri || null;
+  const totalCount = body.data?.total_count !== undefined ? Number(body.data.total_count) : undefined;
+  const completedCount = body.data?.completed_count !== undefined ? Number(body.data.completed_count) : undefined;
+  const failedCount = body.data?.failed_count !== undefined ? Number(body.data.failed_count) : undefined;
+  const errorMsg = body.data?.error?.message || (typeof body.data?.error === "string" ? body.data.error : null) || (typeof body.error === "string" ? body.error : null) || null;
+
+  let status: GeminiWebhookEventRecord["status"] = "received";
+  if (eventType === "batch.succeeded" || body.data?.state === "JOB_STATE_SUCCEEDED") {
+    status = "succeeded";
+  } else if (eventType === "batch.failed" || body.data?.state === "JOB_STATE_FAILED") {
+    status = "failed";
+  } else if (eventType === "batch.cancelled") {
+    status = "cancelled";
+  } else if (eventType === "batch.expired") {
+    status = "expired";
+  }
+
+  const summary = eventType === "batch.succeeded"
+    ? `تم اكتمال معالجة دفعة Gemini (${batchId}) بنجاح بواسطة النموذج ${model}. إجمالي العمليات: ${totalCount ?? completedCount ?? 1}`
+    : eventType === "batch.failed"
+    ? `فشلت معالجة دفعة Gemini (${batchId}). السبب: ${errorMsg || "خطأ غير محدد"}`
+    : `تم استلام إشعار حدث Gemini Webhook: ${eventType} للدفعة ${batchId}`;
+
+  const eventRecord: GeminiWebhookEventRecord = {
+    id: `ev_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    webhookId,
+    eventType,
+    batchId,
+    model,
+    status,
+    outputUri,
+    totalCount,
+    completedCount,
+    failedCount,
+    error: errorMsg,
+    payload: body,
+    headers: {
+      "webhook-id": webhookId,
+      "webhook-timestamp": String(webhookTimestamp),
+      "content-type": (headers["content-type"] as string) || "application/json"
+    },
+    verified: verification.verified,
+    receivedAt: new Date().toISOString(),
+    summary
+  };
+
+  await saveGeminiWebhookToDB(eventRecord);
+  console.log(`[Gemini Webhook] Successfully processed ${eventType} (${batchId}) | Verified: ${verification.verified}`);
+
+  return res.status(200).json({
+    success: true,
+    eventId: eventRecord.id,
+    eventType,
+    batchId,
+    verified: verification.verified,
+    message: "Gemini webhook received and processed successfully"
+  });
+}
+
+// Support the user's specific URI (/gemini-callback) and standard API endpoints
+app.post(["/gemini-callback", "/api/gemini-callback", "/api/gemini/webhook"], handleGeminiWebhook);
+
+// GET handler to check callback status and instructions
+app.get(["/gemini-callback", "/api/gemini-callback"], (req, res) => {
+  const host = req.get("host") || "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+  const protocol = req.protocol === "http" && host.includes("localhost") ? "http" : "https";
+  const fullUrl = `${protocol}://${host}/gemini-callback`;
+  const secretConfigured = Boolean(
+    process.env.GEMINI_WEBHOOK_SECRET ||
+    process.env.GEMINI_WEBHOOK_SIGNING_SECRET ||
+    getDB().settings?.geminiWebhookSecret
+  );
+
+  res.json({
+    status: "active",
+    service: "Gemini Batch Webhook Callback Listener",
+    app: "مندوبك الطبي | Mandoubak Med",
+    callbackUrl: fullUrl,
+    subscribedEvents: ["batch.succeeded", "batch.failed", "batch.cancelled", "batch.expired"],
+    specification: "Standard Webhooks (HMAC-SHA256)",
+    secretConfigured,
+    sampleRegistrationPython: `from google import genai\n\nclient = genai.Client()\nwebhook = client.webhooks.create(\n    name="MyBatchWebhook",\n    subscribed_events=["batch.succeeded", "batch.failed"],\n    uri="${fullUrl}"\n)\nwebhook_secret = webhook.new_signing_secret\nprint(f"Created webhook: {webhook.name}, {webhook.id}")`
+  });
 });
 
-app.post("/api/video-download", async (req, res) => {
-  const { operationName } = req.body;
-  if (!operationName) {
-    return res.status(400).json({ error: "اسم العملية مطلوب لتحميل الفيديو" });
+app.get("/api/gemini-callback/events", async (req, res) => {
+  const events = await fetchGeminiWebhooksFromDB();
+  res.json({
+    success: true,
+    count: events.length,
+    events
+  });
+});
+
+app.delete("/api/gemini-callback/events", async (req, res) => {
+  await clearGeminiWebhooksFromDB();
+  res.json({ success: true, message: "تم مسح سجل أحداث الويب هوك" });
+});
+
+app.get("/api/gemini-callback/config", (req, res) => {
+  const host = req.get("host") || "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+  const protocol = req.protocol === "http" && host.includes("localhost") ? "http" : "https";
+  const fullUrl = `${protocol}://${host}/gemini-callback`;
+  const secretConfigured = Boolean(
+    process.env.GEMINI_WEBHOOK_SECRET ||
+    process.env.GEMINI_WEBHOOK_SIGNING_SECRET ||
+    getDB().settings?.geminiWebhookSecret
+  );
+
+  res.json({
+    success: true,
+    callbackUrl: fullUrl,
+    apiUrl: `${protocol}://${host}/api/gemini-callback`,
+    secretConfigured,
+    subscribedEvents: ["batch.succeeded", "batch.failed", "batch.cancelled", "batch.expired"],
+    pythonSnippet: `from google import genai
+
+client = genai.Client()
+
+webhook = client.webhooks.create(
+    name="MyBatchWebhook",
+    subscribed_events=["batch.succeeded", "batch.failed"],
+    uri="${fullUrl}",
+)
+
+# Store webhook.new_signing_secret securely
+webhook_secret = webhook.new_signing_secret
+print(f"Created webhook: {webhook.name}, {webhook.id}")`
+  });
+});
+
+app.post("/api/gemini-callback/config", async (req, res) => {
+  const { secret } = req.body;
+  const db = getDB();
+  if (!db.settings) db.settings = { ...DEFAULT_SETTINGS };
+  db.settings.geminiWebhookSecret = (secret || "").trim();
+  saveDB(db);
+  res.json({
+    success: true,
+    message: "تم حفظ مفتاح التوقيع السري للويب هوك بنجاح",
+    secretConfigured: Boolean(db.settings.geminiWebhookSecret)
+  });
+});
+
+app.post("/api/gemini-callback/test", async (req, res) => {
+  const { eventType = "batch.succeeded", batchId, model = "gemini-3.8-flash", shouldSimulateSignature = true } = req.body;
+
+  const actualBatchId = batchId || `batches/batch_${Date.now().toString(36)}`;
+  const testPayload = {
+    type: eventType,
+    event_time: new Date().toISOString(),
+    data: {
+      batch_id: actualBatchId,
+      name: actualBatchId,
+      state: eventType === "batch.succeeded" ? "JOB_STATE_SUCCEEDED" : "JOB_STATE_FAILED",
+      model,
+      total_count: 50,
+      completed_count: eventType === "batch.succeeded" ? 50 : 38,
+      failed_count: eventType === "batch.succeeded" ? 0 : 12,
+      output_uri: eventType === "batch.succeeded" ? `gs://mandoubak-gemini-batches/${actualBatchId}/output.jsonl` : null,
+      error: eventType === "batch.failed" ? { code: 429, message: "Resource exhausted: batch quota limit reached" } : null
+    }
+  };
+
+  const webhookId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  const webhookTimestamp = Math.floor(Date.now() / 1000).toString();
+  const rawBodyStr = JSON.stringify(testPayload);
+
+  const secret = process.env.GEMINI_WEBHOOK_SECRET || process.env.GEMINI_WEBHOOK_SIGNING_SECRET || getDB().settings?.geminiWebhookSecret || "whsec_testSecretKey1234567890abcdef";
+
+  let secretBuf: Buffer;
+  if (secret.startsWith("whsec_")) {
+    try { secretBuf = Buffer.from(secret.slice(6), "base64"); } catch { secretBuf = Buffer.from(secret, "utf-8"); }
+  } else {
+    secretBuf = Buffer.from(secret, "utf-8");
   }
 
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "مفتاح GEMINI_API_KEY غير مهيأ" });
-    }
+  const toSign = `${webhookId}.${webhookTimestamp}.${rawBodyStr}`;
+  const sig = crypto.createHmac("sha256", secretBuf).update(toSign).digest("base64");
+  const signatureHeader = `v1,${sig}`;
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
+  const eventRecord: GeminiWebhookEventRecord = {
+    id: `ev_${Date.now()}_test`,
+    webhookId,
+    eventType,
+    batchId: actualBatchId,
+    model,
+    status: eventType === "batch.succeeded" ? "succeeded" : "failed",
+    outputUri: testPayload.data.output_uri,
+    totalCount: testPayload.data.total_count,
+    completedCount: testPayload.data.completed_count,
+    failedCount: testPayload.data.failed_count,
+    error: testPayload.data.error?.message || null,
+    payload: testPayload,
+    headers: {
+      "webhook-id": webhookId,
+      "webhook-timestamp": webhookTimestamp,
+      "webhook-signature": shouldSimulateSignature ? signatureHeader : ""
+    },
+    verified: shouldSimulateSignature,
+    receivedAt: new Date().toISOString(),
+    summary: `[اختبار محاكاة] تم استلام ومعالجة حدث ${eventType} للدفعة (${actualBatchId}) بنجاح.`
+  };
 
-    const op = new GenerateVideosOperation();
-    op.name = operationName;
-    const updated = await ai.operations.getVideosOperation({ operation: op });
+  await saveGeminiWebhookToDB(eventRecord);
 
-    const uri = updated.response?.generatedVideos?.[0]?.video?.uri;
-    if (!uri) {
-      return res.status(404).json({ error: "لم يتم العثور على رابط ملف الفيديو المكتمل" });
-    }
-
-    const videoRes = await fetch(uri, {
-      headers: { 'x-goog-api-key': apiKey }
-    });
-
-    if (!videoRes.ok) {
-      return res.status(videoRes.status).json({ error: "فشل جلب بيانات الفيديو من الخادم" });
-    }
-
-    res.setHeader('Content-Type', 'video/mp4');
-    if (videoRes.body) {
-      // Stream video content directly to client
-      const arrayBuffer = await videoRes.arrayBuffer();
-      res.send(Buffer.from(arrayBuffer));
-    } else {
-      res.status(500).json({ error: "محتوى الفيديو فارغ" });
-    }
-  } catch (err: any) {
-    console.error("Veo Video Download Error:", err);
-    res.status(500).json({
-      success: false,
-      error: "فشل تحميل الفيديو: " + (err.message || "عطل في الخدمة")
-    });
-  }
+  res.json({
+    success: true,
+    message: `تم إرسال حدث تجريبي (${eventType}) وتسجيله في سجل الويب هوك بنجاح`,
+    event: eventRecord
+  });
 });
 
 
-// Clear all data (For testing/reset)
 app.post("/api/system/reset", async (req, res) => {
   await resetSystemInDB();
   res.json({ success: true, message: "تم إعادة ضبط النظام بنجاح" });

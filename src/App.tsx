@@ -30,6 +30,7 @@ import { ExcelDataPreview } from "./components/ExcelDataPreview";
 import { PrintOrderModal } from "./components/PrintOrderModal";
 import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer";
 import { AudioTranscriberModal } from "./components/AudioTranscriberModal";
+import { GoogleChatModal } from "./components/GoogleChatModal";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -856,6 +857,7 @@ export default function App() {
   const [isUserProfileModalOpen, setIsUserProfileModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isDownloadApkModalOpen, setIsDownloadApkModalOpen] = useState(false);
+  const [isGoogleChatOpen, setIsGoogleChatOpen] = useState(false);
   
   // Firebase Remote Config A/B Testing Onboarding States
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(() => {
@@ -9326,12 +9328,12 @@ export default function App() {
                   )}
                 </div>
 
-                {/* 3. Sports Basket / Pharma Games Section (سلة الألعاب والأنشطة الرياضية) */}
+                {/* 3. Entertainment & Medical Education Basket */}
                 <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50/80 via-white to-teal-50/50 p-4 shadow-sm space-y-3">
                   <div className="flex items-center justify-between border-b border-amber-200/80 pb-3">
                     <div className="flex items-center gap-2 text-slate-900 font-extrabold text-sm">
                       <Trophy className="h-5 w-5 text-amber-500" />
-                      <span>سلة الألعاب والأنشطة الرياضية والتعليمية 🏀🎮</span>
+                      <span>سلة الترفيه والتعليم الطبي 🩺🎮</span>
                     </div>
                     <span className="rounded-full bg-amber-500 text-white text-3xs font-black px-2 py-0.5">
                       تفاعلي 🏆
@@ -9339,14 +9341,14 @@ export default function App() {
                   </div>
 
                   <p className="text-xs text-slate-700 font-medium leading-relaxed">
-                    قسم ترفيهي وتثقيفي يحتوي على تحديات رياضية ومعلومات دوائية تفاعلية للصيادلة والأطباء.
+                    قسم ترفيهي وتثقيفي يجمع بين الألعاب الطبية المسلية ومحتوى التعليم الطبي المستمر للصيادلة والأطباء.
                   </p>
 
                   <button
                     onClick={() => setActiveTab("games")}
                     className="w-full rounded-xl bg-slate-900 hover:bg-amber-600 text-white py-3 font-extrabold text-xs shadow-sm transition-all flex items-center justify-center gap-2"
                   >
-                    <span>فتح سلة الألعاب والتحديات الرياضية 🎮</span>
+                    <span>فتح سلة الترفيه والتعليم الطبي 🩺🎮</span>
                     <ChevronLeft className="h-4 w-4" />
                   </button>
                 </div>
@@ -10443,6 +10445,15 @@ export default function App() {
           showSuccess(enabled ? "تم تفعيل القفل بالبصمة بنجاح 🔒" : "تم تعطيل القفل بالبصمة 🔓");
         }}
         onOpenApkModal={() => setIsDownloadApkModalOpen(true)}
+        onOpenGoogleChat={() => setIsGoogleChatOpen(true)}
+      />
+
+      {/* Google Chat Modal */}
+      <GoogleChatModal
+        isOpen={isGoogleChatOpen}
+        onClose={() => setIsGoogleChatOpen(false)}
+        currentUser={user}
+        clients={clients}
       />
 
       {/* Download APK Modal for Android Users */}

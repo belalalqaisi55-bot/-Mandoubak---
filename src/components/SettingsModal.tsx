@@ -35,6 +35,7 @@ interface SettingsModalProps {
   onOpenDiagnostics?: () => void;
   onOpenGoogleCalendar?: () => void;
   onOpenGoogleSheetsContacts?: () => void;
+  onOpenGoogleChat?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -48,6 +49,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenDiagnostics,
   onOpenGoogleCalendar,
   onOpenGoogleSheetsContacts,
+  onOpenGoogleChat,
 }) => {
   // App preferences state
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -452,6 +454,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-bold hover:bg-emerald-100 transition-colors shadow-2xs cursor-pointer"
               >
                 <span>📊 ربط Google Sheets و Google Contacts</span>
+              </button>
+            )}
+
+            {/* Google Chat Button */}
+            {onOpenGoogleChat && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenGoogleChat();
+                  onClose();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-teal-200 bg-teal-50 text-teal-800 text-xs font-bold hover:bg-teal-100 transition-colors shadow-2xs cursor-pointer"
+              >
+                <span>💬 إدارة ومراسلات Google Chat</span>
               </button>
             )}
 

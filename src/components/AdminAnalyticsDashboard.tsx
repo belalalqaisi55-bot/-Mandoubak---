@@ -36,7 +36,8 @@ import {
   ToggleRight,
   Stethoscope,
   Pill,
-  ShoppingCart
+  ShoppingCart,
+  Bot
 } from "lucide-react";
 import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
 import { GeminiChatModal } from "./GeminiChatModal";

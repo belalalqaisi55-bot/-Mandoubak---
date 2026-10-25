@@ -6,25 +6,23 @@ import { useConnectionStatus } from '../hooks/useConnectionStatus';
 interface ConnectionStatusIndicatorProps {
   onSync: () => Promise<void>;
   isSyncing: boolean;
+  latency?: number;
   latencyMs?: number;
 }
 
 /**
- * Helper function that maps latency (ms) to pulse animation duration (seconds).
- * Speed is inversely proportional to latency:
- * - Lower latency (e.g. 20-50ms) -> Faster pulse (~0.5s - 0.7s)
- * - Normal latency (e.g. 100-200ms) -> Moderate pulse (~1.0s - 1.4s)
- * - Higher latency (e.g. 500-1500ms+) -> Slower, more deliberate pulse (~2.0s - 3.0s)
+ * دالة حسابية لربط زمن الاستجابة (latency) بسرعة النبض في CSS:
+ * كلما انخفضت القيمة الرقمية لـ latency (مثل 20ms)، كلما قلّت مدة النبضة (duration) وزادت سرعة النبض.
  */
-export function getPulseDuration(latencyMs?: number): string {
-  if (latencyMs === undefined || latencyMs === null || isNaN(latencyMs) || latencyMs <= 0) {
+export function getPulseDuration(latencyVal?: number): string {
+  if (latencyVal === undefined || latencyVal === null || isNaN(latencyVal) || latencyVal <= 0) {
     return '1.5s';
   }
-  const minLatency = 20;
-  const maxLatency = 1500;
-  const clamped = Math.max(minLatency, Math.min(maxLatency, latencyMs));
-  const minDuration = 0.5;
-  const maxDuration = 3.0;
+  const minLatency = 10;
+  const maxLatency = 2000;
+  const clamped = Math.max(minLatency, Math.min(maxLatency, latencyVal));
+  const minDuration = 0.3; // أسرع نبضة عند أقل زمن استجابة
+  const maxDuration = 3.0; // أبطأ نبضة عند أعلى زمن استجابة
   const duration = minDuration + ((clamped - minLatency) / (maxLatency - minLatency)) * (maxDuration - minDuration);
   return `${duration.toFixed(2)}s`;
 }
@@ -32,10 +30,11 @@ export function getPulseDuration(latencyMs?: number): string {
 export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps> = ({ 
   onSync, 
   isSyncing, 
+  latency,
   latencyMs 
 }) => {
   const { isOnline, syncCount, latency: hookLatency } = useConnectionStatus();
-  const effectiveLatency = latencyMs !== undefined ? latencyMs : hookLatency;
+  const effectiveLatency = latency !== undefined ? latency : (latencyMs !== undefined ? latencyMs : hookLatency);
   const pulseDuration = getPulseDuration(effectiveLatency);
 
   return (
@@ -44,7 +43,12 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5 }}
-      className="flex items-center gap-2"
+      className="flex items-center gap-2 connection-status-indicator"
+      style={{
+        '--latency': effectiveLatency || 100,
+        animation: isOnline ? `connection-pulse calc(var(--latency, 100) * 0.01s) cubic-bezier(0.4, 0, 0.6, 1) infinite` : 'none',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+      } as React.CSSProperties}
     >
       <button
         onClick={onSync}
@@ -69,22 +73,26 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.3, ease: "easeInOut" }}
-          className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold border transition-colors ${
+          className={`relative group flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold border transition-colors ${
             isOnline 
               ? "bg-emerald-50 text-emerald-800 border-emerald-200" 
               : "bg-amber-50 text-amber-800 border-amber-200"
           }`}
-          title={isOnline ? (effectiveLatency > 0 ? `Latency: ${effectiveLatency}ms` : "متصل") : "Offline"}
         >
           {isOnline ? (
-            <span
-              className="inline-flex items-center justify-center"
-              style={{
-                animation: `connection-pulse ${pulseDuration} cubic-bezier(0.4, 0, 0.6, 1) infinite`
-              }}
-            >
-              <Wifi className="h-3.5 w-3.5 text-emerald-500" />
-            </span>
+            <>
+              <span
+                className="inline-flex items-center justify-center"
+                style={{
+                  animation: `connection-pulse ${pulseDuration} cubic-bezier(0.4, 0, 0.6, 1) infinite`
+                }}
+              >
+                <Wifi className="h-3.5 w-3.5 text-emerald-500" />
+              </span>
+              <div className="absolute bottom-full left-1/2 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:block group-hover:opacity-100">
+                Latency: {effectiveLatency}ms
+              </div>
+            </>
           ) : (
             <WifiOff className="h-3.5 w-3.5 text-amber-500" />
           )}

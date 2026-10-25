@@ -396,3 +396,23 @@ declare global {
   }
 }
 
+export interface GeminiWebhookEvent {
+  id: string;
+  webhookId?: string;
+  eventType: string; // "batch.succeeded" | "batch.failed" | "batch.cancelled" | "batch.expired" | string
+  batchId?: string;
+  model?: string;
+  status: "succeeded" | "failed" | "processing" | "received" | "cancelled" | "expired";
+  outputUri?: string;
+  totalCount?: number;
+  completedCount?: number;
+  failedCount?: number;
+  error?: string | null;
+  payload: any;
+  headers?: Record<string, string>;
+  verified: boolean;
+  receivedAt: string;
+  summary?: string;
+}
+
+

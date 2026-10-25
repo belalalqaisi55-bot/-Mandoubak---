@@ -233,13 +233,20 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-t
     transform: scale(1);
   }
   50% {
-    opacity: 0.35;
-    transform: scale(1.12);
+    opacity: 0.75;
+    transform: scale(1.025);
   }
 }
 
+.connection-status-indicator {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  animation-duration: calc(var(--latency, 100) * 0.01s);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .animate-connection-pulse {
-  animation: connection-pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: connection-pulse calc(var(--latency, 100) * 0.01s) cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 
