@@ -8,7 +8,7 @@ import { PromoVideoModal } from "./components/PromoVideoModal";
 import { AiCreativeStudioModal } from "./components/AiCreativeStudioModal";
 import { AdminAnalyticsDashboard } from "./components/AdminAnalyticsDashboard";
 import { AgreementsManager } from "./components/AgreementsManager";
-import { ComplaintsManager } from "./components/ComplaintsManager";
+import { GoogleChatTab } from "./components/GoogleChatTab";
 import { PediatricDoseCalculator } from "./components/PediatricDoseCalculator";
 import { DrugInteractionsAndMonographs } from "./components/DrugInteractionsAndMonographs";
 import { PharmacyLoyaltyHub } from "./components/PharmacyLoyaltyHub";
@@ -4883,11 +4883,11 @@ export default function App() {
                       id="sidebar-rep-games"
                     />
                     <SidebarNavItem
-                      icon={<MessageSquareHeart className="h-4.5 w-4.5 text-rose-600" />}
-                      label="صندوق الشكاوى والاقتراحات 📬"
+                      icon={<MessageSquare className="h-4.5 w-4.5 text-emerald-600" />}
+                      label="مراسلات Google Chat 💬"
                       active={repTab === "complaints"}
-                      badge={complaints.filter(c => c.status === "pending").length > 0 ? complaints.filter(c => c.status === "pending").length : undefined}
-                      badgeColor="bg-rose-500 text-white font-black"
+                      badge={undefined}
+                      badgeColor="bg-emerald-500 text-white font-black"
                       onClick={() => setRepTab("complaints")}
                       collapsed={isSidebarCollapsed}
                       highlight
@@ -4983,10 +4983,10 @@ export default function App() {
                       id="sidebar-pharmacy-agreements"
                     />
                     <SidebarNavItem
-                      icon={<MessageSquareHeart className="h-4.5 w-4.5 text-rose-600" />}
-                      label="صندوق الشكاوى والاقتراحات 📬"
+                      icon={<MessageSquare className="h-4.5 w-4.5 text-emerald-600" />}
+                      label="مراسلات Google Chat 💬"
                       active={activeTab === "complaints"}
-                      badge={complaints.filter(c => (c.clientId === user?.id || c.clientPhone === user?.phone) && c.adminReply && c.status === "resolved").length > 0 ? "رد جديد" : undefined}
+                      badge={undefined}
                       badgeColor="bg-emerald-500 text-white font-black"
                       onClick={() => setActiveTab("complaints")}
                       collapsed={isSidebarCollapsed}
@@ -5454,11 +5454,11 @@ export default function App() {
                             highlight
                           />
                           <SidebarNavItem
-                            icon={<MessageSquareHeart className="h-4.5 w-4.5 text-rose-600" />}
-                            label="صندوق الشكاوى والاقتراحات 📬"
+                            icon={<MessageSquare className="h-4.5 w-4.5 text-emerald-600" />}
+                            label="مراسلات Google Chat 💬"
                             active={repTab === "complaints"}
-                            badge={complaints.filter(c => c.status === "pending").length > 0 ? complaints.filter(c => c.status === "pending").length : undefined}
-                            badgeColor="bg-rose-500 text-white font-black"
+                            badge={undefined}
+                            badgeColor="bg-emerald-500 text-white font-black"
                             onClick={() => { setRepTab("complaints"); setIsMobileSidebarOpen(false); }}
                             highlight
                           />
@@ -8061,12 +8061,9 @@ export default function App() {
 
               {repTab === "complaints" && (
                 <div className="p-3 sm:p-5">
-                  <ComplaintsManager
-                    complaints={complaints}
+                  <GoogleChatTab
                     currentUser={user}
-                    onSaveComplaint={handleSaveComplaint}
-                    onDeleteComplaint={handleDeleteComplaint}
-                    isAdmin={true}
+                    clients={uniqueClients}
                   />
                 </div>
               )}
@@ -9896,12 +9893,9 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="space-y-4"
                 >
-                  <ComplaintsManager
-                    complaints={complaints}
+                  <GoogleChatTab
                     currentUser={user}
-                    onSaveComplaint={handleSaveComplaint}
-                    onDeleteComplaint={handleDeleteComplaint}
-                    isAdmin={false}
+                    clients={uniqueClients}
                   />
                 </motion.div>
               )}
@@ -10453,7 +10447,7 @@ export default function App() {
         isOpen={isGoogleChatOpen}
         onClose={() => setIsGoogleChatOpen(false)}
         currentUser={user}
-        clients={clients}
+        clients={uniqueClients}
       />
 
       {/* Download APK Modal for Android Users */}
