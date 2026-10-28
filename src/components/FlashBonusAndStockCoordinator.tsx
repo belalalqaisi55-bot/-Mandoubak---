@@ -18,38 +18,7 @@ import {
 import { FlashBonusOffer, ExpiryStockItem } from "../types";
 import { showLocalNotification, requestNotificationPermission } from "../services/pushNotificationService";
 
-export const DEFAULT_FLASH_BONUSES: FlashBonusOffer[] = [
-  {
-    id: "fb-1",
-    productName: "لوماك شرائط (Lomac 20)",
-    originalBonus: "100%",
-    flashBonus: "100% + 10% بونص إضافي نقدي ⚡",
-    endsAt: "ينتهي نهاية هذا الأسبوع",
-    minOrderQty: 10,
-    badge: "عرض خاطف حصري",
-    active: true
-  },
-  {
-    id: "fb-2",
-    productName: "نوفاتاكس 1 جم (Novatax 1g)",
-    originalBonus: "40%",
-    flashBonus: "40% + 5 حقن مجانية لكل 50 حقنة 🎁",
-    endsAt: "عرض الصباح المبكر",
-    minOrderQty: 20,
-    badge: "مضاد حيوي مميز",
-    active: true
-  },
-  {
-    id: "fb-3",
-    productName: "ألريد أقراص (Allerid Tab)",
-    originalBonus: "20%",
-    flashBonus: "25% بونص مضاعف للطلبيات السريعة 🚀",
-    endsAt: "متاح لـ 5 صيدليات أولى فقط",
-    minOrderQty: 15,
-    badge: "موسم الحساسية",
-    active: true
-  }
-];
+export const DEFAULT_FLASH_BONUSES: FlashBonusOffer[] = [];
 
 interface Props {
   clientName: string;
@@ -63,6 +32,30 @@ export const FlashBonusAndStockCoordinator: React.FC<Props> = ({
   onApplyFlashOffer
 }) => {
   const [activeTab, setActiveTab] = useState<"flash_offers" | "expiry_coordinator" | "scheduled_notifications">("flash_offers");
+
+  // Flash Offers state
+  const [flashOffers, setFlashOffers] = useState<FlashBonusOffer[]>(() => {
+    try {
+      const stored = localStorage.getItem('mandoubak_flash_offers');
+      if (stored !== null) {
+        return JSON.parse(stored);
+      }
+      return DEFAULT_FLASH_BONUSES;
+    } catch {
+      return DEFAULT_FLASH_BONUSES;
+    }
+  });
+
+  // أمر تفريغ وحذف العروض الخاطفة الوهمية من التطبيق
+  const clearAllOffers = () => {
+    // 1. مسح العروض من الحالة المحلية (State)
+    setFlashOffers([]);
+    
+    // 2. تخزين مصفوفة فارغة لضمان عدم استعادة الافتراضيات
+    localStorage.setItem('mandoubak_flash_offers', JSON.stringify([]));
+    
+    console.log("تم تفريغ وحذف جميع العروض بنجاح");
+  };
 
   // Scheduled Notifications state
   const [scheduledList, setScheduledList] = useState<Array<{ id: string; title: string; body: string; date: string; time: string; target: string; status: string }>>([
@@ -346,8 +339,19 @@ ${itemsText}
 
       {activeTab === "flash_offers" && (
         <div className="space-y-3">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="text-xs font-bold text-slate-700">العروض الخاطفة الحالية:</h3>
+            {flashOffers.length > 0 && (
+              <button 
+                onClick={clearAllOffers}
+                className="text-2xs font-bold text-rose-600 hover:text-rose-800 bg-rose-50 px-2 py-1 rounded-md"
+              >
+                تصفير العروض
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {DEFAULT_FLASH_BONUSES.map((offer) => (
+            {flashOffers.map((offer) => (
               <div
                 key={offer.id}
                 className="rounded-2xl border-2 border-amber-300/80 bg-gradient-to-b from-amber-50/50 via-white to-amber-50/20 p-4 shadow-sm flex flex-col justify-between gap-3 relative overflow-hidden"

@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Product, User, StockReport } from "../types";
 import { isFirebaseConfigured, db } from "../firebase";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, query, collection, where, getDocs, deleteDoc } from "firebase/firestore";
 import { saveOfflineStockReports } from "../utils/offlineSync";
 
 interface FieldInventoryAuditModalProps {
@@ -135,10 +135,40 @@ export const FieldInventoryAuditModal: React.FC<FieldInventoryAuditModalProps> =
     }));
   };
 
-  const handleResetForm = () => {
-    setInventoryCounts({});
-    setRepNotes("");
-    setShowCriticalAlertSummary(false);
+  const handleClearInventory = async () => {
+    if (!activeClient) return;
+
+    if (!confirm("هل أنت متأكد من مسح جميع بيانات الجرد المخزني لهذا العميل من الجهاز ومن السحابة؟ هذا الإجراء لا يمكن التراجع عنه.")) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // 1. Clear local state
+      setInventoryCounts({});
+      setRepNotes("");
+      setShowCriticalAlertSummary(false);
+
+      // 2. Clear local storage cache
+      await saveOfflineStockReports([]);
+
+      // 3. Clear cloud data
+      if (isFirebaseConfigured && db) {
+        const q = query(collection(db, "stockReports"), where("clientId", "==", activeClient.id));
+        const querySnapshot = await getDocs(q);
+        for (const docSnap of querySnapshot.docs) {
+          await deleteDoc(docSnap.ref);
+        }
+        onSuccess("تم مسح بيانات الجرد المخزني لهذا العميل من السحابة والجهاز بنجاح.");
+      } else {
+        onSuccess("تم مسح البيانات المخزنية المؤقتة بنجاح.");
+      }
+    } catch (err) {
+      console.error("Error clearing inventory:", err);
+      onError("حدث خطأ أثناء مسح بيانات المخزون.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSubmitAudit = async () => {
@@ -265,7 +295,7 @@ export const FieldInventoryAuditModal: React.FC<FieldInventoryAuditModalProps> =
         onSuccess(
           `تم توثيق ومزامنة تقرير الجرد الميداني لصيدلية ${entityName} في Firestore مباشرة ☁️ بنجاح!`
         );
-        handleResetForm();
+        handleClearInventory();
         onClose();
       }
     } catch (err: any) {
@@ -428,7 +458,7 @@ export const FieldInventoryAuditModal: React.FC<FieldInventoryAuditModalProps> =
 
               <button
                 onClick={() => {
-                  handleResetForm();
+                  handleClearInventory();
                   onClose();
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 text-xs font-bold transition-all"
@@ -679,6 +709,15 @@ export const FieldInventoryAuditModal: React.FC<FieldInventoryAuditModalProps> =
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleClearInventory}
+                disabled={isSubmitting}
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 transition-colors disabled:opacity-50"
+              >
+                تصفير المخزون
+              </button>
+
               <button
                 type="button"
                 onClick={onClose}

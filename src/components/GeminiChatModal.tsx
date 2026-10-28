@@ -252,12 +252,24 @@ export function GeminiChatModal({
               const json = JSON.parse(data);
               if (json.text) {
                 botMsg.text += json.text;
-                setMessages((prev) => prev.map(m => m.id === botMsg.id ? {...botMsg} : m));
-              } else if (json.error) {
+              }
+              if (json.groundingSources && Array.isArray(json.groundingSources)) {
+                botMsg.groundingSources = [
+                  ...(botMsg.groundingSources || []),
+                  ...json.groundingSources
+                ];
+              }
+              if (json.provider) botMsg.provider = json.provider;
+              if (json.modelUsed) botMsg.modelUsed = json.modelUsed;
+              setMessages((prev) => prev.map(m => m.id === botMsg.id ? {...botMsg} : m));
+
+              if (json.error) {
                 throw new Error(json.error);
               }
-            } catch (e) {
-              console.error("Error parsing stream data:", e);
+            } catch (e: any) {
+              if (e.message && !e.message.includes("Unexpected token")) {
+                console.error("Error parsing stream data:", e);
+              }
             }
           }
         }

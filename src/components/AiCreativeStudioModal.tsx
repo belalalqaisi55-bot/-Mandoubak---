@@ -186,7 +186,18 @@ export const AiCreativeStudioModal: React.FC<AiCreativeStudioModalProps> = ({
       });
 
       const startData = await startRes.json();
-      if (!startData.success || !startData.operationName) {
+      if (!startData.success) {
+        throw new Error(startData.error || "فشل بدء جلسة توليد الفيديو.");
+      }
+
+      // If video is returned directly by the server (Gemini Omni Flash)
+      if (startData.videoUrl) {
+        setGeneratedVideoUrl(startData.videoUrl);
+        setVideoProgressMsg("✅ تم تجهيز الفيديو الترويجي بنجاح!");
+        return;
+      }
+
+      if (!startData.operationName) {
         throw new Error(startData.error || "فشل بدء جلسة توليد الفيديو.");
       }
 

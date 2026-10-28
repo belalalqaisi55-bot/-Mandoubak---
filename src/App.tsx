@@ -29,8 +29,8 @@ import { fetchOnboardingFlow, OnboardingFlowType } from "./services/remoteConfig
 import { ExcelDataPreview } from "./components/ExcelDataPreview";
 import { PrintOrderModal } from "./components/PrintOrderModal";
 import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer";
-import { AudioTranscriberModal } from "./components/AudioTranscriberModal";
 import { GoogleChatModal } from "./components/GoogleChatModal";
+import { AdminArchiveView } from "./components/AdminArchiveView";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -97,6 +97,7 @@ import {
   User as UserIcon,
   X,
   Upload,
+  Video,
   BookOpen,
   Trophy,
   Gamepad2,
@@ -137,6 +138,7 @@ import {
   Calculator,
   Star,
   Zap,
+  Archive,
   GraduationCap,
   Wifi,
   WifiOff,
@@ -3711,6 +3713,29 @@ export default function App() {
     }
   };
 
+  const handleArchiveOrder = async (orderId: string, archive: boolean = true) => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/orders/${orderId}/archive`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isArchived: archive }),
+      });
+
+      if (r.ok) {
+        showSuccess(archive ? "تمت أرشفة الطلب بنجاح" : "تمت استعادة الطلب بنجاح");
+        fetchUserSpecificData();
+      } else {
+        showError(archive ? "فشل أرشفة الطلب" : "فشل استعادة الطلب");
+      }
+    } catch (e) {
+      showError("حدث خطأ أثناء أرشفة/استعادة الطلب");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   // Helper function to export data as CSV file with UTF-8 BOM
   const downloadCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
     const BOM = "\uFEFF";
@@ -4744,6 +4769,14 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-inventory"
                     />
+                    <SidebarNavItem
+                      icon={<Archive className="h-4.5 w-4.5 text-indigo-600" />}
+                      label="سلة الأرشيف"
+                      active={repTab === "archive"}
+                      onClick={() => setRepTab("archive")}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-rep-archive"
+                    />
                   </div>
 
                   <div className="space-y-1">
@@ -4822,15 +4855,6 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       highlight
                       id="sidebar-rep-gemini"
-                    />
-                    <SidebarNavItem
-                      icon={<Wand2 className="h-4.5 w-4.5 text-fuchsia-600 animate-pulse" />}
-                      label="استوديو التصاميم والفيديو (AI Studio) 🎨🎬"
-                      active={isCreativeStudioOpen}
-                      onClick={() => setIsCreativeStudioOpen(true)}
-                      collapsed={isSidebarCollapsed}
-                      highlight
-                      id="sidebar-rep-creative-studio"
                     />
                     <SidebarNavItem
                       icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
@@ -5594,6 +5618,7 @@ export default function App() {
                             }}
                             highlight
                           />
+
                           <SidebarNavItem
                             icon={<GraduationCap className="h-4.5 w-4.5 text-emerald-600" />}
                             label="اختبر نفسك قبل الامتحان 🎓"
@@ -8087,6 +8112,23 @@ export default function App() {
                 </div>
               )}
 
+              {repTab === "archive" && (
+                <div className="p-4 sm:p-5">
+                  <AdminArchiveView
+                    archivedOrders={orders.filter(o => o.isArchived)}
+                    onArchiveOrder={(orderId) => handleArchiveOrder(orderId, true)}
+                    onRestoreOrder={(orderId) => handleArchiveOrder(orderId, false)}
+                    onRestoreAllArchived={async () => {
+                      for (const o of orders.filter(o => o.isArchived)) {
+                        await handleArchiveOrder(o.id, false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
+
+
               {repTab === "flash" && (
                 <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-2xs m-3">
                   <FlashBonusAndStockCoordinator
@@ -10454,16 +10496,6 @@ export default function App() {
       <DownloadApkModal
         isOpen={isDownloadApkModalOpen}
         onClose={() => setIsDownloadApkModalOpen(false)}
-      />
-
-      {/* Audio Transcriber Modal (Powered by gemini-3.5-transcribe) */}
-      <AudioTranscriberModal
-        isOpen={isAudioTranscriberOpen}
-        onClose={() => setIsAudioTranscriberOpen(false)}
-        onApplyTranscription={(transcription) => {
-          setSearchTerm(transcription);
-          showSuccess("تم نقل وتطبيق النص الصوتي بنجاح! 🎙️");
-        }}
       />
 
       {/* Compact Footer */}

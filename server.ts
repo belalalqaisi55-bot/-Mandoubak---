@@ -3586,22 +3586,21 @@ app.post("/api/chat", async (req, res) => {
         systemInstruction: systemInstruction || defaultSysInstruction
       });
 
-      return res.json({
-        success: true,
-        provider: "openrouter",
-        modelUsed,
-        reply,
-        groundingChunks: null,
-        searchFallback: false
-      });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`data: ${JSON.stringify({ text: reply, provider: "openrouter", modelUsed })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
     } catch (err: any) {
       if (process.env.GEMINI_API_KEY) {
         console.warn("OpenRouter direct attempt failed, trying Gemini fallback:", err.message);
       } else {
-        return res.status(500).json({
-          success: false,
-          error: "حدث خطأ أثناء الاتصال بـ OpenRouter: " + (err.message || "عطل في الخدمة")
-        });
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.write(`data: ${JSON.stringify({ error: "حدث خطأ أثناء الاتصال بـ OpenRouter: " + (err.message || "عطل في الخدمة") })}\n\n`);
+        return res.end();
       }
     }
   }
@@ -3614,19 +3613,18 @@ app.post("/api/chat", async (req, res) => {
         model: openRouterModel || "deepseek/deepseek-chat",
         systemInstruction: systemInstruction || defaultSysInstruction
       });
-      return res.json({
-        success: true,
-        provider: "openrouter",
-        modelUsed,
-        reply,
-        groundingChunks: null,
-        searchFallback: false
-      });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`data: ${JSON.stringify({ text: reply, provider: "openrouter", modelUsed })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
     } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: "فشل الاتصال بنماذج OpenRouter: " + (err.message || "عطل في الخدمة")
-      });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`data: ${JSON.stringify({ error: "فشل الاتصال بنماذج OpenRouter: " + (err.message || "عطل في الخدمة") })}\n\n`);
+      return res.end();
     }
   }
 
@@ -3712,6 +3710,10 @@ app.post("/api/chat", async (req, res) => {
     for await (const chunk of stream) {
       if (chunk.text) {
         res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+      }
+      const groundingMeta = (chunk.candidates?.[0] as any)?.groundingMetadata;
+      if (groundingMeta?.groundingChunks && Array.isArray(groundingMeta.groundingChunks)) {
+        res.write(`data: ${JSON.stringify({ groundingSources: groundingMeta.groundingChunks })}\n\n`);
       }
     }
     res.write('data: [DONE]\n\n');
@@ -4067,61 +4069,7 @@ app.post("/api/ai/edit-image", async (req, res) => {
   }
 });
 
-// --- AUDIO TRANSCRIPTION API (gemini-3.5-transcribe) ---
-app.post("/api/ai/transcribe-audio", async (req, res) => {
-  const { audioBase64, mimeType = "audio/webm", prompt } = req.body;
-  if (!audioBase64 || typeof audioBase64 !== "string") {
-    return res.status(400).json({ error: "بيانات الصوت (audioBase64) مطلوبة للتفريغ الصوتي" });
-  }
 
-  try {
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
-
-    // Remove data URL prefix if present
-    const cleanAudioBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9.-]+;base64,/, "");
-
-    const audioPart = {
-      inlineData: {
-        mimeType: mimeType || "audio/webm",
-        data: cleanAudioBase64,
-      },
-    };
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-transcribe",
-      contents: {
-        parts: [
-          audioPart,
-          {
-            text: prompt || "قم بتفريغ هذا التسجيل الصوتي بدقة متناهية إلى نص مكتوب باللغة العربية أو الإنجليزية كما نُطق تماماً بدون أي اختصار أو تحريف في المعنى."
-          }
-        ]
-      },
-    });
-
-    const transcriptionText = (response.text || "").trim();
-
-    res.json({
-      success: true,
-      modelUsed: "gemini-3.5-transcribe",
-      text: transcriptionText,
-      transcription: transcriptionText
-    });
-  } catch (err: any) {
-    console.error("Gemini Audio Transcription Error:", err);
-    res.status(500).json({
-      success: false,
-      error: "فشل تفريغ الصوت بالذكاء الاصطناعي (gemini-3.5-transcribe): " + (err.message || "عطل في الخدمة")
-    });
-  }
-});
 
 // --- BIOSCIENCE SKILLS API (PubChem PUG REST, openFDA, Europe PMC) ---
 app.get("/api/science/compound-lookup", async (req, res) => {
@@ -4206,7 +4154,8 @@ app.get("/api/science/compound-lookup", async (req, res) => {
         url: r.doi ? `https://doi.org/${r.doi}` : `https://europepmc.org/article/MED/${r.id}`
       }));
     } catch (e: any) {
-      console.warn("Europe PMC literature search fallback notice:", e.message);
+      console.warn("Europe PMC literature search fallback notice (ignoring):", e.message);
+      literature = []; // Ensure literature remains an empty array
     }
 
     // 5. Evaluate Lipinski Rule of 5 and Veber's oral bioavailability rules
@@ -4267,72 +4216,7 @@ app.get("/api/science/compound-lookup", async (req, res) => {
   }
 });
 
-// --- VEO 3.1 VIDEO GENERATION API (3-Step Pattern) ---
-app.post("/api/generate-video", async (req, res) => {
-  const { prompt, imageBase64, mimeType = "image/png", aspectRatio = "16:9", resolution = "720p" } = req.body;
-  if (!prompt && !imageBase64) {
-    return res.status(400).json({ error: "الوصف أو الصورة مطلوب لتوليد الفيديو" });
-  }
 
-  try {
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
-
-    const videoConfig: any = {
-      aspectRatio: aspectRatio === "9:16" ? "9:16" : "16:9"
-    };
-
-    let videoPayload: any = {
-      model: "gemini-omni-1.1-flash",
-      input: [
-        {
-          type: "text",
-          text: prompt || "Cinematic promotional pharmaceutical showcase video with gentle lighting and floating medical elements",
-        }
-      ],
-      response_format: {
-        type: 'video',
-        aspect_ratio: videoConfig.aspectRatio,
-        duration: '5s',
-        resolution: resolution
-      }
-    };
-
-    if (imageBase64) {
-      const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, "");
-      videoPayload.input.unshift({
-        type: "image",
-        mime_type: mimeType || "image/png",
-        data: cleanBase64
-      });
-    }
-
-    const interaction = await ai.interactions.create(videoPayload, { timeout: 300000 });
-    const videoPart = interaction.output_video;
-
-    if (!videoPart || !videoPart.data) {
-      throw new Error("لم يتم إرجاع الفيديو من النموذج");
-    }
-
-    res.json({
-      success: true,
-      videoUrl: `data:${videoPart.mime_type || "video/mp4"};base64,${videoPart.data}`
-    });
-
-  } catch (err: any) {
-    console.error("Veo Video Start Error:", err);
-    res.status(500).json({
-      success: false,
-      error: "فشل بدء توليد الفيديو: " + (err.message || "عطل في الخدمة")
-    });
-  }
-});
 
 // ---------------- GEMINI BATCH & GENAI WEBHOOK INTEGRATION ----------------
 // Specification: Standard Webhooks (HMAC-SHA256)

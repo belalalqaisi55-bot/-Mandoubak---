@@ -36,6 +36,7 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
   const { isOnline, syncCount, latency: hookLatency } = useConnectionStatus();
   const effectiveLatency = latency !== undefined ? latency : (latencyMs !== undefined ? latencyMs : hookLatency);
   const pulseDuration = getPulseDuration(effectiveLatency);
+  const latencyPercent = Math.min(100, Math.max(0, ((effectiveLatency || 100) - 10) / (2000 - 10) * 100));
 
   return (
     <motion.div
@@ -46,6 +47,7 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
       className="flex items-center gap-2 connection-status-indicator"
       style={{
         '--latency': effectiveLatency || 100,
+        '--latency-percent': `${latencyPercent}%`,
         animation: isOnline ? `connection-pulse calc(var(--latency, 100) * 0.01s) cubic-bezier(0.4, 0, 0.6, 1) infinite` : 'none',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
       } as React.CSSProperties}
@@ -84,10 +86,10 @@ export const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps>
               <span
                 className="inline-flex items-center justify-center"
                 style={{
-                  animation: `connection-pulse ${pulseDuration} cubic-bezier(0.4, 0, 0.6, 1) infinite`
+                  color: `color-mix(in srgb, #10b981, #f43f5e ${latencyPercent}%)`
                 }}
               >
-                <Wifi className="h-3.5 w-3.5 text-emerald-500" />
+                <Wifi className="h-3.5 w-3.5" />
               </span>
               <div className="absolute bottom-full left-1/2 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:block group-hover:opacity-100">
                 Latency: {effectiveLatency}ms
