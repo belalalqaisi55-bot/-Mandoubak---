@@ -1,21 +1,21 @@
-import React, { useState, useRef } from "react";
+import React, { useRef, useState } from "react";
 import { Product } from "../types";
 import {
-  PlusCircle,
-  Upload,
-  Image as ImageIcon,
-  Trash2,
+  AlertCircle,
+  CheckCircle2,
+  DollarSign,
   Edit3,
+  Eye,
+  FileText,
+  Image as ImageIcon,
+  Layers,
+  PlusCircle,
   Search,
   Sparkles,
-  Layers,
-  X,
-  CheckCircle2,
-  Eye,
   Tag,
-  DollarSign,
-  FileText,
-  AlertCircle
+  Trash2,
+  Upload,
+  X,
 } from "lucide-react";
 import { PHARMACEUTICAL_IMAGE_PRESETS, getProductDisplayImage } from "../utils/productImages";
 
@@ -42,9 +42,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
   onDeleteProduct,
   onOpenCategoryManager,
   onPreviewClientCatalog,
-  onAddCategory
+  onAddCategory,
 }) => {
-  // New Product Form State
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -54,10 +53,10 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
     bonus: "",
     activeIngredient: "",
     image: "",
-    imageUrlInput: ""
+    imageUrlInput: "",
   });
 
-  const [imagePreview, setImagePreview] = useState<string>("");
+  const [imagePreview, setImagePreview] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState("all");
@@ -68,15 +67,13 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
   const [newCategoryForm, setNewCategoryForm] = useState({ name: "", color: "#0f766e" });
   const [categoryFilter, setCategoryFilter] = useState<"all" | "popular" | "new">("all");
 
-  // Edit Modal State
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editFormData, setEditFormData] = useState<Partial<Product>>({});
-  const [editImagePreview, setEditImagePreview] = useState<string>("");
+  const [editImagePreview, setEditImagePreview] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle local image file upload & convert to base64
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isEditMode = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -86,7 +83,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
       return;
     }
 
-    // Limit file size to 3MB for smooth client rendering
     if (file.size > 3 * 1024 * 1024) {
       alert("حجم الصورة كبير جداً، يرجى اختيار صورة أقل من 3 ميجابايت");
       return;
@@ -131,8 +127,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
         onAddCategory(finalCategory);
       }
 
-      const finalImage = formData.image || imagePreview || undefined;
-
       await onAddProduct({
         name: formData.name.trim(),
         description: formData.description.trim(),
@@ -141,21 +135,20 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
         unit: formData.unit.trim() || "علبة",
         bonus: formData.bonus.trim() || undefined,
         activeIngredient: formData.activeIngredient.trim() || undefined,
-        image: finalImage,
-        imageUrl: finalImage
+        image: formData.image || imagePreview || undefined,
+        imageUrl: formData.image || imagePreview || undefined,
       });
 
-      // Reset form
       setFormData({
         name: "",
         description: "",
-        category: formData.category,
+        category: availableCategories[0] || "عام",
         price: "",
         unit: "علبة",
         bonus: "",
         activeIngredient: "",
         image: "",
-        imageUrlInput: ""
+        imageUrlInput: "",
       });
       setImagePreview("");
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -174,7 +167,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
       unit: prod.unit,
       bonus: prod.bonus || "",
       activeIngredient: prod.activeIngredient || "",
-      image: prod.image || prod.imageUrl || ""
+      image: prod.image || prod.imageUrl || "",
     });
     setEditImagePreview(prod.image || prod.imageUrl || "");
   };
@@ -187,7 +180,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
     try {
       await onUpdateProduct(editingProduct.id, {
         ...editFormData,
-        imageUrl: editFormData.image || editFormData.imageUrl
+        imageUrl: editFormData.image || editFormData.imageUrl,
       });
       setEditingProduct(null);
     } finally {
@@ -195,14 +188,14 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
     }
   };
 
-  // Filter products
   const filteredProducts = products.filter((p) => {
+    const query = searchQuery.trim().toLowerCase();
     const matchesSearch =
-      searchQuery.trim() === "" ||
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.description && p.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (p.activeIngredient && p.activeIngredient.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase()));
+      query === "" ||
+      p.name.toLowerCase().includes(query) ||
+      (p.description && p.description.toLowerCase().includes(query)) ||
+      (p.activeIngredient && p.activeIngredient.toLowerCase().includes(query)) ||
+      (p.category && p.category.toLowerCase().includes(query));
 
     const matchesCategory =
       selectedCategoryFilter === "all" || (p.category || "عام") === selectedCategoryFilter;
@@ -210,9 +203,19 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
     return matchesSearch && matchesCategory;
   });
 
+  const addCategory = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const saved = localStorage.getItem("mandoubak_product_categories");
+    const cats = saved ? JSON.parse(saved) : availableCategories;
+    if (!cats.includes(trimmed)) {
+      localStorage.setItem("mandoubak_product_categories", JSON.stringify([...cats, trimmed]));
+      if (onAddCategory) onAddCategory(trimmed);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Top Header Card */}
       <div className="rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-900 via-slate-900 to-teal-950 p-4 sm:p-6 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-1.5 bg-teal-800/80 px-3 py-1 rounded-full text-xs font-bold text-teal-200 border border-teal-700/50">
@@ -223,7 +226,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
             إدارة كتالوج المنتجات والأصناف الدوائية 💊
           </h2>
           <p className="text-xs sm:text-sm text-teal-100/90 max-w-2xl font-medium leading-relaxed">
-            رفع وتعديل تفاصيل الأدوية والمنتجات بالاسم، الوصف، السعر، والصور التوضيحية لتمكين العملاء والصيادلة من تصفحها والطلب المباشر.
+            رفع وتعديل تفاصيل الأدوية والمنتجات بالاسم، الوصف، السعر، والصور التوضيحية لتمكين العملاء والصيادلة.
           </p>
         </div>
 
@@ -250,7 +253,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
         </div>
       </div>
 
-      {/* Main Upload / Add Product Form */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-xs">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-5">
           <div className="flex items-center gap-2">
@@ -273,29 +275,22 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
 
         <form onSubmit={handleSubmitNewProduct} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Left 2 Cols: Product Details */}
             <div className="md:col-span-2 space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Product Name */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    اسم الصنف التجاري *
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">اسم الصنف التجاري *</label>
                   <input
                     type="text"
                     required
-                    placeholder="مثال: ريفانين 500 ملغ (Revanin 500mg)"
+                    placeholder="مثال: ريفانين 500 ملغ"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
                   />
                 </div>
 
-                {/* Active Ingredient */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    المادة الفعالة / الاسم العلمي
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">المادة الفعالة / الاسم العلمي</label>
                   <input
                     type="text"
                     placeholder="مثال: Paracetamol 500mg"
@@ -307,91 +302,92 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Category */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    التصنيف الدوائي *
-                  </label>
+                <div className="sm:col-span-3">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">التصنيف الدوائي *</label>
                   <div className="flex gap-1 mb-2">
-                    {["all", "popular", "new"].map((f) => (
+                    {(["all", "popular", "new"] as const).map((f) => (
                       <button
                         key={f}
-                        onClick={() => setCategoryFilter(f as any)}
-                        className={`text-3xs px-2 py-0.5 rounded-md font-bold ${categoryFilter === f ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}
+                        type="button"
+                        onClick={() => setCategoryFilter(f)}
+                        className={`text-3xs px-2 py-0.5 rounded-md font-bold ${
+                          categoryFilter === f ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-600"
+                        }`}
                       >
                         {f === "all" ? "الكل" : f === "popular" ? "الأكثر طلباً" : "جديد"}
                       </button>
                     ))}
                   </div>
+
                   <div id="product-category-select" className="flex flex-wrap gap-2 mt-1">
-                    {availableCategories.filter(c => {
-                       if (categoryFilter === "popular") return products.filter(p => p.category === c).length > 5;
-                       return true;
-                    }).map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, category: cat })}
-                        className={`px-3 py-1.5 rounded-full text-2xs font-black transition-all border-2 duration-200 ease-in-out ${
-                          formData.category === cat
-                            ? "border-slate-900 shadow-sm scale-105"
-                            : "border-transparent opacity-80 hover:opacity-100 hover:scale-105 hover:shadow-sm"
-                        }`}
-                        style={{
-                          backgroundColor: getCategoryColor(cat, categoryColors),
-                          color: "#ffffff"
-                        }}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                    <div className="flex items-center gap-1">
-                        <input
-                            type="text"
-                            placeholder="+ تصنيف جديد..."
-                            className="px-3 py-1.5 rounded-full text-2xs font-black bg-slate-50 border-2 border-dashed border-slate-300 focus:border-teal-500 outline-none w-32"
-                            value={newCategory}
-                            onChange={(e) => setNewCategory(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && newCategory.trim()) {
-                                    const newCat = newCategory.trim();
-                                    const saved = localStorage.getItem("mandoubak_product_categories");
-                                    const cats = saved ? JSON.parse(saved) : availableCategories;
-                                    if (!cats.includes(newCat)) {
-                                        localStorage.setItem("mandoubak_product_categories", JSON.stringify([...cats, newCat]));
-                                        if (onAddCategory) onAddCategory(newCat);
-                                    }
-                                    setNewCategory("");
-                                }
-                            }}
-                        />
+                    {availableCategories
+                      .filter((cat) => {
+                        if (categoryFilter === "popular") return products.filter((p) => (p.category || "عام") === cat).length > 5;
+                        return true;
+                      })
+                      .map((cat) => (
                         <button
+                          key={cat}
                           type="button"
-                          onClick={() => setIsAddCategoryModalOpen(true)}
-                          className="px-2 py-1.5 rounded-full text-2xs font-black bg-slate-100 text-slate-600 hover:bg-teal-100 hover:text-teal-800 border-2 border-dashed border-slate-300 transition-all"
+                          onClick={() => setFormData({ ...formData, category: cat })}
+                          className={`px-3 py-1.5 rounded-full text-2xs font-black transition-all border-2 duration-200 ease-in-out ${
+                            formData.category === cat
+                              ? "border-slate-900 shadow-sm scale-105"
+                              : "border-transparent opacity-80 hover:opacity-100 hover:scale-105 hover:shadow-sm"
+                          }`}
+                          style={{
+                            backgroundColor: getCategoryColor(cat, categoryColors),
+                            color: "#ffffff",
+                          }}
                         >
-                          +
+                          {cat}
                         </button>
+                      ))}
+
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        placeholder="+ تصنيف جديد..."
+                        className="px-3 py-1.5 rounded-full text-2xs font-black bg-slate-50 border-2 border-dashed border-slate-300 focus:border-teal-500 outline-none w-32"
+                        value={newCategory}
+                        onChange={(e) => setNewCategory(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && newCategory.trim()) {
+                            addCategory(newCategory);
+                            setNewCategory("");
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setIsAddCategoryModalOpen(true)}
+                        className="px-2 py-1.5 rounded-full text-2xs font-black bg-slate-100 text-slate-600 hover:bg-teal-100 hover:text-teal-800 border-2 border-dashed border-slate-300 transition-all"
+                      >
+                        +
+                      </button>
                     </div>
+
                     <button
                       type="button"
                       onClick={async () => {
                         if (!formData.name.trim()) {
-                            alert("يرجى إدخال اسم الصنف أولاً للحصول على اقتراح");
-                            return;
+                          alert("يرجى إدخال اسم الصنف أولاً للحصول على اقتراح");
+                          return;
                         }
+
                         try {
-                            const response = await fetch("/api/ai/suggest-category", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ name: formData.name, description: formData.description })
-                            });
-                            const data = await response.json();
-                            if (data.category) {
-                                setFormData({ ...formData, category: data.category });
-                            }
-                        } catch (e) {
-                            alert("تعذر الحصول على اقتراح");
+                          const response = await fetch("/api/ai/suggest-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: formData.name, description: formData.description }),
+                          });
+
+                          const data = await response.json();
+                          if (data.category) {
+                            setFormData({ ...formData, category: data.category });
+                          }
+                        } catch (error) {
+                          alert("تعذر الحصول على اقتراح");
                         }
                       }}
                       className="px-3 py-1.5 rounded-full text-2xs font-black bg-purple-100 text-purple-700 hover:bg-purple-200 border-2 border-dashed border-purple-300 transition-all"
@@ -401,74 +397,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   </div>
                 </div>
 
-                {/* Add Category Modal */}
-                {isAddCategoryModalOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
-                    <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl space-y-4">
-                      <h4 className="font-black text-slate-900">إضافة تصنيف جديد</h4>
-                      <input
-                        type="text"
-                        placeholder="اسم التصنيف..."
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
-                        value={newCategoryForm.name}
-                        onChange={(e) => setNewCategoryForm({ ...newCategoryForm, name: e.target.value })}
-                      />
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-600">اللون:</span>
-                        <input
-                          type="color"
-                          value={newCategoryForm.color}
-                          onChange={(e) => setNewCategoryForm({ ...newCategoryForm, color: e.target.value })}
-                          className="h-8 w-12 rounded cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex gap-2 pt-2">
-                        <button
-                          onClick={() => setIsAddCategoryModalOpen(false)}
-                          className="flex-1 px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold"
-                        >
-                          إلغاء
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (newCategoryForm.name.trim()) {
-                              const newCat = newCategoryForm.name.trim();
-                              // Update localStorage
-                              const saved = localStorage.getItem("mandoubak_product_categories");
-                              const cats = saved ? JSON.parse(saved) : availableCategories;
-                              if (!cats.includes(newCat)) {
-                                localStorage.setItem("mandoubak_product_categories", JSON.stringify([...cats, newCat]));
-                              }
-                              // Update colors
-                              const savedColors = localStorage.getItem("mandoubak_category_colors");
-                              const colors = savedColors ? JSON.parse(savedColors) : (categoryColors || {});
-                              localStorage.setItem("mandoubak_category_colors", JSON.stringify({ ...colors, [newCat]: newCategoryForm.color }));
-                              
-                              if (onAddCategory) onAddCategory(newCat);
-                              setIsAddCategoryModalOpen(false);
-                              setNewCategoryForm({ name: "", color: "#0f766e" });
-                              // Show toast notification
-                              const toast = document.createElement("div");
-                              toast.className = "fixed bottom-5 left-5 z-[100] bg-teal-600 text-white px-4 py-2 rounded-lg shadow-lg text-xs font-bold";
-                              toast.innerText = "تم حفظ التصنيف الجديد بنجاح!";
-                              document.body.appendChild(toast);
-                              setTimeout(() => toast.remove(), 3000);
-                            }
-                          }}
-                          className="flex-1 px-4 py-2 rounded-lg bg-teal-600 text-white text-xs font-bold"
-                        >
-                          حفظ
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Price */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    السعر للوحدة (ريال) *
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">السعر للوحدة (ريال) *</label>
                   <div className="relative">
                     <input
                       type="text"
@@ -482,11 +412,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   </div>
                 </div>
 
-                {/* Unit */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الوحدة المخصصة للبيع
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">الوحدة المخصصة للبيع</label>
                   <input
                     type="text"
                     placeholder="علبة، شريط، زجاجة..."
@@ -495,14 +422,9 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Bonus */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    البونص المجاني 🎁
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">البونص المجاني 🎁</label>
                   <input
                     type="text"
                     placeholder="مثال: 10% أو 10+1 أو 40%"
@@ -512,11 +434,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   />
                 </div>
 
-                {/* Description */}
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الوصف ودواعي الاستخدام
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">الوصف ودواعي الاستخدام</label>
                   <input
                     type="text"
                     placeholder="وصف مختصر أو إرشادات الاستخدام..."
@@ -528,26 +447,16 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
               </div>
             </div>
 
-            {/* Right 1 Col: Image Upload & Preview Section */}
             <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-3.5 flex flex-col items-center justify-between space-y-3">
               <div className="w-full text-center">
-                <span className="text-xs font-bold text-slate-700 block mb-1">
-                  صورة الصنف التوضيحية 📸
-                </span>
-                <span className="text-4xs text-slate-400">
-                  ارفع صورة عالية الدقة أو اختر نموذجاً صيدلانياً
-                </span>
+                <span className="text-xs font-bold text-slate-700 block mb-1">صورة الصنف التوضيحية 📸</span>
+                <span className="text-4xs text-slate-400">ارفع صورة عالية الدقة أو اختر نموذجاً صيدلانياً</span>
               </div>
 
-              {/* Preview Box */}
               <div className="relative w-full h-36 rounded-xl overflow-hidden bg-white border border-slate-200 flex items-center justify-center group shadow-2xs">
                 {imagePreview ? (
                   <>
-                    <img
-                      src={imagePreview}
-                      alt="معاينة الصنف"
-                      className="w-full h-full object-cover"
-                    />
+                    <img src={imagePreview} alt="معاينة الصنف" className="w-full h-full object-cover" />
                     <button
                       type="button"
                       onClick={() => {
@@ -570,7 +479,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                 )}
               </div>
 
-              {/* Upload Controls */}
               <div className="w-full space-y-2">
                 <input
                   type="file"
@@ -584,7 +492,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                 <div className="grid grid-cols-2 gap-1.5">
                   <label
                     htmlFor="product-image-upload-file"
-                    className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white py-1.5 px-2 text-3xs font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shadow-2xs text-center"
+                    className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white py-1.5 px-2 text-3xs font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shadow-sm"
                   >
                     <Upload className="h-3 w-3" />
                     <span>رفع من الجهاز</span>
@@ -593,19 +501,16 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   <button
                     type="button"
                     onClick={() => setShowPresetPicker(!showPresetPicker)}
-                    className="w-full rounded-xl bg-slate-800 hover:bg-slate-900 text-white py-1.5 px-2 text-3xs font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shadow-2xs"
+                    className="w-full rounded-xl bg-slate-800 hover:bg-slate-900 text-white py-1.5 px-2 text-3xs font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shadow-sm"
                   >
                     <Sparkles className="h-3 w-3 text-amber-300" />
                     <span>صور جاهزة 🎁</span>
                   </button>
                 </div>
 
-                {/* Preset Dropdown / Grid */}
                 {showPresetPicker && (
                   <div className="bg-white p-2 rounded-xl border border-slate-200 shadow-md space-y-1.5 mt-2 max-h-48 overflow-y-auto">
-                    <div className="text-4xs font-bold text-slate-500 mb-1">
-                      اختر نموذج صورة طبي مناسب:
-                    </div>
+                    <div className="text-4xs font-bold text-slate-500 mb-1">اختر نموذج صورة طبي مناسب:</div>
                     <div className="grid grid-cols-2 gap-1">
                       {PHARMACEUTICAL_IMAGE_PRESETS.map((preset) => (
                         <button
@@ -614,14 +519,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                           onClick={() => handleApplyPreset(preset.url, false)}
                           className="flex items-center gap-1.5 p-1 rounded-lg border border-slate-100 hover:border-teal-300 hover:bg-teal-50/50 text-right text-4xs transition-all cursor-pointer"
                         >
-                          <img
-                            src={preset.url}
-                            alt={preset.label}
-                            className="w-6 h-6 rounded object-cover shrink-0"
-                          />
-                          <span className="truncate font-semibold text-slate-800">
-                            {preset.label}
-                          </span>
+                          <img src={preset.url} alt={preset.label} className="w-6 h-6 rounded object-cover shrink-0" />
+                          <span className="truncate font-semibold text-slate-800">{preset.label}</span>
                         </button>
                       ))}
                     </div>
@@ -631,7 +530,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
             </div>
           </div>
 
-          {/* Submit Action */}
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button
               type="submit"
@@ -645,7 +543,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
         </form>
       </div>
 
-      {/* Catalog Items Header & Controls */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
@@ -660,15 +557,12 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
             </p>
           </div>
 
-          {/* View Switcher: Grid vs Table */}
           <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               type="button"
               onClick={() => setViewLayout("grid")}
               className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewLayout === "grid"
-                  ? "bg-white text-teal-900 shadow-2xs"
-                  : "text-slate-500 hover:text-slate-900"
+                viewLayout === "grid" ? "bg-white text-teal-900 shadow-2xs" : "text-slate-500 hover:text-slate-900"
               }`}
             >
               عرض البطاقات بالصور 🖼️
@@ -677,9 +571,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
               type="button"
               onClick={() => setViewLayout("table")}
               className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewLayout === "table"
-                  ? "bg-white text-teal-900 shadow-2xs"
-                  : "text-slate-500 hover:text-slate-900"
+                viewLayout === "table" ? "bg-white text-teal-900 shadow-2xs" : "text-slate-500 hover:text-slate-900"
               }`}
             >
               جدول البيانات 📊
@@ -687,7 +579,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
           </div>
         </div>
 
-        {/* Search & Category Filter */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-2 border-t border-slate-100">
           <div className="relative flex-1">
             <input
@@ -705,13 +596,12 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
               type="button"
               onClick={() => setSelectedCategoryFilter("all")}
               className={`px-3 py-1.5 rounded-xl text-3xs font-black transition-all shrink-0 cursor-pointer ${
-                selectedCategoryFilter === "all"
-                  ? "bg-teal-700 text-white shadow-2xs"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                selectedCategoryFilter === "all" ? "bg-teal-700 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}
             >
               الكل ({products.length})
             </button>
+
             {availableCategories.map((cat) => {
               const count = products.filter((p) => (p.category || "عام") === cat).length;
               const isSelected = selectedCategoryFilter === cat;
@@ -721,15 +611,10 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   type="button"
                   onClick={() => setSelectedCategoryFilter(cat)}
                   className={`px-2.5 py-1.5 rounded-xl text-3xs font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1 ${
-                    isSelected
-                      ? "bg-slate-900 text-white shadow-2xs"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    isSelected ? "bg-slate-900 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   }`}
                 >
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: getCategoryColor(cat, categoryColors) }}
-                  />
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getCategoryColor(cat, categoryColors) }} />
                   <span>{cat}</span>
                   <span className="text-4xs opacity-80 font-mono">({count})</span>
                 </button>
@@ -738,7 +623,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
           </div>
         </div>
 
-        {/* Catalog Items: Grid View with Rich Images */}
         {viewLayout === "grid" ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5 pt-2">
             {filteredProducts.length === 0 ? (
@@ -755,30 +639,20 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                     key={prod.id}
                     className="rounded-2xl border border-slate-200/90 bg-white hover:border-teal-300 hover:shadow-sm transition-all flex flex-col justify-between overflow-hidden group"
                   >
-                    {/* Image Thumbnail & Category Badge */}
                     <div className="relative h-40 bg-slate-100 overflow-hidden">
-                      <img
-                        src={displayImg}
-                        alt={prod.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
+                      <img src={displayImg} alt={prod.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
 
-                      {/* Category Badge */}
                       <div className="absolute top-2.5 right-2.5">
                         <span
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-3xs font-black shadow-2xs backdrop-blur-md"
-                          style={{
-                            backgroundColor: `${catColor}dd`,
-                            color: "#ffffff"
-                          }}
+                          style={{ backgroundColor: `${catColor}dd`, color: "#ffffff" }}
                         >
                           <span className="w-1.5 h-1.5 rounded-full bg-white" />
                           {prod.category}
                         </span>
                       </div>
 
-                      {/* Bonus Badge */}
                       {prod.bonus && (
                         <div className="absolute top-2.5 left-2.5">
                           <span className="inline-flex items-center gap-1 bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full text-4xs font-black shadow-2xs">
@@ -787,23 +661,15 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                         </div>
                       )}
 
-                      {/* Price on Image Bottom */}
                       <div className="absolute bottom-2 right-2.5 left-2.5 flex items-baseline justify-between text-white">
-                        <span className="font-black text-sm tracking-tight text-amber-300 font-mono">
-                          {prod.price}
-                        </span>
-                        <span className="text-4xs text-slate-200 font-medium">
-                          لكل {prod.unit || "علبة"}
-                        </span>
+                        <span className="font-black text-sm tracking-tight text-amber-300 font-mono">{prod.price}</span>
+                        <span className="text-4xs text-slate-200 font-medium">لكل {prod.unit || "علبة"}</span>
                       </div>
                     </div>
 
-                    {/* Content Details */}
                     <div className="p-3.5 space-y-2 flex-1 flex flex-col justify-between">
                       <div className="space-y-1">
-                        <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-snug line-clamp-2">
-                          {prod.name}
-                        </h4>
+                        <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-snug line-clamp-2">{prod.name}</h4>
 
                         {prod.activeIngredient && (
                           <div className="text-3xs text-teal-800 font-bold bg-teal-50 px-2 py-0.5 rounded-md inline-block">
@@ -811,14 +677,9 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                           </div>
                         )}
 
-                        {prod.description && (
-                          <p className="text-3xs text-slate-500 leading-relaxed line-clamp-2 mt-1">
-                            {prod.description}
-                          </p>
-                        )}
+                        {prod.description && <p className="text-3xs text-slate-500 leading-relaxed line-clamp-2 mt-1">{prod.description}</p>}
                       </div>
 
-                      {/* Action Buttons: Edit & Delete */}
                       <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
                         <button
                           type="button"
@@ -846,7 +707,6 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
             )}
           </div>
         ) : (
-          /* Catalog Items: Table View */
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table className="w-full text-right text-xs border-collapse">
               <thead>
@@ -864,11 +724,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                   <tr key={prod.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="p-3">
                       <div className="flex items-center gap-2.5">
-                        <img
-                          src={getProductDisplayImage(prod)}
-                          alt={prod.name}
-                          className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0"
-                        />
+                        <img src={getProductDisplayImage(prod)} alt={prod.name} className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0" />
                         <div>
                           <div className="font-black text-slate-900">{prod.name}</div>
                           <div className="text-3xs text-slate-400 font-mono">ID: {prod.id}</div>
@@ -881,13 +737,10 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                         style={{
                           backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
                           borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
-                          color: getCategoryColor(prod.category, categoryColors)
+                          color: getCategoryColor(prod.category, categoryColors),
                         }}
                       >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
-                        />
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }} />
                         {prod.category}
                       </span>
                     </td>
@@ -934,22 +787,15 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
         )}
       </div>
 
-      {/* Edit Product Modal */}
       {editingProduct && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-5 sm:p-6 space-y-4 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Edit3 className="h-5 w-5 text-teal-700" />
-                <h3 className="text-base font-black text-slate-900">
-                  تعديل بيانات الصنف: {editingProduct.name}
-                </h3>
+                <h3 className="text-base font-black text-slate-900">تعديل بيانات الصنف: {editingProduct.name}</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setEditingProduct(null)}
-                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500 cursor-pointer"
-              >
+              <button type="button" onClick={() => setEditingProduct(null)} className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500 cursor-pointer">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -1034,13 +880,8 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                 />
               </div>
 
-              {/* Edit Image Section */}
               <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50 flex items-center gap-4">
-                <img
-                  src={editImagePreview || getProductDisplayImage(editingProduct)}
-                  alt="معاينة"
-                  className="w-16 h-16 rounded-xl object-cover border border-slate-300 shrink-0"
-                />
+                <img src={editImagePreview || getProductDisplayImage(editingProduct)} alt="معاينة" className="w-16 h-16 rounded-xl object-cover border border-slate-300 shrink-0" />
 
                 <div className="space-y-1.5 flex-1">
                   <div className="text-xs font-bold text-slate-800">تحديث صورة الصنف</div>
@@ -1052,6 +893,7 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
                     className="hidden"
                     id="edit-product-image-file"
                   />
+
                   <div className="flex items-center gap-2">
                     <label
                       htmlFor="edit-product-image-file"
@@ -1092,6 +934,66 @@ export const AdminProductCatalogManager: React.FC<AdminProductCatalogManagerProp
           </div>
         </div>
       )}
+
+      {isAddCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl space-y-4">
+            <h4 className="font-black text-slate-900">إضافة تصنيف جديد</h4>
+            <input
+              type="text"
+              placeholder="اسم التصنيف..."
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+              value={newCategoryForm.name}
+              onChange={(e) => setNewCategoryForm({ ...newCategoryForm, name: e.target.value })}
+            />
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-600">اللون:</span>
+              <input
+                type="color"
+                value={newCategoryForm.color}
+                onChange={(e) => setNewCategoryForm({ ...newCategoryForm, color: e.target.value })}
+                className="h-8 w-12 rounded cursor-pointer"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsAddCategoryModalOpen(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newCategoryForm.name.trim()) {
+                    const newCat = newCategoryForm.name.trim();
+                    addCategory(newCat);
+
+                    const savedColors = localStorage.getItem("mandoubak_category_colors");
+                    const colors = savedColors ? JSON.parse(savedColors) : categoryColors || {};
+                    localStorage.setItem("mandoubak_category_colors", JSON.stringify({ ...colors, [newCat]: newCategoryForm.color }));
+
+                    setIsAddCategoryModalOpen(false);
+                    setNewCategoryForm({ name: "", color: "#0f766e" });
+
+                    const toast = document.createElement("div");
+                    toast.className = "fixed bottom-5 left-5 z-[100] bg-teal-600 text-white px-4 py-2 rounded-lg shadow-lg text-xs font-bold";
+                    toast.innerText = "تم حفظ التصنيف الجديد بنجاح!";
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 3000);
+                  }
+                }}
+                className="flex-1 px-4 py-2 rounded-lg bg-teal-600 text-white text-xs font-bold"
+              >
+                حفظ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+export default AdminProductCatalogManager;
