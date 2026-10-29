@@ -31,6 +31,7 @@ import { PrintOrderModal } from "./components/PrintOrderModal";
 import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer";
 import { GoogleChatModal } from "./components/GoogleChatModal";
 import { AdminArchiveView } from "./components/AdminArchiveView";
+import { SystemStatus } from "./components/SystemStatus";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -465,7 +466,7 @@ export default function App() {
 
   // Navigation state
   const [activeTab, setActiveTab] = useState<"sheet" | "history" | "reports" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("sheet");
-  const [repTab, setRepTab] = useState<"orders" | "inventory" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("orders");
+  const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
   const [visitViewMode, setVisitViewMode] = useState<"list" | "map">("list");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -1867,26 +1868,28 @@ export default function App() {
     }
   };
 
-  const handleDeleteNotification = (id: string) => {
+  const handleArchiveNotification = (id: string) => {
     askConfirmation({
-      title: "حذف الإشعار",
-      message: "هل أنت متأكد من رغبتك في حذف هذا الإشعار بشكل نهائي؟",
-      confirmLabel: "حذف الإشعار",
-      isDestructive: true,
+      title: "أرشفة الإشعار",
+      message: "هل أنت متأكد من رغبتك في نقل هذا الإشعار إلى الأرشيف؟",
+      confirmLabel: "نقل للأرشيف",
+      isDestructive: false,
       onConfirm: async () => {
         setLoading(true);
         try {
-          const res = await fetch(`/api/notifications/${id}`, {
-            method: "DELETE",
+          const res = await fetch(`/api/notifications/${id}/archive`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isArchived: true }),
           });
           if (res.ok) {
-            showSuccess("تم حذف الإشعار بنجاح");
+            showSuccess("تم نقل الإشعار إلى الأرشيف بنجاح");
             fetchUserSpecificData();
           } else {
-            showError("فشل حذف الإشعار");
+            showError("فشل أرشفة الإشعار");
           }
         } catch (e) {
-          showError("حدث خطأ أثناء محاولة حذف الإشعار");
+          showError("حدث خطأ أثناء أرشفة الإشعار");
         } finally {
           setLoading(false);
         }
@@ -3735,6 +3738,58 @@ export default function App() {
     }
   };
 
+  const handleArchiveAllCompleted = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/orders/archive-completed", { method: "POST" });
+      const data = await r.json();
+      if (r.ok && data.success) {
+        showSuccess(data.message || "تم نقل الطلبيات المكتملة والملغاة إلى سلة الأرشيف بنجاح");
+        fetchUserSpecificData();
+      } else {
+        showError(data.error || "تعذر أرشفة الطلبيات المكتملة");
+      }
+    } catch (e) {
+      showError("حدث خطأ أثناء أرشفة الطلبيات");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearAllArchived = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/orders/archive/clear", { method: "POST" });
+      const data = await r.json();
+      if (r.ok && data.success) {
+        showSuccess(data.message || "تم تفريغ الأرشيف وحذف الطلبيات نهائياً");
+        fetchUserSpecificData();
+      } else {
+        showError(data.error || "تعذر تفريغ سلة الأرشيف");
+      }
+    } catch (e) {
+      showError("حدث خطأ أثناء إفراغ الأرشيف");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePermanentDeleteOrder = async (order: Order) => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/orders/${order.id}`, { method: "DELETE" });
+      if (r.ok) {
+        showSuccess(`تم حذف الطلبية #${order.id.slice(-6)} نهائياً من الأرشيف`);
+        fetchUserSpecificData();
+      } else {
+        showError("تعذر حذف الطلبية من قاعدة البيانات");
+      }
+    } catch (e) {
+      showError("حدث خطأ أثناء حذف الطلبية");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Helper function to export data as CSV file with UTF-8 BOM
   const downloadCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
@@ -4771,11 +4826,21 @@ export default function App() {
                     />
                     <SidebarNavItem
                       icon={<Archive className="h-4.5 w-4.5 text-indigo-600" />}
-                      label="سلة الأرشيف"
+                      label="الأرشيف"
                       active={repTab === "archive"}
+                      badge={orders.filter(o => o.isArchived).length > 0 ? orders.filter(o => o.isArchived).length : undefined}
+                      badgeColor="bg-indigo-600 text-white font-black"
                       onClick={() => setRepTab("archive")}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-archive"
+                    />
+                    <SidebarNavItem
+                      icon={<Info className="h-4.5 w-4.5 text-slate-600" />}
+                      label="حالة النظام"
+                      active={repTab === "status"}
+                      onClick={() => setRepTab("status")}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-rep-status"
                     />
                   </div>
 
@@ -5407,6 +5472,14 @@ export default function App() {
                             active={repTab === "inventory"}
                             onClick={() => { setRepTab("inventory"); setIsMobileSidebarOpen(false); }}
                           />
+                          <SidebarNavItem
+                            icon={<Archive className="h-4.5 w-4.5 text-indigo-600" />}
+                            label="الأرشيف"
+                            active={repTab === "archive"}
+                            badge={orders.filter(o => o.isArchived).length > 0 ? orders.filter(o => o.isArchived).length : undefined}
+                            badgeColor="bg-indigo-600 text-white font-black"
+                            onClick={() => { setRepTab("archive"); setIsMobileSidebarOpen(false); }}
+                          />
                         </div>
 
                         <div className="space-y-1">
@@ -5851,6 +5924,7 @@ export default function App() {
                         {repTab === "analytics" && "📊 لوحة التحليلات والمؤشرات السحابية (Firestore Analytics)"}
                         {repTab === "orders" && "📥 طلبيات العملاء الواردة"}
                         {repTab === "inventory" && "📊 كشوفات الجرد المخزني"}
+                        {repTab === "archive" && "📦 أرشيف الطلبيات المؤرشفة والمكتملة"}
                         {repTab === "catalog" && "💊 إدارة الأصناف والأسعار"}
                         {repTab === "clients" && "👥 قائمة العملاء والصيدليات المسجلة"}
                         {repTab === "visits" && "📋 سجل الزيارات الميدانية والذكاء الاصطناعي 🪄"}
@@ -6327,223 +6401,270 @@ export default function App() {
               )}
 
               {/* TAB 1: CUSTOMER ORDERS LIST */}
-              {repTab === "orders" && (
-                <div className="divide-y divide-slate-100">
-                  <div className="bg-slate-50 p-4 flex items-center justify-between flex-wrap gap-2">
-                    <div>
-                      <span className="font-bold text-slate-800 text-sm block">
-                        طلبيات المستلزمات والأدوية الواردة من الصيدليات والعيادات
-                      </span>
-                      <span className="text-xs text-slate-500 font-medium">
-                        إدارة واعتماد الطلبيات وتحديد الحالات (معلق، مقبول، تم التسليم، ملغي)
-                      </span>
-                    </div>
-                    {orders.length > 0 && (
-                      <button
-                        onClick={handleExportOrdersCSV}
-                        className="inline-flex items-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-1.5 text-xs font-bold transition-all shadow-2xs"
-                      >
-                        <Download className="h-4 w-4" />
-                        <span>تصدير CSV / Excel</span>
-                      </button>
-                    )}
-                  </div>
+              {repTab === "orders" && (() => {
+                const activeOrders = orders.filter(o => !o.isArchived);
+                const archivedCount = orders.filter(o => o.isArchived).length;
+                const canArchiveCount = activeOrders.filter(o => o.status === "completed" || o.status === "cancelled").length;
 
-                  {/* Order Status Filters Bar */}
-                  {orders.length > 0 && (
-                    <div className="flex items-center gap-1.5 p-3 bg-slate-100/70 border-b border-slate-200 overflow-x-auto text-xs font-bold scrollbar-none">
-                      <button
-                        onClick={() => setOrderStatusFilter("all")}
-                        className={`px-3 py-1.5 rounded-xl transition-all ${
-                          orderStatusFilter === "all"
-                            ? "bg-slate-900 text-white shadow-xs"
-                            : "bg-white text-slate-600 hover:bg-slate-200/70 border border-slate-200"
-                        }`}
-                      >
-                        الكل ({orders.length})
-                      </button>
-                      <button
-                        onClick={() => setOrderStatusFilter("pending")}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                          orderStatusFilter === "pending"
-                            ? "bg-amber-600 text-white shadow-xs"
-                            : "bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300"
-                        }`}
-                      >
-                        <Hourglass className="h-3.5 w-3.5 text-amber-600 animate-pulse" />
-                        <span>معلق ({orders.filter(o => o.status === "pending").length})</span>
-                      </button>
-                      <button
-                        onClick={() => setOrderStatusFilter("approved")}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                          orderStatusFilter === "approved"
-                            ? "bg-cyan-600 text-white shadow-xs"
-                            : "bg-cyan-50 text-cyan-900 hover:bg-cyan-100 border border-cyan-300"
-                        }`}
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5 text-cyan-600" />
-                        <span>مقبول ومؤكد ({orders.filter(o => o.status === "approved").length})</span>
-                      </button>
-                      <button
-                        onClick={() => setOrderStatusFilter("completed")}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                          orderStatusFilter === "completed"
-                            ? "bg-emerald-600 text-white shadow-xs"
-                            : "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-300"
-                        }`}
-                      >
-                        <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
-                        <span>تم التسليم ({orders.filter(o => o.status === "completed").length})</span>
-                      </button>
-                      <button
-                        onClick={() => setOrderStatusFilter("cancelled")}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                          orderStatusFilter === "cancelled"
-                            ? "bg-rose-600 text-white shadow-xs"
-                            : "bg-rose-50 text-rose-900 hover:bg-rose-100 border border-rose-300"
-                        }`}
-                      >
-                        <XCircle className="h-3.5 w-3.5 text-rose-600" />
-                        <span>ملغي ({orders.filter(o => o.status === "cancelled").length})</span>
-                      </button>
-                    </div>
-                  )}
-
-                  {orders.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500">
-                      <ShoppingCart className="mx-auto h-12 w-12 text-slate-300 mb-3" />
-                      لا توجد أي طلبيات مسجلة حالياً بالتطبيق.
-                    </div>
-                  ) : (
-                    <>
-                      {orders
-                        .filter(o => orderStatusFilter === "all" || o.status === orderStatusFilter)
-                        .map((order, orderIdx) => (
-                        <div key={`adm-ord-${order.id || 'o'}-${orderIdx}`} className="p-3.5 sm:p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 w-full">
-                          <div className="space-y-2 w-full">
-                            <div className="flex items-center gap-2 flex-wrap justify-between sm:justify-start">
-                              <span className="font-black text-slate-950 text-base">{order.entityName}</span>
-                              <span className="text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200/60 px-2.5 py-0.5 rounded-full">
-                                {order.clientName}
-                              </span>
-                              <span className="text-3xs text-slate-400 font-mono">ID: {order.id}</span>
-                            </div>
-                            
-                            {/* Order Products List - Full Width */}
-                            <div className="border border-slate-200/80 rounded-xl bg-slate-50/70 p-2.5 sm:p-3.5 mt-2.5 w-full overflow-x-auto">
-                              <table className="w-full text-right text-xs">
-                                <thead>
-                                  <tr className="text-slate-400 font-bold border-b border-slate-200/80 pb-2">
-                                    <th className="pb-1.5 pl-3">الصنف الدوائي</th>
-                                    <th className="pb-1.5 px-2 text-center">الكمية</th>
-                                    <th className="pb-1.5 pr-2 text-left">السعر</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {order.items.map((item, itemIdx) => (
-                                    <tr key={`aoi-${order.id || 'o'}-${orderIdx}-${item.productId || 'p'}-${itemIdx}`} className="text-slate-800 font-medium">
-                                      <td className="py-2 pl-3 font-bold text-slate-900 text-xs">{item.productName}</td>
-                                      <td className="py-2 px-2 text-center font-mono font-black text-teal-700 bg-teal-50/80 rounded">{item.quantity}</td>
-                                      <td className="py-2 pr-2 text-left font-mono text-slate-600 font-semibold">{item.price}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                            <div className="text-2xs text-slate-400 flex items-center gap-1.5 pt-1">
-                              <Clock className="h-3.5 w-3.5" />
-                              <span>تاريخ الإرسال: {new Date(order.createdAt).toLocaleString("ar-YE")}</span>
-                            </div>
-                          </div>
-
-                          {/* Order Management Actions */}
-                          <div className="flex flex-col md:items-end gap-2.5 shrink-0 w-full md:w-auto pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
-                            <span className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold border shadow-2xs w-full sm:w-auto text-center ${
-                              order.status === "pending" ? "bg-amber-100 text-amber-900 border-amber-300 ring-1 ring-amber-400/40" :
-                              order.status === "approved" ? "bg-cyan-100 text-cyan-800 border-cyan-200/70" :
-                              order.status === "completed" ? "bg-emerald-100 text-emerald-800 border-emerald-200/70" :
-                              "bg-rose-100 text-rose-800 border-rose-200/70"
-                            }`}>
-                              {order.status === "pending" && <Hourglass className="h-3.5 w-3.5 text-amber-600 animate-pulse shrink-0" />}
-                              {order.status === "approved" && <CheckCircle2 className="h-3.5 w-3.5 text-cyan-600 shrink-0" />}
-                              {order.status === "completed" && <CheckCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
-                              {order.status === "cancelled" && <XCircle className="h-3.5 w-3.5 text-rose-600 shrink-0" />}
-                              <span>
-                                {order.status === "pending" ? "معلق (قيد الانتظار)" :
-                                 order.status === "approved" ? "مقبول ومؤكد" :
-                                 order.status === "completed" ? "تم التوصيل والتسليم" : "ملغي"}
-                              </span>
-                            </span>
-
-                            <div className="grid grid-cols-2 gap-1.5 w-full sm:flex sm:flex-wrap sm:w-auto sm:justify-end">
-                              <button
-                                onClick={() => handleOpenPrintInvoice(order)}
-                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-slate-800 active:scale-95 shadow-2xs cursor-pointer"
-                                title="معاينة وطباعة فاتورة رسمية لهذه الطلبية"
-                                id={`btn-rep-print-order-${order.id}`}
-                              >
-                                <Printer className="h-3.5 w-3.5 text-teal-400" />
-                                <span>طباعة الفاتورة 🖨️</span>
-                              </button>
-                              {order.status !== "approved" && (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(order.id, "approved")}
-                                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-cyan-600 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-cyan-700 active:scale-95 shadow-2xs"
-                                  title="قبول وتأكيد هذا الطلب"
-                                >
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                  <span>قبول وتأكيد</span>
-                                </button>
-                              )}
-                              {order.status === "approved" && (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(order.id, "completed")}
-                                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-emerald-700 active:scale-95 shadow-2xs"
-                                  title="تحديد الطلب كمسلم ومكتمل"
-                                >
-                                  <CheckCheck className="h-3.5 w-3.5" />
-                                  <span>تسليم ومكتمل</span>
-                                </button>
-                              )}
-                              {order.status !== "pending" && (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(order.id, "pending")}
-                                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 border border-amber-300 transition-all hover:bg-amber-100 active:scale-95 shadow-2xs"
-                                  title="وضع الطلب في حالة انتظار مؤقتة (معلق)"
-                                >
-                                  <Hourglass className="h-3.5 w-3.5 text-amber-600" />
-                                  <span>تعليق الطلب</span>
-                                </button>
-                              )}
-                              {order.status !== "cancelled" && (
-                                <button
-                                  onClick={() => handleUpdateOrderStatus(order.id, "cancelled")}
-                                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition-all hover:bg-rose-100 active:scale-95 border border-rose-200"
-                                  title="إلغاء هذا الطلب"
-                                >
-                                  <XCircle className="h-3.5 w-3.5" />
-                                  <span>إلغاء الطلبية</span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-
-                      {/* Export CSV Button at Bottom */}
-                      <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                return (
+                  <div className="divide-y divide-slate-100">
+                    <div className="bg-slate-50 p-4 flex items-center justify-between flex-wrap gap-2">
+                      <div>
+                        <span className="font-bold text-slate-800 text-sm block">
+                          طلبيات المستلزمات والأدوية الواردة من الصيدليات والعيادات
+                        </span>
+                        <span className="text-xs text-slate-500 font-medium">
+                          إدارة واعتماد الطلبيات وتحديد الحالات (معلق، مقبول، تم التسليم، ملغي)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {canArchiveCount > 0 && (
+                          <button
+                            onClick={handleArchiveAllCompleted}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 px-3.5 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
+                            title="نقل جميع الطلبيات المسلمة والملغاة إلى سلة الأرشيف لتقليل الازدحام"
+                          >
+                            <Archive className="h-4 w-4" />
+                            <span>أرشفة المكتملة والملغاة ({canArchiveCount}) 📦</span>
+                          </button>
+                        )}
                         <button
-                          onClick={handleExportOrdersCSV}
-                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-4 py-2.5 text-xs font-bold transition-all shadow-sm active:scale-[0.98]"
+                          onClick={() => setRepTab("archive")}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3.5 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                          title="عرض الطلبيات المؤرشفة"
                         >
-                          <Download className="h-4 w-4" />
-                          <span>تصدير جميع الطلبيات إلى ملف CSV (Excel) 📥</span>
+                          <Archive className="h-4 w-4 text-indigo-600" />
+                          <span>الأرشيف ({archivedCount})</span>
+                        </button>
+                        {activeOrders.length > 0 && (
+                          <button
+                            onClick={handleExportOrdersCSV}
+                            className="inline-flex items-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span>تصدير CSV / Excel</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Order Status Filters Bar */}
+                    {activeOrders.length > 0 && (
+                      <div className="flex items-center gap-1.5 p-3 bg-slate-100/70 border-b border-slate-200 overflow-x-auto text-xs font-bold scrollbar-none">
+                        <button
+                          onClick={() => setOrderStatusFilter("all")}
+                          className={`px-3 py-1.5 rounded-xl transition-all ${
+                            orderStatusFilter === "all"
+                              ? "bg-slate-900 text-white shadow-xs"
+                              : "bg-white text-slate-600 hover:bg-slate-200/70 border border-slate-200"
+                          }`}
+                        >
+                          النشطة ({activeOrders.length})
+                        </button>
+                        <button
+                          onClick={() => setOrderStatusFilter("pending")}
+                          className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                            orderStatusFilter === "pending"
+                              ? "bg-amber-600 text-white shadow-xs"
+                              : "bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300"
+                          }`}
+                        >
+                          <Hourglass className="h-3.5 w-3.5 text-amber-600 animate-pulse" />
+                          <span>معلق ({activeOrders.filter(o => o.status === "pending").length})</span>
+                        </button>
+                        <button
+                          onClick={() => setOrderStatusFilter("approved")}
+                          className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                            orderStatusFilter === "approved"
+                              ? "bg-cyan-600 text-white shadow-xs"
+                              : "bg-cyan-50 text-cyan-900 hover:bg-cyan-100 border border-cyan-300"
+                          }`}
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5 text-cyan-600" />
+                          <span>مقبول ومؤكد ({activeOrders.filter(o => o.status === "approved").length})</span>
+                        </button>
+                        <button
+                          onClick={() => setOrderStatusFilter("completed")}
+                          className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                            orderStatusFilter === "completed"
+                              ? "bg-emerald-600 text-white shadow-xs"
+                              : "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-300"
+                          }`}
+                        >
+                          <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
+                          <span>تم التسليم ({activeOrders.filter(o => o.status === "completed").length})</span>
+                        </button>
+                        <button
+                          onClick={() => setOrderStatusFilter("cancelled")}
+                          className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                            orderStatusFilter === "cancelled"
+                              ? "bg-rose-600 text-white shadow-xs"
+                              : "bg-rose-50 text-rose-900 hover:bg-rose-100 border border-rose-300"
+                          }`}
+                        >
+                          <XCircle className="h-3.5 w-3.5 text-rose-600" />
+                          <span>ملغي ({activeOrders.filter(o => o.status === "cancelled").length})</span>
                         </button>
                       </div>
-                    </>
-                  )}
-                </div>
-              )}
+                    )}
+
+                    {activeOrders.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500 space-y-3">
+                        <ShoppingCart className="mx-auto h-12 w-12 text-slate-300" />
+                        <p className="font-bold text-slate-700 text-sm">لا توجد أي طلبيات نشطة حالياً في القائمة الرئيسية.</p>
+                        {archivedCount > 0 && (
+                          <div className="pt-2">
+                            <button
+                              onClick={() => setRepTab("archive")}
+                              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 text-xs font-bold shadow-sm transition-all"
+                            >
+                              <Archive className="h-4 w-4" />
+                              <span>عرض الطلبيات المؤرشفة في سلة الأرشيف ({archivedCount})</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        {activeOrders
+                          .filter(o => orderStatusFilter === "all" || o.status === orderStatusFilter)
+                          .map((order, orderIdx) => (
+                          <div key={`adm-ord-${order.id || 'o'}-${orderIdx}`} className="p-3.5 sm:p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 w-full">
+                            <div className="space-y-2 w-full">
+                              <div className="flex items-center gap-2 flex-wrap justify-between sm:justify-start">
+                                <span className="font-black text-slate-950 text-base">{order.entityName}</span>
+                                <span className="text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200/60 px-2.5 py-0.5 rounded-full">
+                                  {order.clientName}
+                                </span>
+                                <span className="text-3xs text-slate-400 font-mono">ID: {order.id}</span>
+                              </div>
+                              
+                              {/* Order Products List - Full Width */}
+                              <div className="border border-slate-200/80 rounded-xl bg-slate-50/70 p-2.5 sm:p-3.5 mt-2.5 w-full overflow-x-auto">
+                                <table className="w-full text-right text-xs">
+                                  <thead>
+                                    <tr className="text-slate-400 font-bold border-b border-slate-200/80 pb-2">
+                                      <th className="pb-1.5 pl-3">الصنف الدوائي</th>
+                                      <th className="pb-1.5 px-2 text-center">الكمية</th>
+                                      <th className="pb-1.5 pr-2 text-left">السعر</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {order.items.map((item, itemIdx) => (
+                                      <tr key={`aoi-${order.id || 'o'}-${orderIdx}-${item.productId || 'p'}-${itemIdx}`} className="text-slate-800 font-medium">
+                                        <td className="py-2 pl-3 font-bold text-slate-900 text-xs">{item.productName}</td>
+                                        <td className="py-2 px-2 text-center font-mono font-black text-teal-700 bg-teal-50/80 rounded">{item.quantity}</td>
+                                        <td className="py-2 pr-2 text-left font-mono text-slate-600 font-semibold">{item.price}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div className="text-2xs text-slate-400 flex items-center gap-1.5 pt-1">
+                                <Clock className="h-3.5 w-3.5" />
+                                <span>تاريخ الإرسال: {new Date(order.createdAt).toLocaleString("ar-YE")}</span>
+                              </div>
+                            </div>
+
+                            {/* Order Management Actions */}
+                            <div className="flex flex-col md:items-end gap-2.5 shrink-0 w-full md:w-auto pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                              <span className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold border shadow-2xs w-full sm:w-auto text-center ${
+                                order.status === "pending" ? "bg-amber-100 text-amber-900 border-amber-300 ring-1 ring-amber-400/40" :
+                                order.status === "approved" ? "bg-cyan-100 text-cyan-800 border-cyan-200/70" :
+                                order.status === "completed" ? "bg-emerald-100 text-emerald-800 border-emerald-200/70" :
+                                "bg-rose-100 text-rose-800 border-rose-200/70"
+                              }`}>
+                                {order.status === "pending" && <Hourglass className="h-3.5 w-3.5 text-amber-600 animate-pulse shrink-0" />}
+                                {order.status === "approved" && <CheckCircle2 className="h-3.5 w-3.5 text-cyan-600 shrink-0" />}
+                                {order.status === "completed" && <CheckCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
+                                {order.status === "cancelled" && <XCircle className="h-3.5 w-3.5 text-rose-600 shrink-0" />}
+                                <span>
+                                  {order.status === "pending" ? "معلق (قيد الانتظار)" :
+                                   order.status === "approved" ? "مقبول ومؤكد" :
+                                   order.status === "completed" ? "تم التوصيل والتسليم" : "ملغي"}
+                                </span>
+                              </span>
+
+                              <div className="grid grid-cols-2 gap-1.5 w-full sm:flex sm:flex-wrap sm:w-auto sm:justify-end">
+                                <button
+                                  onClick={() => handleOpenPrintInvoice(order)}
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-slate-800 active:scale-95 shadow-2xs cursor-pointer"
+                                  title="معاينة وطباعة فاتورة رسمية لهذه الطلبية"
+                                  id={`btn-rep-print-order-${order.id}`}
+                                >
+                                  <Printer className="h-3.5 w-3.5 text-teal-400" />
+                                  <span>طباعة الفاتورة 🖨️</span>
+                                </button>
+                                {order.status !== "approved" && (
+                                  <button
+                                    onClick={() => handleUpdateOrderStatus(order.id, "approved")}
+                                    className="inline-flex items-center justify-center gap-1 rounded-xl bg-cyan-600 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-cyan-700 active:scale-95 shadow-2xs"
+                                    title="قبول وتأكيد هذا الطلب"
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    <span>قبول وتأكيد</span>
+                                  </button>
+                                )}
+                                {order.status === "approved" && (
+                                  <button
+                                    onClick={() => handleUpdateOrderStatus(order.id, "completed")}
+                                    className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-emerald-700 active:scale-95 shadow-2xs"
+                                    title="تحديد الطلب كمسلم ومكتمل"
+                                  >
+                                    <CheckCheck className="h-3.5 w-3.5" />
+                                    <span>تسليم ومكتمل</span>
+                                  </button>
+                                )}
+                                {order.status !== "pending" && (
+                                  <button
+                                    onClick={() => handleUpdateOrderStatus(order.id, "pending")}
+                                    className="inline-flex items-center justify-center gap-1 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 border border-amber-300 transition-all hover:bg-amber-100 active:scale-95 shadow-2xs"
+                                    title="وضع الطلب في حالة انتظار مؤقتة (معلق)"
+                                  >
+                                    <Hourglass className="h-3.5 w-3.5 text-amber-600" />
+                                    <span>تعليق الطلب</span>
+                                  </button>
+                                )}
+                                {order.status !== "cancelled" && (
+                                  <button
+                                    onClick={() => handleUpdateOrderStatus(order.id, "cancelled")}
+                                    className="inline-flex items-center justify-center gap-1 rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition-all hover:bg-rose-100 active:scale-95 border border-rose-200"
+                                    title="إلغاء هذا الطلب"
+                                  >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                    <span>إلغاء الطلبية</span>
+                                  </button>
+                                )}
+                                {(order.status === "completed" || order.status === "cancelled") && (
+                                  <button
+                                    onClick={() => handleArchiveOrder(order.id, true)}
+                                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 active:scale-95 border border-indigo-200 transition-all shadow-2xs cursor-pointer"
+                                    title="نقل هذه الطلبية إلى سلة الأرشيف لتقليل الازدحام"
+                                  >
+                                    <Archive className="h-3.5 w-3.5 text-indigo-600" />
+                                    <span>أرشفة الطلب 📦</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        {/* Export CSV Button at Bottom */}
+                        <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                          <button
+                            onClick={handleExportOrdersCSV}
+                            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-4 py-2.5 text-xs font-bold transition-all shadow-sm active:scale-[0.98]"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span>تصدير الطلبيات النشطة إلى ملف CSV (Excel) 📥</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* TAB 2: EXCEL STOCK REPORT MASTER */}
               {repTab === "inventory" && (
@@ -8042,11 +8163,11 @@ export default function App() {
                               </div>
 
                               <button
-                                onClick={() => handleDeleteNotification(notif.id)}
-                                className="opacity-40 group-hover:opacity-100 transition-opacity rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 shrink-0"
-                                title="حذف هذا الإشعار"
+                                onClick={() => handleArchiveNotification(notif.id)}
+                                className="opacity-40 group-hover:opacity-100 transition-opacity rounded-lg p-1.5 text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700 shrink-0"
+                                title="أرشفة هذا الإشعار"
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <Archive className="h-4 w-4" />
                               </button>
                             </div>
                             <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">{notif.message}</p>
@@ -8113,19 +8234,51 @@ export default function App() {
               )}
 
               {repTab === "archive" && (
-                <div className="p-4 sm:p-5">
+                <div className="p-3 sm:p-5">
                   <AdminArchiveView
+                    isAdmin={true}
+                    isRep={true}
+                    adminName={user?.name || "د/ بلال القيسي"}
                     archivedOrders={orders.filter(o => o.isArchived)}
                     onArchiveOrder={(orderId) => handleArchiveOrder(orderId, true)}
                     onRestoreOrder={(orderId) => handleArchiveOrder(orderId, false)}
+                    onPermanentDeleteOrder={handlePermanentDeleteOrder}
+                    onClearAllArchived={handleClearAllArchived}
                     onRestoreAllArchived={async () => {
                       for (const o of orders.filter(o => o.isArchived)) {
                         await handleArchiveOrder(o.id, false);
                       }
                     }}
+                    onNavigateToActiveOrders={() => setRepTab("orders")}
+                    onPrintOrder={handleOpenPrintInvoice}
+                    onExportCSV={(ordersToExport) => {
+                      downloadCSV(
+                        "أرشيف_الطلبيات_المعتمد.csv",
+                        ["رقم الطلب", "اسم العميل", "المنشأة", "الحالة", "تاريخ الإرسال", "تاريخ الأرشفة"],
+                        ordersToExport.map((o) => [
+                          o.id,
+                          o.clientName,
+                          o.entityName,
+                          o.status,
+                          new Date(o.createdAt).toLocaleString("ar-YE"),
+                          o.archivedAt ? new Date(o.archivedAt).toLocaleString("ar-YE") : "مؤرشف"
+                        ])
+                      );
+                    }}
+                    showToast={(msg, type) => {
+                      if (type === "error") showError(msg);
+                      else showSuccess(msg);
+                    }}
                   />
                 </div>
               )}
+
+              {repTab === "status" && (
+                <div className="p-4 sm:p-5">
+                  <SystemStatus />
+                </div>
+              )}
+
 
 
 

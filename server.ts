@@ -1044,7 +1044,6 @@ async function updateOrderStatusInDB(id: string, status: string): Promise<Order 
 
 async function archiveOrderInDB(id: string, isArchived: boolean = true): Promise<Order | null> {
   const archivedAt = isArchived ? new Date().toISOString() : undefined;
-  const status = isArchived ? "completed" : "approved";
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const docRef = dbAdmin.collection("orders").doc(id);
@@ -1052,7 +1051,6 @@ async function archiveOrderInDB(id: string, isArchived: boolean = true): Promise
       if (doc.exists) {
         await docRef.update({
           isArchived,
-          status,
           archivedAt: archivedAt || null
         });
         const updated = await docRef.get();
@@ -1066,8 +1064,11 @@ async function archiveOrderInDB(id: string, isArchived: boolean = true): Promise
   const idx = db.orders.findIndex((o) => o.id === id);
   if (idx !== -1) {
     db.orders[idx].isArchived = isArchived;
-    db.orders[idx].status = status;
-    db.orders[idx].archivedAt = archivedAt;
+    if (archivedAt) {
+      db.orders[idx].archivedAt = archivedAt;
+    } else {
+      delete db.orders[idx].archivedAt;
+    }
     saveDB(db);
     return db.orders[idx];
   }
@@ -1079,9 +1080,17 @@ async function archiveAllCompletedOrdersInDB(): Promise<number> {
   const now = new Date().toISOString();
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      const snap = await dbAdmin.collection("orders").where("status", "==", "completed").get();
+      const snapCompleted = await dbAdmin.collection("orders").where("status", "==", "completed").get();
+      const snapCancelled = await dbAdmin.collection("orders").where("status", "==", "cancelled").get();
       const batch = dbAdmin.batch();
-      snap.forEach((doc) => {
+      snapCompleted.forEach((doc) => {
+        const data = doc.data();
+        if (!data.isArchived) {
+          batch.update(doc.ref, { isArchived: true, archivedAt: now });
+          count++;
+        }
+      });
+      snapCancelled.forEach((doc) => {
         const data = doc.data();
         if (!data.isArchived) {
           batch.update(doc.ref, { isArchived: true, archivedAt: now });
@@ -1097,7 +1106,7 @@ async function archiveAllCompletedOrdersInDB(): Promise<number> {
   }
   const db = getDB();
   db.orders.forEach((o) => {
-    if (o.status === "completed" && !o.isArchived) {
+    if ((o.status === "completed" || o.status === "cancelled") && !o.isArchived) {
       o.isArchived = true;
       o.archivedAt = now;
       count++;

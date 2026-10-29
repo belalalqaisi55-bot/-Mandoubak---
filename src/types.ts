@@ -170,6 +170,8 @@ export interface Notification {
   sentVia?: "cloud_function" | "system" | "manual";
   deliveryStatus?: "sent" | "delivered" | "queued";
   createdAt: string;
+  isArchived?: boolean;
+  archivedAt?: string;
 }
 
 export type AgreementType = "bonus" | "samples" | "gift_support" | "discount_terms" | "other";
