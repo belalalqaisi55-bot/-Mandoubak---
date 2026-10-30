@@ -42,7 +42,7 @@ export interface KeepNote {
 
 export interface User {
   id: string;
-  phone: string;
+  phone?: string;
   name: string;
   role: UserRole;
   email?: string;

@@ -399,6 +399,7 @@ export default function App() {
   const [isCheckingApprovalStatus, setIsCheckingApprovalStatus] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>({
     requireApprovalForNewClients: true,
+    requireApprovalForNewAccounts: true,
     singlePhonePerDevice: true,
     autoApproveKnownNumbers: true,
     enableVisitTracking: true
@@ -6635,8 +6636,7 @@ export default function App() {
                                     <span>إلغاء الطلبية</span>
                                   </button>
                                 )}
-                                {(order.status === "completed" || order.status === "cancelled") && (
-                                  <button
+                                <button
                                     onClick={() => handleArchiveOrder(order.id, true)}
                                     className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 active:scale-95 border border-indigo-200 transition-all shadow-2xs cursor-pointer"
                                     title="نقل هذه الطلبية إلى سلة الأرشيف لتقليل الازدحام"
@@ -6644,7 +6644,7 @@ export default function App() {
                                     <Archive className="h-3.5 w-3.5 text-indigo-600" />
                                     <span>أرشفة الطلب 📦</span>
                                   </button>
-                                )}
+
                               </div>
                             </div>
                           </div>
