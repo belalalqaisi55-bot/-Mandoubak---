@@ -32,6 +32,8 @@ import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer"
 import { GoogleChatModal } from "./components/GoogleChatModal";
 import { AdminArchiveView } from "./components/AdminArchiveView";
 import { SystemStatus } from "./components/SystemStatus";
+import { SecretCVPage } from "./components/SecretCVPage";
+import { CVBarcodeModal } from "./components/CVBarcodeModal";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -465,6 +467,14 @@ export default function App() {
     location: "",
   });
 
+  // Secret CV Route detection (accessible by direct QR code scan without requiring login)
+  const isSecretCVRoute = typeof window !== "undefined" && (
+    window.location.pathname === "/cv/belal-cv-secret-link" ||
+    window.location.pathname.startsWith("/cv") ||
+    window.location.search.includes("view=cv") ||
+    window.location.hash.includes("cv")
+  );
+
   // Navigation state
   const [activeTab, setActiveTab] = useState<"sheet" | "history" | "reports" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("sheet");
   const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
@@ -862,6 +872,7 @@ export default function App() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isDownloadApkModalOpen, setIsDownloadApkModalOpen] = useState(false);
   const [isGoogleChatOpen, setIsGoogleChatOpen] = useState(false);
+  const [isCVBarcodeModalOpen, setIsCVBarcodeModalOpen] = useState(false);
   
   // Firebase Remote Config A/B Testing Onboarding States
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(() => {
@@ -4255,7 +4266,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {!user ? (
+      {isSecretCVRoute ? (
+        <SecretCVPage />
+      ) : !user ? (
         /* GUEST / UNAUTHENTICATED LOGIN SCREEN */
         <div className="min-h-screen bg-slate-50 flex flex-col justify-between" dir="rtl">
           {/* Main Header */}
@@ -4296,6 +4309,16 @@ export default function App() {
                   <Globe className="h-3.5 w-3.5 text-teal-600" />
                   <span className="dir-ltr text-3xs font-mono">{OFFICIAL_APP_URL} 🔗</span>
                 </a>
+                <button
+                  type="button"
+                  onClick={() => setIsCVBarcodeModalOpen(true)}
+                  className="flex items-center gap-1.5 rounded-full bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 px-3.5 py-1.5 text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                  title="عرض وتحميل باركود السيرة الذاتية (CV QR Code)"
+                  id="btn-login-cv-barcode"
+                >
+                  <QrCode className="h-3.5 w-3.5 text-purple-600" />
+                  <span>باركود السيرة الذاتية 🪪</span>
+                </button>
                 <div className="rounded-full bg-slate-100 px-3.5 py-1.5 text-xs font-bold text-slate-800 border border-slate-200 shadow-2xs">
                   د/ بلال القيسي 👨‍⚕️ (776600049)
                 </div>
@@ -4842,6 +4865,14 @@ export default function App() {
                       onClick={() => setRepTab("status")}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-status"
+                    />
+                    <SidebarNavItem
+                      icon={<QrCode className="h-4.5 w-4.5 text-purple-600" />}
+                      label="باركود السيرة الذاتية"
+                      onClick={() => setIsCVBarcodeModalOpen(true)}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-rep-cv-barcode"
+                      highlight={true}
                     />
                   </div>
 
@@ -5914,122 +5945,135 @@ export default function App() {
 
           {/* MAIN WORKSPACE CONTENT STAGE */}
           <div className="flex-1 min-w-0 flex flex-col min-h-screen">
-            {/* Top Workspace Header */}
-            <header className="hidden lg:flex items-center justify-between px-4 py-2 bg-white border-b border-slate-200/90 sticky top-0 z-20 shadow-2xs">
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-teal-500 animate-pulse" />
-                <div>
-                  <h2 className="text-xs sm:text-sm font-black text-slate-900 flex items-center gap-1.5">
-                    {user.role === "rep" ? (
-                      <>
-                        {repTab === "analytics" && "📊 لوحة التحليلات والمؤشرات السحابية (Firestore Analytics)"}
-                        {repTab === "orders" && "📥 طلبيات العملاء الواردة"}
-                        {repTab === "inventory" && "📊 كشوفات الجرد المخزني"}
-                        {repTab === "archive" && "📦 أرشيف الطلبيات المؤرشفة والمكتملة"}
-                        {repTab === "catalog" && "💊 إدارة الأصناف والأسعار"}
-                        {repTab === "clients" && "👥 قائمة العملاء والصيدليات المسجلة"}
-                        {repTab === "visits" && "📋 سجل الزيارات الميدانية والذكاء الاصطناعي 🪄"}
-                        {repTab === "maps" && "🗺️ خريطة الزيارات الميدانية والتغطية (Google Maps)"}
-                        {repTab === "notifications" && "🔔 الإشعارات والتعاميم الموجهة"}
-                        {repTab === "scientific" && "📚 المرجع والبحث العلمي الطبي"}
-                        {repTab === "games" && "🎮 سلة الألعاب والتحديات الطبية"}
-                      </>
-                    ) : (
-                      <>
-                        {activeTab === "sheet" && "📄 قائمة أصناف المندوب د/ بلال القيسي"}
-                        {activeTab === "history" && "🛒 سجل الطلبيات المرسلة"}
-                        {activeTab === "reports" && "📊 كشوفات الجرد الفردية"}
-                        {activeTab === "visits" && "👥 سجل الزيارات الميدانية والمهام"}
-                        {activeTab === "maps" && "🗺️ خريطة التغطية والمواقع الطبية (Google Maps)"}
-                        {activeTab === "notifications" && "🔔 الإشعارات والتعاميم"}
-                        {activeTab === "scientific" && "📚 البحث والمرجع العلمي الطبي"}
-                        {activeTab === "games" && "🏆 سلة الألعاب التنافسية الطبية 🎮"}
-                      </>
-                    )}
-                  </h2>
-                  <p className="text-4xs text-slate-500 font-medium">
-                    تطبيق مندوبك الطبي (د/ بلال القيسي - 776600049)
-                  </p>
-                </div>
-              </div>
+            {window.location.pathname === "/cv/belal-cv-secret-link" ? (
+              <SecretCVPage />
+            ) : (
+              <>
+                <header className="hidden lg:flex items-center justify-between px-4 py-2 bg-white border-b border-slate-200/90 sticky top-0 z-20 shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-teal-500 animate-pulse" />
+                    <div>
+                      <h2 className="text-xs sm:text-sm font-black text-slate-900 flex items-center gap-1.5">
+                        {user.role === "rep" ? (
+                          <>
+                            {repTab === "analytics" && "📊 لوحة التحليلات والمؤشرات السحابية (Firestore Analytics)"}
+                            {repTab === "orders" && "📥 طلبيات العملاء الواردة"}
+                            {repTab === "inventory" && "📊 كشوفات الجرد المخزني"}
+                            {repTab === "archive" && "📦 أرشيف الطلبيات المؤرشفة والمكتملة"}
+                            {repTab === "catalog" && "💊 إدارة الأصناف والأسعار"}
+                            {repTab === "clients" && "👥 قائمة العملاء والصيدليات المسجلة"}
+                            {repTab === "visits" && "📋 سجل الزيارات الميدانية والذكاء الاصطناعي 🪄"}
+                            {repTab === "maps" && "🗺️ خريطة الزيارات الميدانية والتغطية (Google Maps)"}
+                            {repTab === "notifications" && "🔔 الإشعارات والتعاميم الموجهة"}
+                            {repTab === "scientific" && "📚 المرجع والبحث العلمي الطبي"}
+                            {repTab === "games" && "🎮 سلة الألعاب والتحديات الطبية"}
+                          </>
+                        ) : (
+                          <>
+                            {activeTab === "sheet" && "📄 قائمة أصناف المندوب د/ بلال القيسي"}
+                            {activeTab === "history" && "🛒 سجل الطلبيات المرسلة"}
+                            {activeTab === "reports" && "📊 كشوفات الجرد الفردية"}
+                            {activeTab === "visits" && "👥 سجل الزيارات الميدانية والمهام"}
+                            {activeTab === "maps" && "🗺️ خريطة التغطية والمواقع الطبية (Google Maps)"}
+                            {activeTab === "notifications" && "🔔 الإشعارات والتعاميم"}
+                            {activeTab === "scientific" && "📚 البحث والمرجع العلمي الطبي"}
+                            {activeTab === "games" && "🏆 سلة الألعاب التنافسية الطبية 🎮"}
+                          </>
+                        )}
+                      </h2>
+                      <p className="text-4xs text-slate-500 font-medium">
+                        تطبيق مندوبك الطبي (د/ بلال القيسي - 776600049)
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="flex items-center gap-2">
-                {/* APK Download Button for Android Devices */}
-                <button
-                  type="button"
-                  onClick={() => setIsDownloadApkModalOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold text-white bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 shadow-xs transition-all cursor-pointer hover:shadow-sm active:scale-95"
-                  title="تثبيت التطبيق على الهاتف"
-                  id="btn-workspace-download-apk"
-                >
-                  <Smartphone className="h-3.5 w-3.5 animate-bounce" />
-                  <span>تثبيت التطبيق على الهاتف 📱</span>
-                </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCVBarcodeModalOpen(true)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 shadow-xs transition-all cursor-pointer hover:shadow-sm active:scale-95"
+                      title="عرض وتحميل باركود السيرة الذاتية الذكي"
+                      id="btn-workspace-cv-barcode"
+                    >
+                      <QrCode className="h-3.5 w-3.5 text-amber-300" />
+                      <span>باركود السيرة الذاتية 🪪</span>
+                    </button>
 
-                {/* App Settings Button */}
-                <button
-                  type="button"
-                  onClick={() => setIsSettingsModalOpen(true)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors shadow-2xs cursor-pointer active:scale-95"
-                  title="إعدادات التطبيق وخيارات النظام"
-                  id="btn-workspace-settings"
-                >
-                  <Settings className="h-3.5 w-3.5 text-teal-700" />
-                  <span>الإعدادات</span>
-                </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsDownloadApkModalOpen(true)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold text-white bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 shadow-xs transition-all cursor-pointer hover:shadow-sm active:scale-95"
+                      title="تثبيت التطبيق على الهاتف"
+                      id="btn-workspace-download-apk"
+                    >
+                      <Smartphone className="h-3.5 w-3.5 animate-bounce" />
+                      <span>تثبيت التطبيق على الهاتف 📱</span>
+                    </button>
 
-                {/* Auto background sync indicator & IndexedDB Sync Center Trigger */}
-                <button
-                  type="button"
-                  onClick={() => setIsOfflineSyncModalOpen(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold border transition-all cursor-pointer ${
-                    !isOnlineState
-                      ? "bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100"
-                      : pendingSyncCount > 0
-                      ? "bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 animate-pulse"
-                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-teal-50 hover:border-teal-200 hover:text-teal-800"
-                  }`}
-                  title="المزامنة التلقائية مع قاعدة البيانات السحابية والمحلية (IndexedDB)"
-                  id="btn-workspace-sync-center"
-                >
-                  {!isOnlineState ? (
-                    <WifiOff className="h-3.5 w-3.5 text-rose-600" />
-                  ) : (
-                    <span className="relative flex h-2 w-2">
-                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSyncing || pendingSyncCount > 0 ? "bg-amber-400" : "bg-emerald-400"} opacity-75`}></span>
-                      <span className={`relative inline-flex rounded-full h-2 w-2 ${isSyncing || pendingSyncCount > 0 ? "bg-amber-500" : "bg-emerald-500"}`}></span>
-                    </span>
-                  )}
-                  <span>
-                    {!isOnlineState
-                      ? "أوفلاين (IndexedDB)"
-                      : isSyncing
-                      ? "جاري المزامنة..."
-                      : pendingSyncCount > 0
-                      ? `معلق للمزامنة (${pendingSyncCount})`
-                      : isFirebaseConfigured && db
-                      ? "سحابي (Firestore) ☁️"
-                      : "متصل بالخلفية"}
-                  </span>
-                  {pendingSyncCount > 0 && (
-                    <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-black text-slate-950">
-                      {pendingSyncCount}
-                    </span>
-                  )}
-                </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsModalOpen(true)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors shadow-2xs cursor-pointer active:scale-95"
+                      title="إعدادات التطبيق وخيارات النظام"
+                      id="btn-workspace-settings"
+                    >
+                      <Settings className="h-3.5 w-3.5 text-teal-700" />
+                      <span>الإعدادات</span>
+                    </button>
 
-                <button
-                  onClick={() => fetchUserSpecificData(false, true)}
-                  disabled={isSyncing}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors shadow-2xs cursor-pointer active:scale-95"
-                  title="تحديث البيانات يدويًا"
-                  id="btn-workspace-refresh"
-                >
-                  <RefreshCw className={`h-3 w-3 text-teal-600 ${isSyncing ? "animate-spin" : ""}`} />
-                  <span>تحديث</span>
-                </button>
-              </div>
-            </header>
+                    <button
+                      type="button"
+                      onClick={() => setIsOfflineSyncModalOpen(true)}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold border transition-all cursor-pointer ${
+                        !isOnlineState
+                          ? "bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100"
+                          : pendingSyncCount > 0
+                          ? "bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 animate-pulse"
+                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-teal-50 hover:border-teal-200 hover:text-teal-800"
+                      }`}
+                      title="المزامنة التلقائية مع قاعدة البيانات السحابية والمحلية (IndexedDB)"
+                      id="btn-workspace-sync-center"
+                    >
+                      {!isOnlineState ? (
+                        <WifiOff className="h-3.5 w-3.5 text-rose-600" />
+                      ) : (
+                        <span className="relative flex h-2 w-2">
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSyncing || pendingSyncCount > 0 ? "bg-amber-400" : "bg-emerald-400"} opacity-75`}></span>
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${isSyncing || pendingSyncCount > 0 ? "bg-amber-500" : "bg-emerald-500"}`}></span>
+                        </span>
+                      )}
+                      <span>
+                        {!isOnlineState
+                          ? "أوفلاين (IndexedDB)"
+                          : isSyncing
+                          ? "جاري المزامنة..."
+                          : pendingSyncCount > 0
+                          ? `معلق للمزامنة (${pendingSyncCount})`
+                          : isFirebaseConfigured && db
+                          ? "سحابي (Firestore) ☁️"
+                          : "متصل بالخلفية"}
+                      </span>
+                      {pendingSyncCount > 0 && (
+                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-black text-slate-950">
+                          {pendingSyncCount}
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={() => fetchUserSpecificData(false, true)}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors shadow-2xs cursor-pointer active:scale-95"
+                      title="تحديث البيانات يدويًا"
+                      id="btn-workspace-refresh"
+                    >
+                      <RefreshCw className={`h-3 w-3 text-teal-600 ${isSyncing ? "animate-spin" : ""}`} />
+                      <span>تحديث</span>
+                    </button>
+                  </div>
+                </header>
+              </>
+            )}
 
             {/* View Container */}
             <main className="flex-1 p-1.5 sm:p-3 md:p-4 max-w-full lg:max-w-[1600px] w-full mx-auto space-y-3 sm:space-y-4">
@@ -10649,6 +10693,13 @@ export default function App() {
       <DownloadApkModal
         isOpen={isDownloadApkModalOpen}
         onClose={() => setIsDownloadApkModalOpen(false)}
+      />
+
+      {/* Secret CV Barcode QR Modal */}
+      <CVBarcodeModal
+        isOpen={isCVBarcodeModalOpen}
+        onClose={() => setIsCVBarcodeModalOpen(false)}
+        showToast={(msg, type) => type === "error" ? showError(msg) : showSuccess(msg)}
       />
 
       {/* Compact Footer */}
