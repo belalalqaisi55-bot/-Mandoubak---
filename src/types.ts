@@ -55,7 +55,7 @@ export interface User {
   confirmationCode?: string;
   password?: string;
   deviceRegistered?: boolean;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface AppSettings {

@@ -3679,8 +3679,8 @@ app.post("/api/chat", async (req, res) => {
         };
       }
     } else {
-      // Use gemini-3.8-flash for general tasks
-      preferredModel = "gemini-3.8-flash";
+      // Use gemini-3.1-flash-lite for general tasks to prioritize speed
+      preferredModel = "gemini-3.1-flash-lite";
     }
 
     // Sanitize conversation history:

@@ -747,24 +747,7 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
                       <span className="text-3xs text-slate-400 font-mono">{userMetrics.total} مستخدم</span>
                     </h4>
 
-                    {/* Progress multi-bar */}
-                    <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                      <div 
-                        style={{ width: `${userMetrics.total > 0 ? (userMetrics.pharmaciesCount / userMetrics.total) * 100 : 50}%` }} 
-                        className="bg-teal-600 h-full transition-all"
-                        title={`صيدليات: ${userMetrics.pharmaciesCount}`}
-                      />
-                      <div 
-                        style={{ width: `${userMetrics.total > 0 ? (userMetrics.doctorsCount / userMetrics.total) * 100 : 30}%` }} 
-                        className="bg-blue-600 h-full transition-all"
-                        title={`أطباء: ${userMetrics.doctorsCount}`}
-                      />
-                      <div 
-                        style={{ width: `${userMetrics.total > 0 ? (userMetrics.repsCount / userMetrics.total) * 100 : 20}%` }} 
-                        className="bg-emerald-500 h-full transition-all"
-                        title={`مندوبين: ${userMetrics.repsCount}`}
-                      />
-                    </div>
+                    {/* Progress multi-bar removed as requested */}
 
                     <div className="flex items-center justify-between text-3xs font-bold text-slate-600 pt-1">
                       <span className="flex items-center gap-1">

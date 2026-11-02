@@ -1,7 +1,7 @@
 import React from 'react';
 import { ExternalLink, Rocket, Phone, MessageSquare, Download, ArrowRight, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
-export const SecretCVPage: React.FC = () => {
+export const SecretCVPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const cvImagePath = "/assets/aistudio/IMG-20261031-WA5791_7e098974.jpg";
 
   return (
@@ -11,6 +11,9 @@ export const SecretCVPage: React.FC = () => {
         {/* Top Header Card */}
         <div className="bg-white/10 backdrop-blur-md rounded-2xl border border-white/10 p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
           <div className="flex items-center gap-3">
+            <button onClick={onBack} className="p-2 rounded-xl bg-white/10 hover:bg-white/20">
+              <ArrowRight className="h-5 w-5" />
+            </button>
             <div className="h-12 w-12 rounded-xl bg-teal-500/20 border border-teal-400/40 flex items-center justify-center text-teal-300 font-bold text-xl shadow-inner">
               Rx
             </div>
@@ -32,7 +35,7 @@ export const SecretCVPage: React.FC = () => {
               href="https://wa.me/967776600049"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-md active:scale-95"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-md active:scale-95"
             >
               <MessageSquare className="h-3.5 w-3.5" />
               <span>واتساب 776600049</span>
@@ -40,9 +43,9 @@ export const SecretCVPage: React.FC = () => {
             <a
               href={cvImagePath}
               download="CV_Dr_Belal_Alqaisi.jpg"
-              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl border border-white/15 transition-all shadow-md active:scale-95"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-teal-700 to-emerald-700 hover:from-teal-600 hover:to-emerald-600 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl border border-white/15 transition-all shadow-md active:scale-95"
             >
-              <Download className="h-3.5 w-3.5 text-teal-300" />
+              <Download className="h-3.5 w-3.5 text-white" />
               <span>تحميل السيرة</span>
             </a>
           </div>
@@ -51,14 +54,10 @@ export const SecretCVPage: React.FC = () => {
         {/* The CV Document Visual Display */}
         <div className="bg-white rounded-3xl shadow-2xl p-2 sm:p-4 border border-slate-200 overflow-hidden">
           <div className="relative group">
-            <img 
-              src={cvImagePath} 
-              alt="السيرة الذاتية - د. بلال يحيى أحمد ثابت القيسي" 
-              className="w-full h-auto rounded-2xl shadow-md border border-slate-100 object-contain mx-auto"
-              onError={(e) => {
-                // Fallback if public path varies
-                (e.target as HTMLImageElement).src = "/public/assets/aistudio/IMG-20261031-WA5791_7e098974.jpg";
-              }}
+            <iframe 
+              src="/assets/aistudio/_______________-__._____________73012dc9.pdf" 
+              className="w-full h-[800px] rounded-2xl shadow-md border border-slate-100"
+              title="السيرة الذاتية - د. بلال يحيى أحمد ثابت القيسي"
             />
           </div>
         </div>

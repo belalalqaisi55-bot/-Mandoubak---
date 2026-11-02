@@ -8,6 +8,7 @@ interface QRScannerModalProps {
   onClose: () => void;
   products: Product[];
   onProductScanned: (product: Product, quantityToAdd?: number) => void;
+  onShowCV?: () => void;
 }
 
 export const QRScannerModal: React.FC<QRScannerModalProps> = ({
@@ -15,6 +16,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   onClose,
   products,
   onProductScanned,
+  onShowCV,
 }) => {
   const [scannerStarted, setScannerStarted] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -192,10 +194,18 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   };
 
   const handleCodeScanned = (decodedText: string) => {
+    console.log("Barcode scanned:", decodedText);
     setLastScannedResult(decodedText);
     playScanBeep();
 
     const product = findProductMatch(decodedText);
+    if (product && localStorage.getItem("scan_and_go_cv") === "true") {
+      localStorage.setItem("pending_add_product", JSON.stringify({ product, quantity: addQuantity }));
+      localStorage.removeItem("scan_and_go_cv");
+      if (onShowCV) onShowCV();
+      return;
+    }
+
     if (product) {
       setMatchedProduct(product);
     } else {

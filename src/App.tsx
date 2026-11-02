@@ -34,6 +34,7 @@ import { AdminArchiveView } from "./components/AdminArchiveView";
 import { SystemStatus } from "./components/SystemStatus";
 import { SecretCVPage } from "./components/SecretCVPage";
 import { CVBarcodeModal } from "./components/CVBarcodeModal";
+import { SalesReports } from "./components/SalesReports";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -645,6 +646,7 @@ export default function App() {
     const biometricOn = localStorage.getItem("mandoubak_biometric_lock") === "true";
     return hasUser && biometricOn;
   });
+  const [isCVPageVisible, setIsCVPageVisible] = useState(false);
 
   // Scientific drug search states
   const [searchDrugQuery, setSearchDrugQuery] = useState("");
@@ -944,6 +946,20 @@ export default function App() {
     setTimeout(() => setErrorMsg(""), 4000);
   };
 
+  const handleAddToOrder = (scannedProduct: Product, quantityToAdd: number) => {
+    const currentQty = Number(orderInputs[scannedProduct.id] || 0);
+    const newQty = currentQty + quantityToAdd;
+    const updatedOrder = {
+      ...orderInputs,
+      [scannedProduct.id]: String(newQty),
+    };
+    setOrderInputs(updatedOrder);
+    try {
+      localStorage.setItem("mandoubak_draft_order", JSON.stringify(updatedOrder));
+    } catch (e) {}
+    showSuccess(`تمت إضافة ${quantityToAdd} ${scannedProduct.unit || "علبة"} من (${scannedProduct.name}) إلى الطلبية بنجاح! 🛒`);
+  };
+
 
   // Administrator Authorization - Exclusively Dr. Belal Alqaisi
   const isBelalAdmin = Boolean(
@@ -1074,6 +1090,22 @@ export default function App() {
       cleanupNetwork();
     };
   }, []);
+
+  // Handle pending product addition if coming from CV page
+  useEffect(() => {
+    if (isCVPageVisible) {
+      const pending = localStorage.getItem("pending_add_product");
+      if (pending) {
+        try {
+          const { product, quantity } = JSON.parse(pending);
+          handleAddToOrder(product, quantity);
+          localStorage.removeItem("pending_add_product");
+        } catch (e) {
+          console.error("Error processing pending product:", e);
+        }
+      }
+    }
+  }, [isCVPageVisible]);
 
   // Fetch initial data & subscribe to real-time settings / avatar sync
   useEffect(() => {
@@ -4266,8 +4298,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {isSecretCVRoute ? (
-        <SecretCVPage />
+      {isCVPageVisible ? (
+        <SecretCVPage onBack={() => setIsCVPageVisible(false)} />
       ) : !user ? (
         /* GUEST / UNAUTHENTICATED LOGIN SCREEN */
         <div className="min-h-screen bg-slate-50 flex flex-col justify-between" dir="rtl">
@@ -4869,6 +4901,7 @@ export default function App() {
                     <SidebarNavItem
                       icon={<QrCode className="h-4.5 w-4.5 text-purple-600" />}
                       label="باركود السيرة الذاتية"
+                      active={false}
                       onClick={() => setIsCVBarcodeModalOpen(true)}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-cv-barcode"
@@ -5946,7 +5979,7 @@ export default function App() {
           {/* MAIN WORKSPACE CONTENT STAGE */}
           <div className="flex-1 min-w-0 flex flex-col min-h-screen">
             {window.location.pathname === "/cv/belal-cv-secret-link" ? (
-              <SecretCVPage />
+              <SecretCVPage onBack={() => window.location.href = "/"} />
             ) : (
               <>
                 <header className="hidden lg:flex items-center justify-between px-4 py-2 bg-white border-b border-slate-200/90 sticky top-0 z-20 shadow-2xs">
@@ -6431,7 +6464,7 @@ export default function App() {
               
               {/* TAB 0: ADVANCED FIRESTORE ANALYTICS & METRICS DASHBOARD */}
               {repTab === "analytics" && (
-                <div className="p-4 sm:p-5">
+                <div className="p-4 sm:p-5 space-y-6">
                   <AdminAnalyticsDashboard
                     initialUsers={registeredUsers}
                     initialNotifications={notifications}
@@ -6442,6 +6475,8 @@ export default function App() {
                     onUpdateSettings={handleUpdateAppSetting}
                     onNavigateTab={(tab) => setRepTab(tab as any)}
                   />
+                  <hr className="border-slate-200" />
+                  <SalesReports orders={orders} />
                 </div>
               )}
 
@@ -8861,7 +8896,10 @@ export default function App() {
                       {/* QR Code & Barcode Camera Scanner Button */}
                       <button
                         type="button"
-                        onClick={() => setIsQRScannerModalOpen(true)}
+                        onClick={() => {
+                          localStorage.setItem("scan_and_go_cv", "true");
+                          setIsQRScannerModalOpen(true);
+                        }}
                         className="rounded-lg bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white px-3 py-1 text-3xs font-black shadow-sm transition-all flex items-center gap-1.5 border border-teal-500 cursor-pointer animate-pulse hover:animate-none"
                         title="مسح باركود و QR ملصق الصنف بالكاميرا لإضافته فوراً للطلبية"
                         id="btn-scan-product-qr-sheet"
@@ -10648,18 +10686,12 @@ export default function App() {
         isOpen={isQRScannerModalOpen}
         onClose={() => setIsQRScannerModalOpen(false)}
         products={products}
+        onShowCV={() => {
+          setIsQRScannerModalOpen(false);
+          setIsCVPageVisible(true);
+        }}
         onProductScanned={(scannedProduct, quantityToAdd = 1) => {
-          const currentQty = Number(orderInputs[scannedProduct.id] || 0);
-          const newQty = currentQty + quantityToAdd;
-          const updatedOrder = {
-            ...orderInputs,
-            [scannedProduct.id]: String(newQty),
-          };
-          setOrderInputs(updatedOrder);
-          try {
-            localStorage.setItem("mandoubak_draft_order", JSON.stringify(updatedOrder));
-          } catch (e) {}
-          showSuccess(`تمت إضافة ${quantityToAdd} ${scannedProduct.unit || "علبة"} من (${scannedProduct.name}) إلى الطلبية بنجاح! 🛒`);
+          handleAddToOrder(scannedProduct, quantityToAdd);
         }}
       />
 
