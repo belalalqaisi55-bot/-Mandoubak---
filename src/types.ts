@@ -46,7 +46,7 @@ export interface User {
   name: string;
   role: UserRole;
   email?: string;
-  entityName?: string; // Pharmacy or clinic name
+  entityName?: string;
   location?: string;
   notes?: string;
   avatar?: string;
@@ -56,6 +56,8 @@ export interface User {
   password?: string;
   deviceRegistered?: boolean;
   createdAt?: string;
+  // Added optional fields often used in partial objects
+  userId?: string; 
 }
 
 export interface AppSettings {

@@ -23,9 +23,9 @@ interface CategoryManagerModalProps {
   onClose: () => void;
   categories: string[];
   categoryColors?: Record<string, string>;
-  onAddCategory: (categoryName: string, color?: string) => boolean | void;
-  onRenameCategory: (oldName: string, newName: string) => boolean | void;
-  onDeleteCategory: (categoryName: string) => boolean | void;
+  onAddCategory: (categoryName: string, color?: string) => boolean | void | Promise<any>;
+  onRenameCategory: (oldName: string, newName: string) => boolean | void | Promise<any>;
+  onDeleteCategory: (categoryName: string) => boolean | void | Promise<any>;
   onUpdateCategoryColor?: (categoryName: string, color: string) => void;
   onResetToDefaults: () => void;
   products: Product[];

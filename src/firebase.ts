@@ -121,7 +121,7 @@ if (isFirebaseConfigured) {
 /**
  * Executes a Firestore getDocs with an automatic timeout to prevent 10s hang on slow networks
  */
-export async function getDocsWithTimeout(queryRef: any, timeoutMs: number = 3000): Promise<any> {
+export async function getDocsWithTimeout(queryRef: any, timeoutMs: number = 10000): Promise<any> {
   const fetchPromise = getDocs(queryRef);
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error("Firestore fetch timeout")), timeoutMs)
@@ -226,7 +226,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export async function testConnection() {
   if (!isFirebaseConfigured || !db) return;
   try {
-    await getDocFromServer(doc(db, "test", "connection"));
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Firebase testConnection timeout")), 1500)
+    );
+    await Promise.race([getDocFromServer(doc(db, "test", "connection")), timeoutPromise]);
   } catch (error: any) {
     // If the server responded with not-found or permission-denied, connection is active.
     if (error?.code === 'not-found' || error?.code === 'permission-denied') {

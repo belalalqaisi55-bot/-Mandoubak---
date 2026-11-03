@@ -46,6 +46,8 @@ interface Props {
   entityName: string;
   clientOrders?: Order[];
   onOneClickReorder?: (order: Order) => void;
+  totalOrdersCount?: number;
+  onRedeemReward?: (reward: any) => void;
 }
 
 export const PharmacyLoyaltyHub: React.FC<Props> = ({

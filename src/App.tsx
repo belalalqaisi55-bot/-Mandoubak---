@@ -58,7 +58,7 @@ import {
   deleteOfflineStockReport
 } from "./utils/offlineSync";
 import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, deleteDoc, onSnapshot } from "firebase/firestore";
-import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState } from "./firebase";
+import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState, getDocsWithTimeout } from "./firebase";
 import { motion, AnimatePresence } from "motion/react";
 import { ConnectionStatusIndicator } from "./components/ConnectionStatusIndicator";
 import { useConnectionStatus } from "./hooks/useConnectionStatus";
@@ -654,9 +654,27 @@ export default function App() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  // Data states
-  const [products, setProducts] = useState<Product[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  // Data states (instantly initialized from local cache for 0ms load time)
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const cached = localStorage.getItem("mandoubak_local_products");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return DEFAULT_PRODUCTS;
+  });
+  const [orders, setOrders] = useState<Order[]>(() => {
+    try {
+      const cached = localStorage.getItem("mandoubak_local_orders");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [orderStatusFilter, setOrderStatusFilter] = useState<"all" | "pending" | "approved" | "completed" | "cancelled">("all");
   const [orderToPrint, setOrderToPrint] = useState<Order | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
@@ -665,8 +683,26 @@ export default function App() {
     setOrderToPrint(order);
     setIsPrintModalOpen(true);
   };
-  const [stockReports, setStockReports] = useState<StockReport[]>([]);
-  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
+  const [stockReports, setStockReports] = useState<StockReport[]>(() => {
+    try {
+      const cached = localStorage.getItem("mandoubak_local_stock_reports");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => {
+    try {
+      const cached = localStorage.getItem("mandoubak_local_clients");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   // Client Management States
@@ -1032,11 +1068,10 @@ export default function App() {
         setActiveTab("complaints");
         setRepTab("complaints");
       } else if (actionId === "view_clients") {
-        setActiveTab("clients");
         setRepTab("clients");
       } else if (actionId === "view_reports") {
         setActiveTab("reports");
-        setRepTab("reports");
+        setRepTab("inventory");
       }
     });
 
@@ -1113,7 +1148,7 @@ export default function App() {
     fetchAllRegisteredUsers();
     fetchAppSettings();
     if (user) {
-      fetchUserSpecificData();
+      fetchUserSpecificData(true);
     }
 
     // Real-time synchronization of Dr. Belal's profile avatar across all open devices and links
@@ -1349,11 +1384,11 @@ export default function App() {
     try {
       let loaded: Product[] = [];
       
-      // 1. Prioritize Firestore
+      // 1. Prioritize Firestore with 2500ms timeout
       if (isFirebaseConfigured && db) {
         try {
-          const snapshot = await getDocs(collection(db, "products"));
-          const fsProducts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
+          const snapshot = await getDocsWithTimeout(collection(db, "products"), 2500);
+          const fsProducts = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Product));
           if (fsProducts.length > 0) loaded = fsProducts;
         } catch (fsErr) {
           console.warn("Firestore products fetch:", fsErr);
@@ -1370,10 +1405,13 @@ export default function App() {
         } catch (e) {}
       }
 
-      // 3. Fallback to API if still empty
+      // 3. Fallback to API if still empty (with 2500ms timeout)
       if (loaded.length === 0) {
         try {
-          const r = await fetch("/api/products");
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const r = await fetch("/api/products", { signal: controller.signal });
+          clearTimeout(timer);
           const ct = r.headers.get("content-type") || "";
           if (r.ok && ct.includes("application/json")) {
             const data = await r.json();
@@ -1412,229 +1450,266 @@ export default function App() {
       setLoading(true);
     }
     try {
-      // 1. Fetch orders (with full IndexedDB sync and fallback)
-      let loadedOrders: Order[] = [];
-      try {
-        const ordersUrl = user?.role === "rep" ? "/api/orders" : `/api/orders?clientId=${user?.id}`;
-        const rOrders = await fetch(ordersUrl);
-        const ctOrders = rOrders.headers.get("content-type") || "";
-        if (rOrders.ok && ctOrders.includes("application/json")) {
-          const dOrders = await rOrders.json();
-          if (Array.isArray(dOrders)) loadedOrders = dOrders;
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "orders"));
-          const fsOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Order));
-          loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter(o => o.clientId === user?.id || (o as any).userId === user?.id);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
-          try {
-            const snapshot = await getDocs(collection(db, "orders"));
-            const fsOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Order));
-            loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter(o => o.clientId === user?.id || (o as any).userId === user?.id);
-          } catch (fsErr) {
-            console.warn("Firestore orders fallback err:", fsErr);
-          }
-        }
-      }
-
-      // If online fetch succeeded, save all orders to IndexedDB cache
-      if (loadedOrders.length > 0) {
-        setOrders(loadedOrders);
-        for (const ord of loadedOrders) {
-          saveOfflineOrder(ord, { forcePending: false }).catch(() => {});
-        }
-      } else {
-        // Fallback: Read directly from IndexedDB for complete offline mode!
+      // Run all user-specific data sync tasks concurrently in parallel with 3000ms timeouts
+      const ordersTask = async () => {
+        let loadedOrders: Order[] = [];
         try {
-          const offlineStored = await getOfflineOrders(user?.id, user?.role);
-          if (offlineStored.length > 0) {
-            setOrders(offlineStored);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const ordersUrl = user?.role === "rep" ? "/api/orders" : `/api/orders?clientId=${user?.id}`;
+          const rOrders = await fetch(ordersUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctOrders = rOrders.headers.get("content-type") || "";
+          if (rOrders.ok && ctOrders.includes("application/json")) {
+            const dOrders = await rOrders.json();
+            if (Array.isArray(dOrders)) loadedOrders = dOrders;
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "orders"), 2500);
+            const fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
+            loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter((o: any) => o.clientId === user?.id || (o as any).userId === user?.id);
           }
-        } catch (idbErr) {
-          console.warn("IndexedDB offline orders fallback error:", idbErr);
-        }
-      }
-
-      // 2. Fetch stock reports (with full IndexedDB sync and fallback)
-      let dReports: StockReport[] = [];
-      try {
-        const reportsUrl = user?.role === "rep" ? "/api/stock-reports" : `/api/stock-reports?clientId=${user?.id}`;
-        const rReports = await fetch(reportsUrl);
-        const ctReports = rReports.headers.get("content-type") || "";
-        if (rReports.ok && ctReports.includes("application/json")) {
-          const fetchedReports = await rReports.json();
-          if (Array.isArray(fetchedReports)) {
-            dReports = fetchedReports;
-          }
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "stockReports"));
-          const fsReports = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as StockReport));
-          dReports = user?.role === "rep" ? fsReports : fsReports.filter(r => r.clientId === user?.id || (r as any).userId === user?.id);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
-          try {
-            const snapshot = await getDocs(collection(db, "stockReports"));
-            const fsReports = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as StockReport));
-            dReports = user?.role === "rep" ? fsReports : fsReports.filter(r => r.clientId === user?.id || (r as any).userId === user?.id);
-          } catch (fsErr) {
-            console.warn("Firestore reports fallback err:", fsErr);
-          }
-        }
-      }
-
-      if (dReports.length > 0) {
-        setStockReports(dReports);
-        saveOfflineStockReports(dReports, { forcePending: false }).catch(() => {});
-        if (user?.role !== "rep") {
-          const initialRem: Record<string, string> = {};
-          dReports.forEach((rep: StockReport) => {
-            initialRem[rep.productId] = String(rep.remainingQty);
-          });
-          setRemainingInputs((prev) => (Object.keys(prev).length === 0 ? initialRem : prev));
-        }
-      } else {
-        // Fallback: Read stock reports directly from IndexedDB
-        try {
-          const offlineReports = await getOfflineStockReports(user?.id, user?.role);
-          if (offlineReports.length > 0) {
-            setStockReports(offlineReports);
-            if (user?.role !== "rep") {
-              const initialRem: Record<string, string> = {};
-              offlineReports.forEach((rep: StockReport) => {
-                initialRem[rep.productId] = String(rep.remainingQty);
-              });
-              setRemainingInputs((prev) => (Object.keys(prev).length === 0 ? initialRem : prev));
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "orders"), 2500);
+              const fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
+              loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter((o: any) => o.clientId === user?.id || (o as any).userId === user?.id);
+            } catch (fsErr) {
+              console.warn("Firestore orders fallback err:", fsErr);
             }
           }
-        } catch (idbErr) {
-          console.warn("IndexedDB offline stock reports fallback error:", idbErr);
         }
-      }
 
-      // 3. Fetch visits
-      try {
-        const visitsUrl = user?.role === "rep" ? "/api/visits" : `/api/visits?clientId=${user?.id}`;
-        const rVisits = await fetch(visitsUrl);
-        const ctVisits = rVisits.headers.get("content-type") || "";
-        if (rVisits.ok && ctVisits.includes("application/json")) {
-          const dVisits = await rVisits.json();
-          if (Array.isArray(dVisits)) setVisits(dVisits);
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "visits"));
-          const fsVisits = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Visit));
-          setVisits(fsVisits);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
+        if (loadedOrders.length > 0) {
+          setOrders(loadedOrders);
           try {
-            const snapshot = await getDocs(collection(db, "visits"));
-            const fsVisits = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Visit));
+            localStorage.setItem("mandoubak_local_orders", JSON.stringify(loadedOrders));
+          } catch (e) {}
+          for (const ord of loadedOrders) {
+            saveOfflineOrder(ord, { forcePending: false }).catch(() => {});
+          }
+        } else {
+          try {
+            const offlineStored = await getOfflineOrders(user?.id, user?.role);
+            if (offlineStored.length > 0) {
+              setOrders(offlineStored);
+            }
+          } catch (idbErr) {
+            console.warn("IndexedDB offline orders fallback error:", idbErr);
+          }
+        }
+      };
+
+      const stockReportsTask = async () => {
+        let dReports: StockReport[] = [];
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const reportsUrl = user?.role === "rep" ? "/api/stock-reports" : `/api/stock-reports?clientId=${user?.id}`;
+          const rReports = await fetch(reportsUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctReports = rReports.headers.get("content-type") || "";
+          if (rReports.ok && ctReports.includes("application/json")) {
+            const fetchedReports = await rReports.json();
+            if (Array.isArray(fetchedReports)) {
+              dReports = fetchedReports;
+            }
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "stockReports"), 2500);
+            const fsReports = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as StockReport));
+            dReports = user?.role === "rep" ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
+          }
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "stockReports"), 2500);
+              const fsReports = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as StockReport));
+              dReports = user?.role === "rep" ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
+            } catch (fsErr) {
+              console.warn("Firestore reports fallback err:", fsErr);
+            }
+          }
+        }
+
+        if (dReports.length > 0) {
+          setStockReports(dReports);
+          try {
+            localStorage.setItem("mandoubak_local_reports", JSON.stringify(dReports));
+          } catch (e) {}
+          saveOfflineStockReports(dReports, { forcePending: false }).catch(() => {});
+          if (user?.role !== "rep") {
+            const initialRem: Record<string, string> = {};
+            dReports.forEach((rep: StockReport) => {
+              initialRem[rep.productId] = String(rep.remainingQty);
+            });
+            setRemainingInputs((prev) => (Object.keys(prev).length === 0 ? initialRem : prev));
+          }
+        } else {
+          try {
+            const offlineReports = await getOfflineStockReports(user?.id, user?.role);
+            if (offlineReports.length > 0) {
+              setStockReports(offlineReports);
+              if (user?.role !== "rep") {
+                const initialRem: Record<string, string> = {};
+                offlineReports.forEach((rep: StockReport) => {
+                  initialRem[rep.productId] = String(rep.remainingQty);
+                });
+                setRemainingInputs((prev) => (Object.keys(prev).length === 0 ? initialRem : prev));
+              }
+            }
+          } catch (idbErr) {
+            console.warn("IndexedDB offline stock reports fallback error:", idbErr);
+          }
+        }
+      };
+
+      const visitsTask = async () => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const visitsUrl = user?.role === "rep" ? "/api/visits" : `/api/visits?clientId=${user?.id}`;
+          const rVisits = await fetch(visitsUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctVisits = rVisits.headers.get("content-type") || "";
+          if (rVisits.ok && ctVisits.includes("application/json")) {
+            const dVisits = await rVisits.json();
+            if (Array.isArray(dVisits)) setVisits(dVisits);
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "visits"), 2500);
+            const fsVisits = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Visit));
             setVisits(fsVisits);
-          } catch (fsErr) {
-            console.warn("Firestore visits fallback err:", fsErr);
+          }
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "visits"), 2500);
+              const fsVisits = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Visit));
+              setVisits(fsVisits);
+            } catch (fsErr) {
+              console.warn("Firestore visits fallback err:", fsErr);
+            }
           }
         }
-      }
+      };
 
-      // 4. Fetch notifications
-      try {
-        const notifsUrl = user?.role === "rep" ? "/api/notifications" : `/api/notifications?clientId=${user?.id}`;
-        const rNotifs = await fetch(notifsUrl);
-        const ctNotifs = rNotifs.headers.get("content-type") || "";
-        if (rNotifs.ok && ctNotifs.includes("application/json")) {
-          const dNotifs: Notification[] = await rNotifs.json();
-          if (Array.isArray(dNotifs)) {
-            setNotifications(dNotifs);
-          }
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "notifications"));
-          const fsNotifs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
-          setNotifications(fsNotifs);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
-          try {
-            const snapshot = await getDocs(collection(db, "notifications"));
-            const fsNotifs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
+      const notificationsTask = async () => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const notifsUrl = user?.role === "rep" ? "/api/notifications" : `/api/notifications?clientId=${user?.id}`;
+          const rNotifs = await fetch(notifsUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctNotifs = rNotifs.headers.get("content-type") || "";
+          if (rNotifs.ok && ctNotifs.includes("application/json")) {
+            const dNotifs: Notification[] = await rNotifs.json();
+            if (Array.isArray(dNotifs)) {
+              setNotifications(dNotifs);
+            }
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
+            const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
             setNotifications(fsNotifs);
-          } catch (fsErr) {
-            console.warn("Firestore notifications fallback err:", fsErr);
+          }
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
+              const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
+              setNotifications(fsNotifs);
+            } catch (fsErr) {
+              console.warn("Firestore notifications fallback err:", fsErr);
+            }
           }
         }
-      }
+      };
 
-      // 5. Fetch registered users for representative
-      if (user?.role === "rep") {
-        fetchAllRegisteredUsers();
-      }
-
-      // 6. Fetch agreements
-      try {
-        const agreementsUrl = user?.role === "rep" ? "/api/agreements" : `/api/agreements?clientId=${user?.id}`;
-        const rAgreements = await fetch(agreementsUrl);
-        const ctAgreements = rAgreements.headers.get("content-type") || "";
-        if (rAgreements.ok && ctAgreements.includes("application/json")) {
-          const dAgreements: Agreement[] = await rAgreements.json();
-          if (Array.isArray(dAgreements)) {
-            setAgreements(dAgreements);
-          }
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "agreements"));
-          const fsAgreements = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Agreement));
-          const filtered = user?.role === "rep"
-            ? fsAgreements
-            : fsAgreements.filter(a => a.clientId === user?.id || a.clientPhone === user?.phone);
-          setAgreements(filtered);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
-          try {
-            const snapshot = await getDocs(collection(db, "agreements"));
-            const fsAgreements = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Agreement));
+      const agreementsTask = async () => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const agreementsUrl = user?.role === "rep" ? "/api/agreements" : `/api/agreements?clientId=${user?.id}`;
+          const rAgreements = await fetch(agreementsUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctAgreements = rAgreements.headers.get("content-type") || "";
+          if (rAgreements.ok && ctAgreements.includes("application/json")) {
+            const dAgreements: Agreement[] = await rAgreements.json();
+            if (Array.isArray(dAgreements)) {
+              setAgreements(dAgreements);
+            }
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "agreements"), 2500);
+            const fsAgreements = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Agreement));
             const filtered = user?.role === "rep"
               ? fsAgreements
-              : fsAgreements.filter(a => a.clientId === user?.id || a.clientPhone === user?.phone);
+              : fsAgreements.filter((a: any) => a.clientId === user?.id || a.clientPhone === user?.phone);
             setAgreements(filtered);
-          } catch (fsErr) {
-            console.warn("Firestore agreements fallback err:", fsErr);
+          }
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "agreements"), 2500);
+              const fsAgreements = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Agreement));
+              const filtered = user?.role === "rep"
+                ? fsAgreements
+                : fsAgreements.filter((a: any) => a.clientId === user?.id || a.clientPhone === user?.phone);
+              setAgreements(filtered);
+            } catch (fsErr) {
+              console.warn("Firestore agreements fallback err:", fsErr);
+            }
           }
         }
-      }
+      };
 
-      // 7. Fetch complaints and suggestions
-      try {
-        const complaintsUrl = user?.role === "rep" ? "/api/complaints" : `/api/complaints?clientId=${user?.id}`;
-        const rComplaints = await fetch(complaintsUrl);
-        const ctComplaints = rComplaints.headers.get("content-type") || "";
-        if (rComplaints.ok && ctComplaints.includes("application/json")) {
-          const dComplaints: Complaint[] = await rComplaints.json();
-          if (Array.isArray(dComplaints)) {
-            setComplaints(dComplaints);
-          }
-        } else if (isFirebaseConfigured && db) {
-          const snapshot = await getDocs(collection(db, "complaints"));
-          const fsComplaints = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Complaint));
-          const filtered = user?.role === "rep"
-            ? fsComplaints
-            : fsComplaints.filter(c => c.clientId === user?.id || c.clientPhone === user?.phone);
-          setComplaints(filtered);
-        }
-      } catch (err) {
-        if (isFirebaseConfigured && db) {
-          try {
-            const snapshot = await getDocs(collection(db, "complaints"));
-            const fsComplaints = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Complaint));
+      const complaintsTask = async () => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const complaintsUrl = user?.role === "rep" ? "/api/complaints" : `/api/complaints?clientId=${user?.id}`;
+          const rComplaints = await fetch(complaintsUrl, { signal: controller.signal });
+          clearTimeout(timer);
+          const ctComplaints = rComplaints.headers.get("content-type") || "";
+          if (rComplaints.ok && ctComplaints.includes("application/json")) {
+            const dComplaints: Complaint[] = await rComplaints.json();
+            if (Array.isArray(dComplaints)) {
+              setComplaints(dComplaints);
+            }
+          } else if (isFirebaseConfigured && db) {
+            const snapshot = await getDocsWithTimeout(collection(db, "complaints"), 2500);
+            const fsComplaints = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Complaint));
             const filtered = user?.role === "rep"
               ? fsComplaints
-              : fsComplaints.filter(c => c.clientId === user?.id || c.clientPhone === user?.phone);
+              : fsComplaints.filter((c: any) => c.clientId === user?.id || c.clientPhone === user?.phone);
             setComplaints(filtered);
-          } catch (fsErr) {
-            console.warn("Firestore complaints fallback err:", fsErr);
+          }
+        } catch (err) {
+          if (isFirebaseConfigured && db) {
+            try {
+              const snapshot = await getDocsWithTimeout(collection(db, "complaints"), 2500);
+              const fsComplaints = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Complaint));
+              const filtered = user?.role === "rep"
+                ? fsComplaints
+                : fsComplaints.filter((c: any) => c.clientId === user?.id || c.clientPhone === user?.phone);
+              setComplaints(filtered);
+            } catch (fsErr) {
+              console.warn("Firestore complaints fallback err:", fsErr);
+            }
           }
         }
-      }
+      };
+
+      const usersTask = user?.role === "rep" ? fetchAllRegisteredUsers() : Promise.resolve();
+
+      // Execute all sync tasks concurrently in parallel
+      await Promise.allSettled([
+        ordersTask(),
+        stockReportsTask(),
+        visitsTask(),
+        notificationsTask(),
+        agreementsTask(),
+        complaintsTask(),
+        usersTask
+      ]);
+
       setLastSyncTime(new Date());
       if (showToast || isBackground) {
         triggerSyncToast(
@@ -2165,8 +2240,10 @@ export default function App() {
 
     if (isFirebaseConfigured && db) {
       try {
-        const cfgDoc = await getDoc(doc(db, "settings", "app_config"));
-        if (cfgDoc.exists()) {
+        const docPromise = getDoc(doc(db, "settings", "app_config"));
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2000));
+        const cfgDoc = (await Promise.race([docPromise, timeoutPromise])) as any;
+        if (cfgDoc && cfgDoc.exists && cfgDoc.exists()) {
           const cfgData = cfgDoc.data() as AppSettings;
           if (cfgData && cfgData.drProfileAvatar) {
             setDrProfileAvatar(cfgData.drProfileAvatar);
@@ -2204,7 +2281,10 @@ export default function App() {
       let networkSuccess = false;
 
       try {
-        const r = await fetch("/api/users");
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        const r = await fetch("/api/users", { signal: controller.signal });
+        clearTimeout(timer);
         const ct = r.headers.get("content-type") || "";
         if (r.ok && ct.includes("application/json")) {
           const data = await r.json();
@@ -2219,12 +2299,12 @@ export default function App() {
 
       if (isFirebaseConfigured && db) {
         try {
-          const snapshot = await getDocs(collection(db, "users"));
-          const fsUsers = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as User));
+          const snapshot = await getDocsWithTimeout(collection(db, "users"), 5000);
+          const fsUsers = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as User));
           if (fsUsers.length > 0) {
             // Merge Firestore users with server users
             const existingIds = new Set(usersList.map(u => u.id));
-            fsUsers.forEach(u => {
+            fsUsers.forEach((u: any) => {
               if (!existingIds.has(u.id)) {
                 usersList.push(u);
               }
@@ -2314,8 +2394,14 @@ export default function App() {
       });
       showSuccess(`تمت المزامنة اليدوية بنجاح (${res.syncedCount} عنصر تم رفعه) ☁️✓`);
       setPendingSyncCount(0);
-      fetchUserSpecificData(true);
-      fetchAllRegisteredUsers();
+      
+      // Full pull refresh
+      await Promise.all([
+        fetchProducts(),
+        fetchUserSpecificData(false, true),
+        fetchAllRegisteredUsers(),
+        fetchAppSettings()
+      ]);
     } catch (err) {
       showError("حدث خطأ أثناء المزامنة اليدوية");
     } finally {
@@ -3122,7 +3208,7 @@ export default function App() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    const finalPhone = cleanArabicPhone(phone.trim() || regForm.phone.trim());
+    const finalPhone = cleanArabicPhone(phone.trim());
     if (!finalPhone) {
       showError("الرجاء إدخال رقم الهاتف للتسجيل");
       return;
@@ -5329,7 +5415,7 @@ export default function App() {
               </button>
 
               <button
-                onClick={fetchUserSpecificData}
+                onClick={() => fetchUserSpecificData(false, true)}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors"
                 title="تحديث البيانات"
               >
@@ -6241,7 +6327,7 @@ export default function App() {
                 
                 {/* Reset or Sync Button */}
                 <button
-                  onClick={fetchUserSpecificData}
+                  onClick={() => fetchUserSpecificData(false, true)}
                   className="inline-flex items-center gap-1.5 self-start md:self-auto rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
@@ -10691,7 +10777,17 @@ export default function App() {
           setIsCVPageVisible(true);
         }}
         onProductScanned={(scannedProduct, quantityToAdd = 1) => {
-          handleAddToOrder(scannedProduct, quantityToAdd);
+          askConfirmation({
+            title: "تأكيد إضافة الصنف",
+            message: `هل تريد إضافة ${quantityToAdd} ${scannedProduct.name} إلى الطلبية؟`,
+            confirmLabel: "إضافة",
+            cancelLabel: "تراجع",
+            isDestructive: false,
+            onConfirm: () => {
+              handleAddToOrder(scannedProduct, quantityToAdd);
+              setIsQRScannerModalOpen(false);
+            }
+          });
         }}
       />
 

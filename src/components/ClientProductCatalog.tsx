@@ -39,6 +39,7 @@ interface ClientProductCatalogProps {
   getCategoryColor: (cat: string, colors?: Record<string, string>) => string;
   onAddToCart: (product: Product, quantity?: number) => void;
   onOpenCart: () => void;
+  onOpenScanner: () => void;
   user: User | null;
 }
 
@@ -223,19 +224,29 @@ const ClientProductCatalog: React.FC<ClientProductCatalogProps> = ({
         </div>
 
         {/* View Cart Button */}
-        <button
-          type="button"
-          onClick={onOpenCart}
-          className="relative px-5 py-2.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer z-10 shrink-0"
-        >
-          <ShoppingCart className="h-4 w-4" />
-          <span>سلة الطلبيات</span>
-          {totalCartCount > 0 && (
-            <span className="bg-slate-950 text-amber-300 font-mono text-xs px-2 py-0.5 rounded-full">
-              {totalCartCount}
-            </span>
-          )}
-        </button>
+        <div className="flex items-center gap-2 z-10">
+          <button
+            type="button"
+            onClick={onOpenScanner}
+            className="px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs shadow-md transition-all flex items-center gap-2 cursor-pointer"
+          >
+            <Camera className="h-4 w-4" />
+            <span>مسح باركود</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenCart}
+            className="relative px-5 py-2.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            <span>سلة الطلبيات</span>
+            {totalCartCount > 0 && (
+              <span className="bg-slate-950 text-amber-300 font-mono text-xs px-2 py-0.5 rounded-full">
+                {totalCartCount}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Comprehensive Search & Multi-Level Medical Filter Bar */}

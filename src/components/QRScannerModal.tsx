@@ -195,16 +195,23 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
 
   const handleCodeScanned = (decodedText: string) => {
     console.log("Barcode scanned:", decodedText);
+    
+    // Check if it's the CV URL
+    if (decodedText.includes("/cv/belal-cv-secret-link")) {
+      window.location.href = decodedText;
+      return;
+    }
+
     setLastScannedResult(decodedText);
     playScanBeep();
 
     const product = findProductMatch(decodedText);
-    if (product && localStorage.getItem("scan_and_go_cv") === "true") {
-      localStorage.setItem("pending_add_product", JSON.stringify({ product, quantity: addQuantity }));
-      localStorage.removeItem("scan_and_go_cv");
-      if (onShowCV) onShowCV();
-      return;
-    }
+    // if (product && localStorage.getItem("scan_and_go_cv") === "true") {
+    //   localStorage.setItem("pending_add_product", JSON.stringify({ product, quantity: addQuantity }));
+    //   localStorage.removeItem("scan_and_go_cv");
+    //   if (onShowCV) onShowCV();
+    //   return;
+    // }
 
     if (product) {
       setMatchedProduct(product);
