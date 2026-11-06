@@ -40,6 +40,7 @@ import {
   Bot
 } from "lucide-react";
 import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
+import { DailyOrderVolumeChart } from "./DailyOrderVolumeChart";
 import { GeminiChatModal } from "./GeminiChatModal";
 
 
@@ -802,8 +803,9 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
                   </div>
                 </div>
 
-                <div className="mt-4">
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <PharmacyOrdersChart orders={orders} />
+                  <DailyOrderVolumeChart orders={orders} />
                 </div>
 
                 {/* Visit Tracking Highlights Summary */}

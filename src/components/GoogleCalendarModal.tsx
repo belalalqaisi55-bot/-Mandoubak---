@@ -219,10 +219,10 @@ export const GoogleCalendarModal: React.FC<GoogleCalendarModalProps> = ({
     setSyncMessage("");
     try {
       let syncedCount = 0;
-      const targets = clients.length > 0 ? clients : [
-        { id: "1", name: "د. سامر خالد", entityName: "صيدلية النهضة الطبية", location: "شارع التحرير" },
-        { id: "2", name: "د. وفاء أحمد", entityName: "مستشفى الأمل التخصصي", location: "حدة" },
-        { id: "3", name: "د. إبراهيم ناصر", entityName: "صيدلية الدواء الشافي", location: "الصباحة" },
+      const targets: Array<{ id: string; name: string; entityName?: string; location?: string; phone?: string }> = clients.length > 0 ? clients : [
+        { id: "1", name: "د. سامر خالد", entityName: "صيدلية النهضة الطبية", location: "شارع التحرير", phone: "770000001" },
+        { id: "2", name: "د. وفاء أحمد", entityName: "مستشفى الأمل التخصصي", location: "حدة", phone: "770000002" },
+        { id: "3", name: "د. إبراهيم ناصر", entityName: "صيدلية الدواء الشافي", location: "الصباحة", phone: "770000003" },
       ];
 
       for (let i = 0; i < targets.length; i++) {

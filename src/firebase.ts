@@ -240,8 +240,7 @@ export async function testConnection() {
 }
 
 // Automatically test Firestore connection on boot as mandated by Firebase skill
-testConnection();
-
+// testConnection();
 export interface FirestoreProbeResult {
   configured: boolean;
   connected: boolean;

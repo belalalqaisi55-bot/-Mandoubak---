@@ -25,5 +25,19 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client", "vite-plugin-pwa/client"],
     "noEmit": true
-  }
+  },
+  "include": [
+    "src/**/*",
+    "api/**/*",
+    "server.ts",
+    "vite.config.ts",
+    "capacitor.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "android",
+    "app",
+    "mandoubk---c0cd97f3-main"
+  ]
 }

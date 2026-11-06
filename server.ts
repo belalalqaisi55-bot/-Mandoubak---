@@ -2190,18 +2190,26 @@ app.patch("/api/orders/:id", async (req, res) => {
     return res.status(400).json({ error: "حالة الطلب أو حالة الأرشفة مطلوبة" });
   }
 
-  let order;
-  if (isArchived !== undefined) {
-    order = await archiveOrderInDB(id, isArchived !== false);
-  } else {
-    order = await updateOrderStatusInDB(id, status);
-  }
+  console.log(`PATCH /api/orders/${id} called with status: ${status}, isArchived: ${isArchived}`);
 
-  if (!order) {
-    return res.status(404).json({ error: "الطلب غير موجود" });
-  }
+  try {
+    let order;
+    if (isArchived !== undefined) {
+      order = await archiveOrderInDB(id, isArchived !== false);
+    } else {
+      order = await updateOrderStatusInDB(id, status);
+    }
+    console.log(`PATCH /api/orders/${id} result:`, order);
 
-  res.json({ success: true, order });
+    if (!order) {
+      return res.status(404).json({ error: "الطلب غير موجود" });
+    }
+
+    res.json({ success: true, order });
+  } catch (err: any) {
+    console.error(`PATCH /api/orders/${id} error:`, err);
+    res.status(500).json({ error: "فشل تحديث الطلب في قاعدة البيانات", details: err.message });
+  }
 });
 
 app.post("/api/orders/archive-completed", async (req, res) => {

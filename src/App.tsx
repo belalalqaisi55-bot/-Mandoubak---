@@ -3837,7 +3837,8 @@ export default function App() {
         showSuccess("تم تحديث حالة طلب العميل بنجاح");
         fetchUserSpecificData();
       } else {
-        showError("فشل تحديث حالة الطلب");
+        const errorData = await r.json();
+        showError(`فشل تحديث حالة الطلب: ${errorData.error || "خطأ غير معروف"}`);
       }
     } catch (e) {
       showError("حدث خطأ أثناء تحديث حالة الطلب");
@@ -4390,7 +4391,7 @@ export default function App() {
         /* GUEST / UNAUTHENTICATED LOGIN SCREEN */
         <div className="min-h-screen bg-slate-50 flex flex-col justify-between" dir="rtl">
           {/* Main Header */}
-          <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-md shadow-xs">
+          <header className="sticky top-0 z-40 border-b border-teal-500/20 bg-gradient-to-r from-white/95 via-teal-50/50 to-white/95 backdrop-blur-md shadow-xs ring-1 ring-teal-500/10">
             <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <div className="relative shrink-0">
@@ -6068,7 +6069,7 @@ export default function App() {
               <SecretCVPage onBack={() => window.location.href = "/"} />
             ) : (
               <>
-                <header className="hidden lg:flex items-center justify-between px-4 py-2 bg-white border-b border-slate-200/90 sticky top-0 z-20 shadow-2xs">
+                <header className="hidden lg:flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-white/95 via-teal-50/40 to-white/95 border-b border-teal-500/20 backdrop-blur-md sticky top-0 z-20 shadow-2xs ring-1 ring-teal-500/10">
                   <div className="flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-teal-500 animate-pulse" />
                     <div>

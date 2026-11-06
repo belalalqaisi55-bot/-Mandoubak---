@@ -20,7 +20,8 @@ import {
   Syringe,
   Droplet,
   Layers,
-  RotateCcw
+  RotateCcw,
+  Camera
 } from "lucide-react";
 import { getProductDisplayImage } from "../utils/productImages";
 import {
@@ -73,6 +74,7 @@ const ClientProductCatalog: React.FC<ClientProductCatalogProps> = ({
   getCategoryColor,
   onAddToCart,
   onOpenCart,
+  onOpenScanner,
   user
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
