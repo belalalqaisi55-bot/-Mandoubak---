@@ -1761,7 +1761,8 @@ app.post("/api/settings", async (req, res) => {
     autoApproveKnownNumbers: req.body.autoApproveKnownNumbers !== undefined ? Boolean(req.body.autoApproveKnownNumbers) : current.autoApproveKnownNumbers,
     enableVisitTracking: req.body.enableVisitTracking !== undefined ? Boolean(req.body.enableVisitTracking) : (current.enableVisitTracking ?? true),
     drProfileAvatar: req.body.drProfileAvatar !== undefined ? String(req.body.drProfileAvatar) : (current.drProfileAvatar || ""),
-    productCategories: Array.isArray(req.body.productCategories) ? req.body.productCategories.map(String) : current.productCategories
+    productCategories: Array.isArray(req.body.productCategories) ? req.body.productCategories.map(String) : current.productCategories,
+    categoryColors: req.body.categoryColors ? req.body.categoryColors : current.categoryColors
   };
 
   await saveSettingsToDB(updated);
