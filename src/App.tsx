@@ -866,6 +866,7 @@ export default function App() {
   const [newProductForm, setNewProductForm] = useState({
     name: "",
     description: "",
+    activeIngredient: "",
     category: "عام",
     price: "",
     bonus: "",
@@ -3729,6 +3730,36 @@ export default function App() {
   };
 
   // Add Product (For Rep/Admin) - with predefined category support
+  const handleCategorizeProduct = async () => {
+    if (!newProductForm.activeIngredient.trim()) {
+      showError("يرجى إدخال المادة الفعالة أولاً");
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await fetch("/api/categorize-product", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: newProductForm.name,
+          activeIngredient: newProductForm.activeIngredient,
+          description: newProductForm.description,
+        }),
+      });
+      const data = await response.json();
+      if (data.category) {
+        setNewProductForm({ ...newProductForm, category: data.category });
+        showSuccess(`تم اقتراح التصنيف: ${data.category} 🤖`);
+      } else {
+        showError("فشل اقتراح التصنيف");
+      }
+    } catch (e) {
+      showError("حدث خطأ أثناء الاتصال بالذكاء الاصطناعي");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProductForm.name.trim() || !newProductForm.price.trim()) {
@@ -3748,6 +3779,7 @@ export default function App() {
       const prodPayload: Product = {
         id: "p_" + Date.now(),
         name: newProductForm.name.trim(),
+        activeIngredient: newProductForm.activeIngredient.trim(),
         description: newProductForm.description.trim(),
         category: selectedCategory,
         price: newProductForm.price.trim(),
@@ -3824,24 +3856,38 @@ export default function App() {
   };
 
   // Update order status (For Rep/Admin)
-  const handleUpdateOrderStatus = async (orderId: string, status: "pending" | "approved" | "completed" | "cancelled") => {
+  const handleUpdateOrderStatus = async (
+    orderId: string,
+    status: "pending" | "approved" | "completed" | "cancelled"
+  ) => {
     setLoading(true);
-    try {
-      const r = await fetch(`/api/orders/${orderId}`, {
+
+    const updateStatus = async (): Promise<Response> => {
+      const response = await fetch(`/api/orders/${orderId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      if (!response.ok) throw new Error("Request failed");
+      return response;
+    };
 
-      if (r.ok) {
-        showSuccess("تم تحديث حالة طلب العميل بنجاح");
-        fetchUserSpecificData();
-      } else {
-        const errorData = await r.json();
-        showError(`فشل تحديث حالة الطلب: ${errorData.error || "خطأ غير معروف"}`);
+    const retryOperation = async (fn: () => Promise<Response>, retries: number, delay: number): Promise<Response> => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (retries <= 0) throw error;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return retryOperation(fn, retries - 1, delay);
       }
+    };
+
+    try {
+      await retryOperation(updateStatus, 2, 1000); // 1 initial + 2 retries = 3 attempts total
+      showSuccess("تم تحديث حالة طلب العميل بنجاح");
+      fetchUserSpecificData();
     } catch (e) {
-      showError("حدث خطأ أثناء تحديث حالة الطلب");
+      showError("فشل تحديث حالة الطلب بعد 3 محاولات");
     } finally {
       setLoading(false);
     }
@@ -6962,20 +7008,50 @@ export default function App() {
                           required
                         />
                       </div>
-
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">المادة الفعالة (Active Ingredient)</label>
+                        <input
+                          type="text"
+                          placeholder="مثال: Paracetamol"
+                          value={newProductForm.activeIngredient}
+                          onChange={(e) => setNewProductForm({ ...newProductForm, activeIngredient: e.target.value })}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
+                        />
+                      </div>
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="block text-xs font-semibold text-slate-600">الفئة أو تصنيف الصنف *</label>
-                          <button
-                            type="button"
-                            onClick={() => setIsCategoryManagerOpen(true)}
-                            className="inline-flex items-center gap-1 text-3xs font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg px-2 py-0.5 transition-colors cursor-pointer"
-                            title="إدارة وإضافة تصنيفات جديدة وتخصيص الألوان"
-                          >
-                            <Palette className="h-3 w-3 text-teal-600" />
-                            <span>إدارة التصنيفات والألوان</span>
-                          </button>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={handleCategorizeProduct}
+                              disabled={loading}
+                              className="inline-flex items-center gap-1 text-3xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg px-2 py-0.5 transition-colors cursor-pointer"
+                              title="اقتراح التصنيف باستخدام الذكاء الاصطناعي"
+                            >
+                              <Sparkles className="h-3 w-3 text-indigo-600" />
+                              <span>{loading ? "جاري الاقتراح..." : "اقتراح AI"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsCategoryManagerOpen(true)}
+                              className="inline-flex items-center gap-1 text-3xs font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg px-2 py-0.5 transition-colors cursor-pointer"
+                              title="إدارة وإضافة تصنيفات جديدة وتخصيص الألوان"
+                            >
+                              <Palette className="h-3 w-3 text-teal-600" />
+                              <span>إدارة</span>
+                            </button>
+                          </div>
                         </div>
+                        <input
+                          type="text"
+                          placeholder="مثال: مضادات حيوية"
+                          value={newProductForm.category}
+                          onChange={(e) => setNewProductForm({ ...newProductForm, category: e.target.value })}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
+                          required
+                        />
+                      </div>
 
                         <div className="space-y-1.5">
                           <div className="flex items-center gap-1.5">
@@ -7089,7 +7165,7 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="sm:col-span-2">
+                      <div className="sm:col-span-3">
                         <label className="block text-xs font-semibold text-slate-600 mb-1.5">وصف مختصر للصنف ومؤشر الاستخدام</label>
                         <input
                           type="text"

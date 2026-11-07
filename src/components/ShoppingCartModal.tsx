@@ -49,6 +49,10 @@ export const ShoppingCartModal: React.FC<ShoppingCartModalProps> = ({
     setLocalNotes(agreedTermsNotes);
   }, [agreedTermsNotes]);
 
+  React.useEffect(() => {
+    localStorage.setItem("mandoubak_cart_items", JSON.stringify(cartItems));
+  }, [cartItems]);
+
   if (!isOpen) return null;
 
   // Calculate numerical price helper

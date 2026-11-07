@@ -8,6 +8,15 @@ import admin from "firebase-admin";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
 
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
+
 import session from 'express-session';
 import axios from 'axios';
 import qs from 'qs';
@@ -238,6 +247,36 @@ app.post("/api/diagnostics/ping", (req, res) => {
   });
 });
 
+// Auto-categorize product based on active ingredient
+app.post("/api/categorize-product", async (req, res) => {
+  const { productName, activeIngredient, description } = req.body;
+  if (!activeIngredient) {
+    return res.status(400).json({ error: "Active ingredient is required" });
+  }
+
+  try {
+    const prompt = `Classify this medical product into a broad category for a pharmacy inventory application.
+    Product: ${productName}
+    Active Ingredient: ${activeIngredient}
+    Description: ${description || "N/A"}
+
+    Return ONLY the category name in Arabic. Choose from these common pharmacy categories:
+    [عام, مضادات حيوية, مسكنات, أدوية قلب, أدوية ضغط, أدوية سكر, أجهزة طبية, فيتامينات ومكملات, أدوية جهاز هضمي, أدوية جهاز تنفسي].
+    If it doesn't fit exactly, choose the closest one.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+    });
+    
+    const category = response.text?.trim() || "عام";
+    res.json({ category });
+  } catch (err: any) {
+    console.error("AI Categorization failed:", err);
+    res.status(500).json({ error: "Failed to categorize product" });
+  }
+});
+
 // Comprehensive system and network diagnostics endpoint
 app.get("/api/diagnostics/system", async (req, res) => {
   let firestoreStatus = "offline-mode";
@@ -434,6 +473,7 @@ interface AppSettings {
   enableVisitTracking?: boolean;
   drProfileAvatar?: string;
   productCategories?: string[];
+  categoryColors?: Record<string, string>;
   geminiWebhookSecret?: string;
 }
 
