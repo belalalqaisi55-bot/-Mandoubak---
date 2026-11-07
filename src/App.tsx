@@ -3748,8 +3748,12 @@ export default function App() {
       });
       const data = await response.json();
       if (data.category) {
-        setNewProductForm({ ...newProductForm, category: data.category });
-        showSuccess(`تم اقتراح التصنيف: ${data.category} 🤖`);
+        const cat = data.category.trim();
+        if (cat && !availableCategories.includes(cat)) {
+          saveProductCategories([...availableCategories, cat]);
+        }
+        setNewProductForm((prev) => ({ ...prev, category: cat }));
+        showSuccess(`تم اقتراح التصنيف: ${cat} 🤖`);
       } else {
         showError("فشل اقتراح التصنيف");
       }
@@ -3807,6 +3811,7 @@ export default function App() {
       setNewProductForm({
         name: "",
         description: "",
+        activeIngredient: "",
         category: selectedCategory, // Keep current category selected for easier consecutive entry
         price: "",
         bonus: "",
@@ -7043,15 +7048,6 @@ export default function App() {
                             </button>
                           </div>
                         </div>
-                        <input
-                          type="text"
-                          placeholder="مثال: مضادات حيوية"
-                          value={newProductForm.category}
-                          onChange={(e) => setNewProductForm({ ...newProductForm, category: e.target.value })}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
-                          required
-                        />
-                      </div>
 
                         <div className="space-y-1.5">
                           <div className="flex items-center gap-1.5">
