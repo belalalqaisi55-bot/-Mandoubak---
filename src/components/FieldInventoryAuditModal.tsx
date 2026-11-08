@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   X,
   FileSpreadsheet,
@@ -62,7 +62,7 @@ export const FieldInventoryAuditModal: React.FC<FieldInventoryAuditModalProps> =
   const [lastSubmittedReports, setLastSubmittedReports] = useState<StockReport[]>([]);
 
   // Update selected client if initialClientId changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (initialClientId) {
       setSelectedClientId(initialClientId);
     } else if (!selectedClientId && eligibleClients.length > 0) {

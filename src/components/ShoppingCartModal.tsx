@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Product, CartItem, User } from "../types";
 import {
   ShoppingCart,
@@ -42,14 +42,14 @@ export const ShoppingCartModal: React.FC<ShoppingCartModalProps> = ({
   agreedTermsNotes = "",
   setAgreedTermsNotes
 }) => {
-  const [localNotes, setLocalNotes] = React.useState(agreedTermsNotes);
-  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [localNotes, setLocalNotes] = useState(agreedTermsNotes);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setLocalNotes(agreedTermsNotes);
   }, [agreedTermsNotes]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     localStorage.setItem("mandoubak_cart_items", JSON.stringify(cartItems));
   }, [cartItems]);
 

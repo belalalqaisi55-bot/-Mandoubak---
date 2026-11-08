@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Product, StockReport, Order, OrderItem, User, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
 import { PharmaGames } from "./components/PharmaGames";
@@ -4090,7 +4090,7 @@ export default function App() {
   }, 0);
 
   // Derive unique clients list based strictly on registered users (pharmacies and doctors)
-  const uniqueClients = React.useMemo(() => {
+  const uniqueClients = useMemo(() => {
     const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
     return registeredUsers
       .filter((u) => (u.role === "pharmacy" || u.role === "doctor") && !defaultClientIds.has(u.id))

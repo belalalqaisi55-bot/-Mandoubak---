@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { listenToNetworkStatus, isDeviceOnline, getPendingSyncCounts } from "../utils/offlineSync";
 
 export function useConnectionStatus() {
-  const [isOnline, setIsOnline] = React.useState(isDeviceOnline());
-  const [syncCount, setSyncCount] = React.useState(0);
-  const [latency, setLatency] = React.useState<number>(0);
+  const [isOnline, setIsOnline] = useState(isDeviceOnline());
+  const [syncCount, setSyncCount] = useState(0);
+  const [latency, setLatency] = useState<number>(0);
 
-  React.useEffect(() => {
+  const refreshSyncCount = useCallback(async () => {
+    const counts = await getPendingSyncCounts();
+    setSyncCount(counts.total);
+  }, []);
+
+  useEffect(() => {
     const cleanup = listenToNetworkStatus((online) => {
       setIsOnline(online);
       refreshSyncCount();
@@ -46,11 +51,6 @@ export function useConnectionStatus() {
       if (conn) conn.removeEventListener("change", updateLatency);
     };
   }, []);
-
-  const refreshSyncCount = async () => {
-    const counts = await getPendingSyncCounts();
-    setSyncCount(counts.total);
-  };
 
   return { isOnline, syncCount, refreshSyncCount, latency };
 }

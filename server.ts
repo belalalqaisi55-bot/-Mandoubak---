@@ -131,6 +131,22 @@ app.get(["/manifest.webmanifest", "/manifest.json", "/site.webmanifest"], (req, 
 });
 
 app.get("/sw.js", (req, res) => {
+  if (process.env.NODE_ENV !== "production") {
+    // In development mode, always serve a self-unregistering, cache-purging service worker to avoid stale Vite chunk caching
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.setHeader("Service-Worker-Allowed", "/");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    return res.send(`
+      self.addEventListener('install', (e) => { self.skipWaiting(); });
+      self.addEventListener('activate', (e) => {
+        e.waitUntil(
+          caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+            .then(() => self.registration.unregister())
+        );
+      });
+      self.addEventListener('fetch', () => {});
+    `);
+  }
   const swPath = fs.existsSync(path.join(process.cwd(), "dist", "sw.js"))
     ? path.join(process.cwd(), "dist", "sw.js")
     : path.join(process.cwd(), "public", "sw.js");

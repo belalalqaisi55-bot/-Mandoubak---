@@ -16,6 +16,7 @@ import {
   inMemoryPersistence
 } from "firebase/auth";
 import { getStorage } from "firebase/storage";
+import { getMessaging } from "firebase/messaging";
 import {
   initializeFirestore,
   getFirestore,
@@ -43,7 +44,8 @@ let db: any = null;
 let auth: any = null;
 let storage: any = null;
 let appCheck: any = null;
-export { app, auth, db, storage, appCheck };
+let messaging: any = null;
+export { app, auth, db, storage, appCheck, messaging };
 const googleProvider = new GoogleAuthProvider();
 
 if (isFirebaseConfigured) {
@@ -105,6 +107,12 @@ if (isFirebaseConfigured) {
       } catch (appCheckErr) {
         // Silently catch app check errors
       }
+    }
+
+    try {
+      messaging = getMessaging(app);
+    } catch (msgErr) {
+      console.warn("Firebase Messaging initialization notice:", msgErr);
     }
 
     // Attempt silent anonymous sign-in so Firestore has a valid auth session

@@ -3,80 +3,99 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // Helper functions
     function isSignedIn() { return request.auth != null; }
-    function isValidId(id) { return id is string && id.size() <= 128; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-    function isRep() {
-      return isSignedIn() && (
-        (request.auth.token.email != null && request.auth.token.email.lower() == 'belalalqaisi55@gmail.com') ||
-        request.auth.uid == 'u_rep'
-      );
+    
+    // Auth helpers
+    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
+    function isRep() { return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'rep'; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+
+    // Validation helpers
+    function isValidUser(data) {
+        return data.id is string && data.id.size() <= 128 &&
+               data.phone is string && data.phone.size() <= 32 &&
+               data.name is string && data.name.size() <= 128 &&
+               data.role in ['pharmacy', 'doctor', 'rep'];
+    }
+    function isValidOrder(data) {
+        return data.id is string && data.id.size() <= 128 &&
+               data.userId is string && data.userId.size() <= 128 &&
+               data.status in ['pending', 'processing', 'completed', 'cancelled'];
     }
 
-    // Connection testing probes
-    match /test/{docId} {
-      allow read, write: if true;
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
     }
 
-    match /_diagnostics/{docId} {
-      allow read, write: if true;
+    // 1. Users
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin() || isRep());
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && incoming().role != 'admin'; 
+      allow update: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'location']) || isAdmin();
     }
 
-    // Products collection (Public read for pharmaceutical catalog browsing)
+    // 2. Products - Public read, Admin write
     match /products/{productId} {
       allow read: if true;
-      allow create, update, delete: if isSignedIn() || true;
+      allow write: if isAdmin();
     }
 
-    // Settings collection (Public read for app config, categories, and branding)
+    // 3. Settings - Public read, Admin write
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isSignedIn() || true;
+      allow write: if isAdmin();
     }
 
-    // Notifications and broadcasts (Public read so all pharmacies receive announcements)
+    // 4. Notifications - Public read, Admin write
     match /notifications/{notificationId} {
-      allow read: if true;
-      allow write: if isSignedIn() || true;
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    // Users and clients
-    match /users/{userId} {
-      allow read, write: if true;
-    }
-
-    // Supply orders placed by clients
+    // 5. Orders - Own read, Admin/Rep read all
     match /orders/{orderId} {
-      allow read, write: if true;
+      allow list: if isAdmin() || isRep();
+      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow create: if isSignedIn() && isOwner(incoming().userId) && isValidOrder(incoming());
+      allow update: if isAdmin() || (isSignedIn() && isOwner(existing().userId) && isValidOrder(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes']));
     }
 
-    // Stock availability reports
+    // 6. StockReports - Own read, Admin/Rep read all
     match /stockReports/{reportId} {
-      allow read, write: if true;
+      allow list: if isAdmin() || isRep();
+      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow create: if isSignedIn() && isOwner(incoming().userId);
     }
 
-    // Medical rep visit logs
+    // 7. Visits - Own read, Admin/Rep read all
     match /visits/{visitId} {
-      allow read, write: if true;
+      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow write: if isAdmin() || isRep();
     }
 
-    // Agreements and bonuses
+    // 8. Agreements - Own read, Admin/Rep read all
     match /agreements/{agreementId} {
-      allow read, write: if true;
+      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow write: if isAdmin() || isRep();
     }
 
-    // Complaints and suggestions
+    // 9. Complaints - Own read, Admin/Rep read all
     match /complaints/{complaintId} {
-      allow read, write: if true;
+      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow create: if isSignedIn() && isOwner(incoming().userId);
+      allow update: if isAdmin();
     }
 
-    // Admin recycle bin and notes
+    // 10. Admin Recycle Bin and Notes
     match /trash_archive/{itemId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
 
     match /keep_notes/{noteId} {
-      allow read, write: if true;
+      allow read, write: if isSignedIn() && (isOwner(resource.data.userId) || isOwner(incoming().userId));
     }
   }
 }

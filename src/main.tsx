@@ -112,13 +112,28 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
   }
 }
 
-// Service Worker registration for PWA installability and offline support
+// Service Worker handling: unregister & clear caches in dev mode to prevent stale React prebundled chunk conflicts; register in production
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
-      console.debug('Service Worker registration notice:', err);
+  if (import.meta.env.DEV) {
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      for (const reg of registrations) {
+        reg.unregister().catch(() => {});
+      }
     });
-  });
+    if ('caches' in window) {
+      caches.keys().then((names) => {
+        for (const name of names) {
+          caches.delete(name).catch(() => {});
+        }
+      });
+    }
+  } else {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+        console.debug('Service Worker registration notice:', err);
+      });
+    });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

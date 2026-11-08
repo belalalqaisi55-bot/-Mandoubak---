@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { DeviceInfo } from "../types";
 import {
   Smartphone,
@@ -29,7 +29,7 @@ export const DeviceInfoModal: React.FC<DeviceInfoModalProps> = ({
   deviceInfo,
   onRefresh,
 }) => {
-  const [copied, setCopied] = React.useState(false);
+  const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
 

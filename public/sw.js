@@ -38,13 +38,20 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  // Skip non-GET, API routes, Firebase Auth, and Vite dev modules
+  // Skip non-GET, API routes, Firebase Auth, and Vite dev modules / pre-bundled dependencies
   if (
     request.method !== 'GET' ||
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.includes('/node_modules/') ||
+    url.pathname.includes('/.vite/') ||
+    url.pathname.includes('/@vite/') ||
+    url.pathname.includes('/@fs/') ||
+    url.search.includes('v=') ||
+    url.search.includes('import') ||
+    url.search.includes('t=') ||
     url.hostname.includes('firebaseio.com') ||
-    url.hostname.includes('googleapis.com') ||
-    url.pathname.includes('/@vite/')
+    url.hostname.includes('googleapis.com')
   ) {
     return;
   }

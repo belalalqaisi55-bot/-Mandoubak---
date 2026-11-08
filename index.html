@@ -4,6 +4,24 @@
     <script>
       // Silence Vite HMR WebSocket errors in AI Studio iframe environment
       (() => {
+        // Immediately unregister any active service worker and clear caches in development
+        if (typeof window !== 'undefined' && (location.hostname.includes('ais-dev') || location.hostname === 'localhost' || location.port === '3000')) {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then((regs) => {
+              for (const r of regs) {
+                r.unregister().catch(() => {});
+              }
+            });
+          }
+          if ('caches' in window) {
+            caches.keys().then((keys) => {
+              for (const k of keys) {
+                caches.delete(k).catch(() => {});
+              }
+            });
+          }
+        }
+
         const suppress = (arg) => {
           if (!arg) return false;
           const msg = (arg instanceof Error) ? (arg.message + ' ' + (arg.stack || '')) : String(arg);
