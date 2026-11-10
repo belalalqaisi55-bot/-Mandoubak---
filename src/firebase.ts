@@ -329,3 +329,21 @@ export async function probeFirestoreDetailed(): Promise<FirestoreProbeResult> {
   }
 }
 
+export async function requestFcmToken() {
+  try {
+    const vapidKey = "BEHZAw2EXT3QP8Xys_TX3zUJh5mYjW2fmzIeniR7LycadSd01-IYa0WIeVHEKP9h8k386fnkknmDXPxFKlszxQg";
+
+    const { getToken } = await import("firebase/messaging");
+    const token = await getToken(messaging, { vapidKey });
+    if (token) {
+      console.log("تم الحصول على توكن FCM بنجاح:", token);
+      return token;
+    } else {
+      console.warn("لم يتم الحصول على توكن، تحقق من صلاحيات المتصفح.");
+      return null;
+    }
+  } catch (err) {
+    console.error("خطأ أثناء الحصول على توكن FCM:", err);
+    return null;
+  }
+};

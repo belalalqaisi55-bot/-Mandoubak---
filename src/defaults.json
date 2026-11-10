@@ -155,6 +155,126 @@
       "role": "rep",
       "isApproved": true,
       "status": "approved"
+    },
+    {
+      "id": "c_nahda",
+      "name": "د. سامر خالد",
+      "entityName": "صيدلية النهضة الطبية",
+      "phone": "+967770000001",
+      "location": "شارع التحرير، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3533,
+      "lng": 44.2078
+    },
+    {
+      "id": "c_nour",
+      "name": "د. أحمد الصالح",
+      "entityName": "صيدلية النور الحديثة",
+      "phone": "+967770000002",
+      "location": "شارع تعز، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3341,
+      "lng": 44.2185
+    },
+    {
+      "id": "c_rawda",
+      "name": "د. محمد فارع",
+      "entityName": "صيدلية الروضة المركزية",
+      "phone": "+967770000003",
+      "location": "حي الروضة، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.4124,
+      "lng": 44.2091
+    },
+    {
+      "id": "c_shifa",
+      "name": "د. محمد القاسمي",
+      "entityName": "صيدلية الشفاء التخصصية",
+      "phone": "+967771234567",
+      "location": "شارع حدة، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3218,
+      "lng": 44.1950
+    },
+    {
+      "id": "c_amal",
+      "name": "د. وفاء أحمد",
+      "entityName": "مستشفى وعيادات الأمل التخصصي",
+      "phone": "+967770000004",
+      "location": "حدة، صنعاء",
+      "role": "doctor",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3275,
+      "lng": 44.1890
+    },
+    {
+      "id": "c_sina",
+      "name": "د. مروان القدسي",
+      "entityName": "صيدلية ابن سينا المركزية",
+      "phone": "+967770000005",
+      "location": "الدائري الغربي، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3610,
+      "lng": 44.1872
+    },
+    {
+      "id": "c_salam",
+      "name": "د. رياض الشميري",
+      "entityName": "صيدلية السلام الكبرى",
+      "phone": "+967770000006",
+      "location": "الحصبة، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3850,
+      "lng": 44.2010
+    },
+    {
+      "id": "c_quds",
+      "name": "د. طارق الحكيمي",
+      "entityName": "صيدلية القدس الدولية",
+      "phone": "+967770000007",
+      "location": "شارع الزبيري، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3480,
+      "lng": 44.2015
+    },
+    {
+      "id": "c_hayat",
+      "name": "د. سارة المنصوب",
+      "entityName": "مركز الحياة الطبي التخصصي",
+      "phone": "+967770000008",
+      "location": "الأصبحي، صنعاء",
+      "role": "doctor",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.2980,
+      "lng": 44.2250
+    },
+    {
+      "id": "c_baraka",
+      "name": "د. عبدالحكيم الشامي",
+      "entityName": "صيدلية البركة النموذجية",
+      "phone": "+967770000009",
+      "location": "شارع الستين الجنوبي، صنعاء",
+      "role": "pharmacy",
+      "isApproved": true,
+      "status": "approved",
+      "lat": 15.3120,
+      "lng": 44.1780
     }
   ]
 }

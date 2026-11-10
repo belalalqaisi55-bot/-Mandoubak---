@@ -8,8 +8,18 @@ service cloud.firestore {
     function existing() { return resource.data; }
     
     // Auth helpers
-    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
-    function isRep() { return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'rep'; }
+    function isSuperAdminUser() {
+      return isSignedIn() && (
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'belalalqaisi55@gmail.com') ||
+        (request.auth.token.keys().hasAny(['phone_number']) && request.auth.token.phone_number == '+967776600049')
+      );
+    }
+    function isAdmin() {
+      return isSuperAdminUser() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+    function isRep() {
+      return isSuperAdminUser() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'rep');
+    }
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
 
     // Validation helpers
@@ -21,8 +31,7 @@ service cloud.firestore {
     }
     function isValidOrder(data) {
         return data.id is string && data.id.size() <= 128 &&
-               data.userId is string && data.userId.size() <= 128 &&
-               data.status in ['pending', 'processing', 'completed', 'cancelled'];
+               data.status in ['pending', 'approved', 'completed', 'cancelled', 'processing'];
     }
 
     // Default deny
@@ -32,9 +41,11 @@ service cloud.firestore {
 
     // 1. Users
     match /users/{userId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin() || isRep());
-      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && incoming().role != 'admin'; 
-      allow update: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'location']) || isAdmin();
+      allow list: if isSignedIn() && (isAdmin() || isRep() || isSuperAdminUser());
+      allow get: if isSignedIn();
+      allow create: if isSignedIn(); 
+      allow update: if isSignedIn() && (isOwner(userId) || isAdmin() || isRep() || isSuperAdminUser());
+      allow delete: if isAdmin() || isRep() || isSuperAdminUser();
     }
 
     // 2. Products - Public read, Admin write
@@ -58,9 +69,10 @@ service cloud.firestore {
     // 5. Orders - Own read, Admin/Rep read all
     match /orders/{orderId} {
       allow list: if isAdmin() || isRep();
-      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
-      allow create: if isSignedIn() && isOwner(incoming().userId) && isValidOrder(incoming());
-      allow update: if isAdmin() || (isSignedIn() && isOwner(existing().userId) && isValidOrder(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes']));
+      allow get: if isSignedIn() && (isOwner(resource.data.userId) || (resource.data.keys().hasAny(['clientId']) && isOwner(resource.data.clientId)) || isAdmin() || isRep());
+      allow create: if isSignedIn();
+      allow update: if isAdmin() || isRep() || (isSignedIn() && ((resource.data.keys().hasAny(['userId']) && isOwner(resource.data.userId)) || (resource.data.keys().hasAny(['clientId']) && isOwner(resource.data.clientId))));
+      allow delete: if isAdmin() || isRep();
     }
 
     // 6. StockReports - Own read, Admin/Rep read all

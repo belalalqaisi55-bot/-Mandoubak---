@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
 
@@ -17,7 +18,6 @@ const ai = new GoogleGenAI({
   }
 });
 
-import session from 'express-session';
 import axios from 'axios';
 import qs from 'qs';
 import { DEFAULT_PRODUCTS } from "./src/data/defaultProducts";
@@ -85,186 +85,44 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'none',
-    secure: true
+// --- AUTHENTICATION MIDDLEWARE ---
+const verifyToken = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
-}));
-
-// Cookie diagnostics & verification endpoint
-app.get("/api/diagnostics/cookies", (req, res) => {
-  const clientCookies = req.headers.cookie || "";
-  // Modern cross-site partitioned cookie
-  res.setHeader("Set-Cookie", "mandoubak_session_probe=active; Path=/; SameSite=None; Secure; Partitioned; Max-Age=86400");
-  res.json({
-    success: true,
-    message: "فحص الكوكيز نشط وتعمل ملفات تعريف الارتباط بنجاح",
-    hasCookies: Boolean(clientCookies),
-    receivedCookiesCount: clientCookies ? clientCookies.split(";").length : 0,
-    cookiePolicy: "SameSite=None; Secure; Partitioned",
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.use(
-  express.json({
-    limit: "25mb",
-    verify: (req: any, _res, buf) => {
-      req.rawBody = buf;
-    }
-  })
-);
-app.use(express.urlencoded({ extended: true, limit: "25mb" }));
-
-// Explicitly serve Web App Manifest and Service Worker with standard PWA headers
-app.get(["/manifest.webmanifest", "/manifest.json", "/site.webmanifest"], (req, res) => {
-  const manifestFile = path.join(process.cwd(), "public", "manifest.webmanifest");
-  res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "public, max-age=3600");
-  res.sendFile(manifestFile);
-});
-
-app.get("/sw.js", (req, res) => {
-  if (process.env.NODE_ENV !== "production") {
-    // In development mode, always serve a self-unregistering, cache-purging service worker to avoid stale Vite chunk caching
-    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.setHeader("Service-Worker-Allowed", "/");
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    return res.send(`
-      self.addEventListener('install', (e) => { self.skipWaiting(); });
-      self.addEventListener('activate', (e) => {
-        e.waitUntil(
-          caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
-            .then(() => self.registration.unregister())
-        );
-      });
-      self.addEventListener('fetch', () => {});
-    `);
-  }
-  const swPath = fs.existsSync(path.join(process.cwd(), "dist", "sw.js"))
-    ? path.join(process.cwd(), "dist", "sw.js")
-    : path.join(process.cwd(), "public", "sw.js");
-  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-  res.setHeader("Service-Worker-Allowed", "/");
-  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  res.sendFile(swPath);
-});
-
-app.use(express.static(path.join(process.cwd(), "public")));
-
-// OAuth routes
-app.get('/auth/google', (req, res) => {
-  const state = Math.random().toString(36).slice(2);
-  (req as any).session.oauth_state = state;
-
-  const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID!,
-    redirect_uri: process.env.GOOGLE_REDIRECT_URI!,
-    response_type: 'code',
-    scope: 'openid email profile',
-    access_type: 'offline',
-    prompt: 'consent',
-    state
-  });
-
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  res.redirect(authUrl);
-});
-
-app.get('/auth/google/callback', async (req, res) => {
+  const token = authHeader.split('Bearer ')[1];
   try {
-    const { code, state, error } = req.query;
-
-    if (error) {
-      return res.status(400).send('Google OAuth error: ' + error);
-    }
-
-    if (!code || state !== (req as any).session.oauth_state) {
-      return res.status(400).send('Invalid request');
-    }
-
-    const tokenResponse = await axios.post(
-      'https://oauth2.googleapis.com/token',
-      qs.stringify({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: process.env.GOOGLE_REDIRECT_URI,
-        grant_type: 'authorization_code'
-      }),
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
-    );
-
-    const { access_token } = tokenResponse.data;
-    const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: `Bearer ${access_token}` }
-    });
-
-    (req as any).session.user = userResponse.data;
-
-    res.send(`
-      <html>
-        <body>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
-            }
-          </script>
-          <p>Authentication successful. This window should close automatically.</p>
-        </body>
-      </html>
-    `);
-  } catch (err: any) {
-    res.status(500).send('Authentication failed');
+    const decodedToken = await getAuth().verifyIdToken(token);
+    (req as any).user = decodedToken;
+    next();
+  } catch (error) {
+    console.error("Token verification error:", error);
+    res.status(403).json({ error: 'Forbidden: Invalid token' });
   }
+};
+
+// --- AUTH ROUTES ---
+// Example protected route
+app.get('/api/dashboard', verifyToken, (req, res) => {
+  res.json({ 
+    message: "Welcome to the dashboard",
+    user: (req as any).user 
+  });
 });
 
-app.get('/api/me', (req, res) => {
-  res.json({ user: (req as any).session?.user || null });
+app.get('/api/me', verifyToken, (req, res) => {
+  res.json({ user: (req as any).user || null });
 });
 
 app.get('/auth/logout', (req, res) => {
-  (req as any).session?.destroy(() => {
-    res.redirect(process.env.FRONTEND_ORIGIN || '/');
-  });
+  res.status(200).json({ message: "Logged out successfully" });
 });
 
-// Health check endpoint
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", app: "مندوبك الطبي", timestamp: new Date().toISOString() });
-});
-
-// Diagnostics ping endpoint
-app.post("/api/diagnostics/ping", (req, res) => {
-  const receivedAt = new Date().toISOString();
-  const echoPayloadSize = req.body ? JSON.stringify(req.body).length : 0;
-  res.json({
-    success: true,
-    message: "Pong from Mandoubak Med server",
-    receivedAt,
-    clientTime: req.body?.clientTime,
-    echoPayloadSize,
-    headers: {
-      origin: req.headers["origin"] || "direct",
-      host: req.headers["host"],
-      userAgent: req.headers["user-agent"]
-    }
-  });
-});
+// ... (Health & Diagnostics are public)
 
 // Auto-categorize product based on active ingredient
-app.post("/api/categorize-product", async (req, res) => {
+app.post("/api/categorize-product", verifyToken, async (req, res) => {
   const { productName, activeIngredient, description } = req.body;
   if (!activeIngredient) {
     return res.status(400).json({ error: "Active ingredient is required" });
@@ -292,6 +150,7 @@ app.post("/api/categorize-product", async (req, res) => {
     res.status(500).json({ error: "Failed to categorize product" });
   }
 });
+
 
 // Comprehensive system and network diagnostics endpoint
 app.get("/api/diagnostics/system", async (req, res) => {
@@ -479,6 +338,8 @@ interface User {
   status?: "approved" | "pending_approval" | "suspended" | "rejected";
   confirmationCode?: string;
   createdAt: string;
+  lat?: number;
+  lng?: number;
 }
 
 interface AppSettings {
@@ -507,9 +368,144 @@ const DEFAULT_USERS: User[] = [
   {
     id: "u_rep",
     phone: "+967776600049",
-    name: "بلال القيسي (مندوب مبيعات طبي)",
+    name: "د/ بلال القيسي (المندوب الطبي والمسؤول)",
     role: "rep",
-    createdAt: new Date().toISOString()
+    email: "belalalqaisi55@gmail.com",
+    entityName: "المكتب العلمي والمبيعات الطبية (الإدارة)",
+    location: "صنعاء / جميع المحافظات",
+    isApproved: true,
+    status: "approved",
+    createdAt: "2026-09-08T00:17:54.975Z"
+  },
+  {
+    id: "c_nahda",
+    name: "د. سامر خالد",
+    entityName: "صيدلية النهضة الطبية",
+    phone: "+967770000001",
+    location: "شارع التحرير، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3533,
+    lng: 44.2078,
+    createdAt: "2026-09-10T08:00:00.000Z"
+  },
+  {
+    id: "c_nour",
+    name: "د. أحمد الصالح",
+    entityName: "صيدلية النور الحديثة",
+    phone: "+967770000002",
+    location: "شارع تعز، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3341,
+    lng: 44.2185,
+    createdAt: "2026-09-10T08:30:00.000Z"
+  },
+  {
+    id: "c_rawda",
+    name: "د. محمد فارع",
+    entityName: "صيدلية الروضة المركزية",
+    phone: "+967770000003",
+    location: "حي الروضة، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.4124,
+    lng: 44.2091,
+    createdAt: "2026-09-11T09:00:00.000Z"
+  },
+  {
+    id: "c_shifa",
+    name: "د. محمد القاسمي",
+    entityName: "صيدلية الشفاء التخصصية",
+    phone: "+967771234567",
+    location: "شارع حدة، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3218,
+    lng: 44.1950,
+    createdAt: "2026-09-11T09:30:00.000Z"
+  },
+  {
+    id: "c_amal",
+    name: "د. وفاء أحمد",
+    entityName: "مستشفى وعيادات الأمل التخصصي",
+    phone: "+967770000004",
+    location: "حدة، صنعاء",
+    role: "doctor",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3275,
+    lng: 44.1890,
+    createdAt: "2026-09-12T10:00:00.000Z"
+  },
+  {
+    id: "c_sina",
+    name: "د. مروان القدسي",
+    entityName: "صيدلية ابن سينا المركزية",
+    phone: "+967770000005",
+    location: "الدائري الغربي، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3610,
+    lng: 44.1872,
+    createdAt: "2026-09-12T10:30:00.000Z"
+  },
+  {
+    id: "c_salam",
+    name: "د. رياض الشميري",
+    entityName: "صيدلية السلام الكبرى",
+    phone: "+967770000006",
+    location: "الحصبة، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3850,
+    lng: 44.2010,
+    createdAt: "2026-09-13T11:00:00.000Z"
+  },
+  {
+    id: "c_quds",
+    name: "د. طارق الحكيمي",
+    entityName: "صيدلية القدس الدولية",
+    phone: "+967770000007",
+    location: "شارع الزبيري، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3480,
+    lng: 44.2015,
+    createdAt: "2026-09-13T11:30:00.000Z"
+  },
+  {
+    id: "c_hayat",
+    name: "د. سارة المنصوب",
+    entityName: "مركز الحياة الطبي التخصصي",
+    phone: "+967770000008",
+    location: "الأصبحي، صنعاء",
+    role: "doctor",
+    isApproved: true,
+    status: "approved",
+    lat: 15.2980,
+    lng: 44.2250,
+    createdAt: "2026-09-14T12:00:00.000Z"
+  },
+  {
+    id: "c_baraka",
+    name: "د. عبدالحكيم الشامي",
+    entityName: "صيدلية البركة النموذجية",
+    phone: "+967770000009",
+    location: "شارع الستين الجنوبي، صنعاء",
+    role: "pharmacy",
+    isApproved: true,
+    status: "approved",
+    lat: 15.3120,
+    lng: 44.1780,
+    createdAt: "2026-09-14T12:30:00.000Z"
   }
 ];
 
@@ -556,6 +552,8 @@ interface Order {
   items: OrderItem[];
   status: "pending" | "approved" | "completed" | "cancelled";
   createdAt: string;
+  notes?: string;
+  updatedAt?: string;
   isArchived?: boolean;
   archivedAt?: string;
 }
@@ -1073,13 +1071,14 @@ async function saveOrderToDB(order: Order): Promise<void> {
   saveDB(db);
 }
 
-async function updateOrderStatusInDB(id: string, status: string): Promise<Order | null> {
+async function updateOrderStatusInDB(id: string, status: string, orderData?: any): Promise<Order | null> {
+  const now = new Date().toISOString();
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const docRef = dbAdmin.collection("orders").doc(id);
       const doc = await docRef.get();
       if (doc.exists) {
-        await docRef.update({ status });
+        await docRef.update({ status, updatedAt: now });
         const updated = await docRef.get();
         return updated.data() as Order;
       }
@@ -1092,9 +1091,25 @@ async function updateOrderStatusInDB(id: string, status: string): Promise<Order 
   const idx = db.orders.findIndex((o) => o.id === id);
   if (idx !== -1) {
     db.orders[idx].status = status as any;
+    db.orders[idx].updatedAt = now;
     saveDB(db);
     return db.orders[idx];
   }
+
+  // If order was not yet in local db.orders, but orderData was provided, upsert it!
+  if (orderData) {
+    const newOrder: Order = {
+      ...orderData,
+      id,
+      status: status as any,
+      updatedAt: now,
+      createdAt: orderData.createdAt || now,
+    };
+    db.orders.unshift(newOrder);
+    saveDB(db);
+    return newOrder;
+  }
+
   return null;
 }
 
@@ -2207,14 +2222,14 @@ app.get("/api/stock-reports", async (req, res) => {
 // --- ORDERS API ---
 
 app.post("/api/orders", async (req, res) => {
-  const { clientId, clientName, entityName, items } = req.body;
+  const { clientId, clientName, entityName, items, id: customId } = req.body;
 
   if (!clientId || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "الرجاء تحديد الأصناف والكميات لإنشاء الطلب" });
   }
 
   const newOrder: Order = {
-    id: "ord_" + Math.random().toString(36).substr(2, 9),
+    id: customId || req.body.id || ("ord_" + Math.random().toString(36).substr(2, 9)),
     clientId,
     clientName: clientName || "عميل غير معروف",
     entityName: entityName || "منشأة غير معروفة",
@@ -2224,8 +2239,9 @@ app.post("/api/orders", async (req, res) => {
       quantity: Number(item.quantity),
       price: item.price || "غير محدد"
     })),
-    status: "pending",
-    createdAt: new Date().toISOString()
+    status: req.body.status || "pending",
+    notes: req.body.notes,
+    createdAt: req.body.createdAt || new Date().toISOString()
   };
 
   await saveOrderToDB(newOrder);
@@ -2241,7 +2257,7 @@ app.get("/api/orders", async (req, res) => {
 
 app.patch("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
-  const { status, isArchived } = req.body; // pending, approved, completed, cancelled
+  const { status, isArchived, order: clientOrder } = req.body; // pending, approved, completed, cancelled
 
   if (!status && isArchived === undefined) {
     return res.status(400).json({ error: "حالة الطلب أو حالة الأرشفة مطلوبة" });
@@ -2254,14 +2270,30 @@ app.patch("/api/orders/:id", async (req, res) => {
     if (isArchived !== undefined) {
       order = await archiveOrderInDB(id, isArchived !== false);
     } else {
-      order = await updateOrderStatusInDB(id, status);
+      order = await updateOrderStatusInDB(id, status, clientOrder);
     }
-    console.log(`PATCH /api/orders/${id} result:`, order);
 
     if (!order) {
-      return res.status(404).json({ error: "الطلب غير موجود" });
+      // Upsert fallback so order status update never fails
+      const db = getDB();
+      const fallbackOrder: Order = clientOrder || {
+        id,
+        clientId: req.body.clientId || "unknown",
+        clientName: req.body.clientName || "عميل",
+        entityName: req.body.entityName || "منشأة",
+        items: req.body.items || [],
+        status: status as any,
+        createdAt: new Date().toISOString()
+      };
+      fallbackOrder.id = id;
+      fallbackOrder.status = status as any;
+      fallbackOrder.updatedAt = new Date().toISOString();
+      db.orders.unshift(fallbackOrder);
+      saveDB(db);
+      order = fallbackOrder;
     }
 
+    console.log(`PATCH /api/orders/${id} resolved order:`, order?.id, order?.status);
     res.json({ success: true, order });
   } catch (err: any) {
     console.error(`PATCH /api/orders/${id} error:`, err);

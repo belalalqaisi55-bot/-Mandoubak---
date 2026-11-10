@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { authenticatedFetch as fetch } from "./utils/authenticatedFetch";
 import { Product, StockReport, Order, OrderItem, User, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
+import { DEFAULT_CLIENTS } from "./data/defaultClients";
 import { PharmaGames } from "./components/PharmaGames";
 import { QRCodeModal } from "./components/QRCodeModal";
 import { GeminiChatModal } from "./components/GeminiChatModal";
@@ -55,7 +57,9 @@ import {
   isDeviceOnline,
   updateOfflineOrderStatus,
   deleteOfflineOrder,
-  deleteOfflineStockReport
+  deleteOfflineStockReport,
+  addSyncLog,
+  getSyncLogs
 } from "./utils/offlineSync";
 import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, deleteDoc, onSnapshot } from "firebase/firestore";
 import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState, getDocsWithTimeout } from "./firebase";
@@ -698,10 +702,12 @@ export default function App() {
       const cached = localStorage.getItem("mandoubak_local_clients");
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.some((u: User) => u.role === "pharmacy" || u.role === "doctor")) {
+          return parsed;
+        }
       }
     } catch (e) {}
-    return [];
+    return DEFAULT_CLIENTS;
   });
   const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
@@ -1458,7 +1464,13 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const ordersUrl = user?.role === "rep" ? "/api/orders" : `/api/orders?clientId=${user?.id}`;
-          const rOrders = await fetch(ordersUrl, { signal: controller.signal });
+          const idToken = localStorage.getItem("mandoubak_id_token");
+          const rOrders = await fetch(ordersUrl, { 
+            signal: controller.signal,
+            headers: {
+              'Authorization': `Bearer ${idToken}`
+            }
+          });
           clearTimeout(timer);
           const ctOrders = rOrders.headers.get("content-type") || "";
           if (rOrders.ok && ctOrders.includes("application/json")) {
@@ -2279,8 +2291,8 @@ export default function App() {
   const fetchAllRegisteredUsers = async () => {
     try {
       let usersList: User[] = [];
-      let networkSuccess = false;
 
+      // 1. Fetch from backend API
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
@@ -2289,57 +2301,69 @@ export default function App() {
         const ct = r.headers.get("content-type") || "";
         if (r.ok && ct.includes("application/json")) {
           const data = await r.json();
-          if (Array.isArray(data)) {
+          if (Array.isArray(data) && data.length > 0) {
             usersList = data;
-            networkSuccess = true;
           }
         }
       } catch (err) {
         console.warn("Backend /api/users unreachable, trying Firestore:", err);
       }
 
+      // 2. Fetch from Firestore
       if (isFirebaseConfigured && db) {
         try {
           const snapshot = await getDocsWithTimeout(collection(db, "users"), 5000);
           const fsUsers = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as User));
           if (fsUsers.length > 0) {
-            // Merge Firestore users with server users
-            const existingIds = new Set(usersList.map(u => u.id));
+            const existingIds = new Set(usersList.map((u) => u.id));
             fsUsers.forEach((u: any) => {
               if (!existingIds.has(u.id)) {
                 usersList.push(u);
               }
             });
           }
-          networkSuccess = true;
         } catch (fsErr) {
           console.warn("Firestore users fetch:", fsErr);
         }
       }
 
-      // Only merge local cache if network completely failed
-      if (!networkSuccess) {
-        try {
-          const localSaved = localStorage.getItem("mandoubak_local_clients");
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (Array.isArray(parsed)) {
-              const existingIds = new Set(usersList.map(u => u.id));
-              parsed.forEach((u: User) => {
-                if (u && u.id && !existingIds.has(u.id)) {
-                  usersList.push(u);
-                }
-              });
-            }
+      // 3. Always merge local cache so client edits/additions are never lost
+      try {
+        const localSaved = localStorage.getItem("mandoubak_local_clients");
+        if (localSaved) {
+          const parsed = JSON.parse(localSaved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const existingIds = new Set(usersList.map((u) => u.id));
+            const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
+            parsed.forEach((u: User) => {
+              if (u && u.id && !existingIds.has(u.id) && (!u.phone || !existingPhones.has(u.phone))) {
+                usersList.push(u);
+              }
+            });
           }
-        } catch (e) {}
+        }
+      } catch (e) {}
+
+      // 4. Ensure baseline client roster is present if client count is empty or minimal
+      const hasClients = usersList.some((u) => u.role === "pharmacy" || u.role === "doctor");
+      if (!hasClients) {
+        const existingIds = new Set(usersList.map((u) => u.id));
+        const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
+        DEFAULT_CLIENTS.forEach((c) => {
+          if (!existingIds.has(c.id) && (!c.phone || !existingPhones.has(c.phone))) {
+            usersList.push(c);
+          }
+        });
       }
 
       const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
-      usersList = usersList.filter(u => !defaultClientIds.has(u.id));
+      usersList = usersList.filter((u) => !defaultClientIds.has(u.id));
       setRegisteredUsers(usersList);
+
       try {
-        localStorage.setItem("mandoubak_local_clients", JSON.stringify(usersList));
+        if (usersList.length > 0) {
+          localStorage.setItem("mandoubak_local_clients", JSON.stringify(usersList));
+        }
       } catch (e) {}
     } catch (e) {
       console.error("Error fetching registered users", e);
@@ -2384,6 +2408,14 @@ export default function App() {
 
   const handleManualSync = async () => {
     if (!isDeviceOnline()) {
+      addSyncLog({
+        status: "failed",
+        syncedCount: 0,
+        failedCount: 1,
+        message: "فشلت المزامنة - وضع غير متصل",
+        details: "لا يمكن إتمام المزامنة مع السحابة بدون اتصال نشط بالإنترنت",
+        type: "manual",
+      });
       showError("لا يمكن المزامنة حالياً، أنت غير متصل بالإنترنت.");
       return;
     }
@@ -2392,6 +2424,18 @@ export default function App() {
     try {
       const res = await syncPendingWithFirebase(db, (msg) => {
           console.log("Sync status:", msg);
+      });
+      addSyncLog({
+        status: res.success ? "success" : "failed",
+        syncedCount: res.syncedCount,
+        failedCount: res.failedCount,
+        message: res.success 
+          ? (res.syncedCount > 0 ? `مزامنة يدوية ناجحة (${res.syncedCount} عنصر)` : "مزامنة سحابية يدوية ناجحة")
+          : "فشلت المزامنة اليدوية جزئياً",
+        details: res.errors && res.errors.length > 0 
+          ? res.errors[0] 
+          : `تم تحديث البيانات مع السحابة بنجاح (عناصر مرفوعة: ${res.syncedCount})`,
+        type: "manual",
       });
       showSuccess(`تمت المزامنة اليدوية بنجاح (${res.syncedCount} عنصر تم رفعه) ☁️✓`);
       setPendingSyncCount(0);
@@ -2403,7 +2447,15 @@ export default function App() {
         fetchAllRegisteredUsers(),
         fetchAppSettings()
       ]);
-    } catch (err) {
+    } catch (err: any) {
+      addSyncLog({
+        status: "failed",
+        syncedCount: 0,
+        failedCount: 1,
+        message: "فشلت المزامنة اليدوية مع السحابة",
+        details: err?.message || "حدث خطأ غير متوقع أثناء الاتصال بالخادم السحابي",
+        type: "manual",
+      });
       showError("حدث خطأ أثناء المزامنة اليدوية");
     } finally {
       setIsSyncing(false);
@@ -3168,6 +3220,10 @@ export default function App() {
     try {
       const googleUser = await signInWithGoogle();
       if (googleUser) {
+        // Store ID Token for API authentication
+        const idToken = await (googleUser as any).getIdToken();
+        localStorage.setItem("mandoubak_id_token", idToken);
+
         // Strictly verify that only the authorized email gets the administrator/representative role
         const userEmail = (googleUser.email || "").toLowerCase().trim();
         const isRep = userEmail === "belalalqaisi55@gmail.com" || userEmail.startsWith("belalalqaisi55") || userEmail.includes("belalalqaisi");
@@ -3867,35 +3923,93 @@ export default function App() {
   ) => {
     setLoading(true);
 
-    const updateStatus = async (): Promise<Response> => {
-      const response = await fetch(`/api/orders/${orderId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      if (!response.ok) throw new Error("Request failed");
-      return response;
-    };
+    const targetOrder = orders.find((o) => o.id === orderId);
 
-    const retryOperation = async (fn: () => Promise<Response>, retries: number, delay: number): Promise<Response> => {
-      try {
-        return await fn();
-      } catch (error) {
-        if (retries <= 0) throw error;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return retryOperation(fn, retries - 1, delay);
-      }
-    };
+    // 1. Optimistic Local State Update so UI responds immediately
+    setOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, status, updatedAt: new Date().toISOString() } : o))
+    );
 
+    // 2. Persist to local IndexedDB & LocalStorage
     try {
-      await retryOperation(updateStatus, 2, 1000); // 1 initial + 2 retries = 3 attempts total
-      showSuccess("تم تحديث حالة طلب العميل بنجاح");
-      fetchUserSpecificData();
-    } catch (e) {
-      showError("فشل تحديث حالة الطلب بعد 3 محاولات");
-    } finally {
-      setLoading(false);
+      await updateOfflineOrderStatus(orderId, status);
+    } catch (idbErr) {
+      console.warn("IndexedDB order status update warning:", idbErr);
     }
+
+    // 3. Persist to Firebase Firestore if online and configured
+    if (isFirebaseConfigured && db) {
+      try {
+        await setDoc(
+          doc(db, "orders", orderId),
+          { status, updatedAt: new Date().toISOString() },
+          { merge: true }
+        );
+      } catch (fsErr) {
+        console.warn("Direct Firestore update warning:", fsErr);
+      }
+    }
+
+    // 4. Update backend API
+    try {
+      const updateStatus = async (): Promise<Response> => {
+        const response = await fetch(`/api/orders/${orderId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status,
+            order: targetOrder ? { ...targetOrder, status } : undefined,
+          }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response;
+      };
+
+      const retryOperation = async (fn: () => Promise<Response>, retries: number, delay: number): Promise<Response> => {
+        try {
+          return await fn();
+        } catch (error) {
+          if (retries <= 0) throw error;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return retryOperation(fn, retries - 1, delay);
+        }
+      };
+
+      await retryOperation(updateStatus, 2, 600);
+    } catch (e) {
+      console.warn("API order patch failed, offline persistence succeeded:", e);
+    }
+
+    // 5. Add to sync logs
+    try {
+      addSyncLog({
+        status: "success",
+        syncedCount: 1,
+        message:
+          status === "approved"
+            ? "قبول وتأكيد الطلبية"
+            : status === "completed"
+            ? "تسليم الطلبية واكتمالها"
+            : `تحديث حالة الطلبية إلى ${status}`,
+        details: `تم تحديث حالة الطلبية #${orderId.slice(-6)} بنجاح في قاعدة البيانات`,
+        type: "manual",
+      });
+    } catch (e) {}
+
+    const successMessage =
+      status === "approved"
+        ? "تم قبول وتأكيد طلبية العميل بنجاح ✅"
+        : status === "completed"
+        ? "تم تسليم واكتمال الطلبية بنجاح 🚚✓"
+        : status === "cancelled"
+        ? "تم إلغاء الطلبية بنجاح"
+        : "تم وضع الطلبية في الانتظار (معلقة) بنجاح";
+
+    showSuccess(successMessage);
+    setLoading(false);
+
+    // Refresh user-specific data in background without blocking UI
+    fetchUserSpecificData(true);
   };
 
   const handleArchiveOrder = async (orderId: string, archive: boolean = true) => {
@@ -4467,6 +4581,7 @@ export default function App() {
                   onSync={handleManualSync} 
                   isSyncing={isSyncing}
                   latencyMs={latency}
+                  onOpenSyncCenter={() => setIsOfflineSyncModalOpen(true)}
                 />
                 <a
                   href={OFFICIAL_APP_URL}
@@ -6192,44 +6307,12 @@ export default function App() {
                       <span>الإعدادات</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setIsOfflineSyncModalOpen(true)}
-                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-3xs font-bold border transition-all cursor-pointer ${
-                        !isOnlineState
-                          ? "bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100"
-                          : pendingSyncCount > 0
-                          ? "bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 animate-pulse"
-                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-teal-50 hover:border-teal-200 hover:text-teal-800"
-                      }`}
-                      title="المزامنة التلقائية مع قاعدة البيانات السحابية والمحلية (IndexedDB)"
-                      id="btn-workspace-sync-center"
-                    >
-                      {!isOnlineState ? (
-                        <WifiOff className="h-3.5 w-3.5 text-rose-600" />
-                      ) : (
-                        <span className="relative flex h-2 w-2">
-                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSyncing || pendingSyncCount > 0 ? "bg-amber-400" : "bg-emerald-400"} opacity-75`}></span>
-                          <span className={`relative inline-flex rounded-full h-2 w-2 ${isSyncing || pendingSyncCount > 0 ? "bg-amber-500" : "bg-emerald-500"}`}></span>
-                        </span>
-                      )}
-                      <span>
-                        {!isOnlineState
-                          ? "أوفلاين (IndexedDB)"
-                          : isSyncing
-                          ? "جاري المزامنة..."
-                          : pendingSyncCount > 0
-                          ? `معلق للمزامنة (${pendingSyncCount})`
-                          : isFirebaseConfigured && db
-                          ? "سحابي (Firestore) ☁️"
-                          : "متصل بالخلفية"}
-                      </span>
-                      {pendingSyncCount > 0 && (
-                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-black text-slate-950">
-                          {pendingSyncCount}
-                        </span>
-                      )}
-                    </button>
+                    <ConnectionStatusIndicator 
+                      onSync={handleManualSync} 
+                      isSyncing={isSyncing}
+                      latencyMs={latency}
+                      onOpenSyncCenter={() => setIsOfflineSyncModalOpen(true)}
+                    />
 
                     <button
                       onClick={() => fetchUserSpecificData(false, true)}

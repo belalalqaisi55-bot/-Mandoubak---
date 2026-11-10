@@ -24,6 +24,17 @@ export interface OfflineSyncStats {
   isOnline: boolean;
 }
 
+export interface SyncLogEntry {
+  id: string;
+  timestamp: string;
+  status: "success" | "failed";
+  message: string;
+  details?: string;
+  syncedCount?: number;
+  failedCount?: number;
+  type?: "manual" | "auto" | "check";
+}
+
 export interface KeepNote {
   id: string;
   title: string;
@@ -139,6 +150,7 @@ export interface Order {
   isArchived?: boolean;
   archivedAt?: string;
   completedAt?: string;
+  updatedAt?: string;
 }
 
 export interface VisitTask {
