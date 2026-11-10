@@ -68,10 +68,10 @@ service cloud.firestore {
 
     // 5. Orders - Own read, Admin/Rep read all
     match /orders/{orderId} {
-      allow list: if isAdmin() || isRep();
+      allow list: if isAdmin() || isRep() || (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid));
       allow get: if isSignedIn() && (isOwner(resource.data.userId) || (resource.data.keys().hasAny(['clientId']) && isOwner(resource.data.clientId)) || isAdmin() || isRep());
       allow create: if isSignedIn();
-      allow update: if isAdmin() || isRep() || (isSignedIn() && ((resource.data.keys().hasAny(['userId']) && isOwner(resource.data.userId)) || (resource.data.keys().hasAny(['clientId']) && isOwner(resource.data.clientId))));
+      allow update: if isAdmin() || isRep();
       allow delete: if isAdmin() || isRep();
     }
 
@@ -96,7 +96,8 @@ service cloud.firestore {
 
     // 9. Complaints - Own read, Admin/Rep read all
     match /complaints/{complaintId} {
-      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
+      allow list: if isAdmin() || isRep() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
       allow create: if isSignedIn() && isOwner(incoming().userId);
       allow update: if isAdmin();
     }

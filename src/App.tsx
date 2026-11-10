@@ -1477,9 +1477,12 @@ export default function App() {
             const dOrders = await rOrders.json();
             if (Array.isArray(dOrders)) loadedOrders = dOrders;
           } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "orders"), 2500);
+            const q = user?.role === "rep" 
+              ? collection(db, "orders")
+              : query(collection(db, "orders"), where("userId", "==", user?.id));
+            const snapshot = await getDocsWithTimeout(q, 2500);
             const fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
-            loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter((o: any) => o.clientId === user?.id || (o as any).userId === user?.id);
+            loadedOrders = fsOrders;
           }
         } catch (err) {
           if (isFirebaseConfigured && db) {
@@ -1687,22 +1690,22 @@ export default function App() {
               setComplaints(dComplaints);
             }
           } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "complaints"), 2500);
+            const q = user?.role === "rep"
+              ? collection(db, "complaints")
+              : query(collection(db, "complaints"), where("userId", "==", user?.id));
+            const snapshot = await getDocsWithTimeout(q, 2500);
             const fsComplaints = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Complaint));
-            const filtered = user?.role === "rep"
-              ? fsComplaints
-              : fsComplaints.filter((c: any) => c.clientId === user?.id || c.clientPhone === user?.phone);
-            setComplaints(filtered);
+            setComplaints(fsComplaints);
           }
         } catch (err) {
           if (isFirebaseConfigured && db) {
             try {
-              const snapshot = await getDocsWithTimeout(collection(db, "complaints"), 2500);
+              const q = user?.role === "rep"
+                ? collection(db, "complaints")
+                : query(collection(db, "complaints"), where("userId", "==", user?.id));
+              const snapshot = await getDocsWithTimeout(q, 2500);
               const fsComplaints = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Complaint));
-              const filtered = user?.role === "rep"
-                ? fsComplaints
-                : fsComplaints.filter((c: any) => c.clientId === user?.id || c.clientPhone === user?.phone);
-              setComplaints(filtered);
+              setComplaints(fsComplaints);
             } catch (fsErr) {
               console.warn("Firestore complaints fallback err:", fsErr);
             }

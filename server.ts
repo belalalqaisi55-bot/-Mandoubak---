@@ -1913,7 +1913,7 @@ app.post("/api/users/batch-import", async (req, res) => {
 
 app.put("/api/users/:id/status", async (req, res) => {
   const { id } = req.params;
-  const { isApproved, status } = req.body;
+  const { isApproved, status } = req.body || {};
 
   const users = await fetchAllUsersFromDB();
   const existing = users.find((u) => u.id === id);

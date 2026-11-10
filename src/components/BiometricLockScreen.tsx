@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   authenticateBiometricNative,
+  isBiometricSupported,
   nativePlayClick,
   nativeVibrate,
   nativeSuccessFeedback
@@ -40,6 +41,15 @@ export const BiometricLockScreen: React.FC<BiometricLockScreenProps> = ({
     setAuthError("");
 
     try {
+      // 1. التأكد من دعم الجهاز للتوثيق البيومتري
+      const supported = await isBiometricSupported();
+      if (!supported) {
+        setAuthError("جهازك لا يدعم التوثيق البيومتري أو لم يتم إعداد قفل الشاشة.");
+        setIsAuthenticating(false);
+        return;
+      }
+
+      // 2. البدء بعملية التوثيق
       const res = await authenticateBiometricNative({
         title: "فتح قفل تطبيق مندوبك الطبي 🔒",
         subtitle: `مرحباً ${user?.name || "بك"}، يرجى مسح البصمة للمتابعة`,

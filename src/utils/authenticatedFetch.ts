@@ -11,7 +11,8 @@ export const authenticatedFetch = async (url: RequestInfo, options: RequestInit 
   if (response.status === 401 || response.status === 403) {
     localStorage.removeItem("mandoubak_id_token");
     localStorage.removeItem("mandoubak_user");
-    window.location.reload(); 
+    // Instead of full reload, just clear session and rely on UI state
+    // window.location.reload(); 
     throw new Error("Unauthorized");
   }
   
