@@ -1135,6 +1135,15 @@ export default function App() {
 
   // Handle pending product addition if coming from CV page
   useEffect(() => {
+    if (user && user.id === "u_rep" && !user.orcidId) {
+      updateUserProfile({
+        userId: user.id,
+        orcidId: "https://orcid.org/0009-0006-1638-1313"
+      });
+    }
+  }, [user]);
+
+  useEffect(() => {
     if (isCVPageVisible) {
       const pending = localStorage.getItem("pending_add_product");
       if (pending) {
@@ -1394,7 +1403,7 @@ export default function App() {
       // 1. Prioritize Firestore with 2500ms timeout
       if (isFirebaseConfigured && db) {
         try {
-          const snapshot = await getDocsWithTimeout(collection(db, "products"), 2500);
+          const snapshot = await getDocsWithTimeout(collection(db, "products"), 8000);
           const fsProducts = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Product));
           if (fsProducts.length > 0) loaded = fsProducts;
         } catch (fsErr) {
@@ -5109,6 +5118,14 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       highlight
                       id="sidebar-rep-analytics"
+                    />
+                    <SidebarNavItem
+                      icon={<Share2 className="h-4.5 w-4.5 text-teal-600" />}
+                      label="مشاركة التطبيق 📱"
+                      active={false}
+                      onClick={() => setIsAppQrModalOpen(true)}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-share-app"
                     />
                   </div>
 

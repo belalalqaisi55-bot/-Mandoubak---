@@ -69,6 +69,7 @@ export interface User {
   createdAt?: string;
   // Added optional fields often used in partial objects
   userId?: string; 
+  orcidId?: string;
 }
 
 export interface AppSettings {

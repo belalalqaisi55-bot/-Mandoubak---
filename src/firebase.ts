@@ -105,7 +105,7 @@ if (isFirebaseConfigured) {
         });
         console.log("✓ تم تفعيل Firebase App Check بنجاح لحماية التطبيق");
       } catch (appCheckErr) {
-        // Silently catch app check errors
+        console.error("خطأ في تفعيل App Check:", appCheckErr);
       }
     }
 

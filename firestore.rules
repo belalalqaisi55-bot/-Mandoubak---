@@ -30,7 +30,7 @@ service cloud.firestore {
                data.role in ['pharmacy', 'doctor', 'rep'];
     }
     function isValidOrder(data) {
-        return data.id is string && data.id.size() <= 128 &&
+        return data.id is string && data .id.size() <= 128 &&
                data.status in ['pending', 'approved', 'completed', 'cancelled', 'processing'];
     }
 
@@ -50,7 +50,7 @@ service cloud.firestore {
 
     // 2. Products - Public read, Admin write
     match /products/{productId} {
-      allow read: if true;
+      allow read, list: if true;
       allow write: if isAdmin();
     }
 

@@ -1607,7 +1607,7 @@ export function isValidAdminSecret(pwd?: string): boolean {
 // --- AUTH API ---
 
 app.post("/api/auth/login", async (req, res) => {
-  const { phone, email, password } = req.body;
+  const { phone, email, password } = req.body || {};
   const rawInput = String(phone || email || "").trim().toLowerCase();
   if (!rawInput) {
     return res.status(400).json({ error: "رقم الهاتف أو البريد الإلكتروني مطلوب" });
@@ -1698,7 +1698,7 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.post("/api/auth/register", async (req, res) => {
-  const { phone, name, role, entityName, location } = req.body;
+  const { phone, name, role, entityName, location } = req.body || {};
 
   if (!phone || !name) {
     return res.status(400).json({ error: "جميع الحقول الأساسية مطلوبة للتسجيل" });
@@ -1762,7 +1762,7 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/verify-code", async (req, res) => {
-  const { phone, code } = req.body;
+  const { phone, code } = req.body || {};
   if (!phone || !code) {
     return res.status(400).json({ error: "رقم الهاتف ورمز التأكيد مطلوبان" });
   }
@@ -1937,7 +1937,7 @@ app.put("/api/users/:id/status", async (req, res) => {
 
 app.put("/api/users/:id", async (req, res) => {
   const { id } = req.params;
-  const { phone, name, role, entityName, location, isApproved, status, avatar } = req.body;
+  const { phone, name, role, entityName, location, isApproved, status, avatar } = req.body || {};
 
   if (!phone || !name) {
     return res.status(400).json({ error: "اسم العميل ورقم الهاتف مطلوبان" });
@@ -3673,7 +3673,7 @@ app.post("/api/ai/openrouter/chat", async (req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { messages, mode = "standard", provider = "auto", openRouterModel, systemInstruction } = req.body;
+  const { messages, mode = "standard", provider = "auto", openRouterModel, systemInstruction } = req.body || {};
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة" });
   }
