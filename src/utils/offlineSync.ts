@@ -384,7 +384,8 @@ export async function getOfflineArchivedOrders(clientId?: string, role?: string)
  */
 export async function archiveOfflineOrder(orderId: string, isArchived: boolean = true): Promise<void> {
   try {
-    const archivedAt = isArchived ? new Date().toISOString() : undefined;
+    const now = new Date().toISOString();
+    const archivedAt = isArchived ? now : undefined;
     const order = await performTransaction<Order | undefined>(STORES.ORDERS, "readonly", (store) => {
       return store.get(orderId);
     });
@@ -392,37 +393,34 @@ export async function archiveOfflineOrder(orderId: string, isArchived: boolean =
     if (order) {
       order.isArchived = isArchived;
       order.archivedAt = archivedAt;
-      const now = new Date().toISOString();
-      if (isArchived) {
-        order.status = "completed";
+      if (isArchived && order.status === "completed") {
         (order as any).completedAt = (order as any).completedAt || now;
       }
       (order as any).updatedAt = now;
       await performTransaction(STORES.ORDERS, "readwrite", (store) => {
         store.put(order);
       });
-
-      // Update localStorage backup
-      try {
-        const raw = localStorage.getItem("mandoubak_local_orders");
-        let ordersList: Order[] = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(ordersList)) {
-          ordersList = ordersList.map((o) =>
-            o.id === orderId
-              ? {
-                  ...o,
-                  isArchived,
-                  archivedAt,
-                  status: isArchived ? "completed" : o.status,
-                  completedAt: isArchived ? ((o as any).completedAt || now) : (o as any).completedAt,
-                  updatedAt: now,
-                }
-              : o
-          );
-          localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
-        }
-      } catch (e) {}
     }
+
+    // Update localStorage backup even if IndexedDB didn't have this record yet
+    try {
+      const raw = localStorage.getItem("mandoubak_local_orders");
+      let ordersList: Order[] = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(ordersList)) {
+        ordersList = ordersList.map((o) =>
+          o.id === orderId
+            ? {
+                ...o,
+                isArchived,
+                archivedAt,
+                completedAt: isArchived && o.status === "completed" ? ((o as any).completedAt || now) : (o as any).completedAt,
+                updatedAt: now,
+              }
+            : o
+        );
+        localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+      }
+    } catch (e) {}
   } catch (e) {
     console.warn("Failed to archive offline order:", e);
   }
@@ -433,6 +431,7 @@ export async function archiveOfflineOrder(orderId: string, isArchived: boolean =
  */
 export async function restoreArchivedOfflineOrder(orderId: string): Promise<Order | null> {
   try {
+    const now = new Date().toISOString();
     const order = await performTransaction<Order | undefined>(STORES.ORDERS, "readonly", (store) => {
       return store.get(orderId);
     });
@@ -440,23 +439,25 @@ export async function restoreArchivedOfflineOrder(orderId: string): Promise<Orde
     if (order) {
       order.isArchived = false;
       order.archivedAt = undefined;
-      order.status = "approved";
+      (order as any).updatedAt = now;
 
       await performTransaction(STORES.ORDERS, "readwrite", (store) => {
         store.put(order);
       });
-
-      try {
-        const raw = localStorage.getItem("mandoubak_local_orders");
-        let ordersList: Order[] = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(ordersList)) {
-          ordersList = ordersList.map((o) => (o.id === orderId ? { ...o, isArchived: false, status: "approved", archivedAt: undefined } : o));
-          localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
-        }
-      } catch (e) {}
-
-      return order;
     }
+
+    try {
+      const raw = localStorage.getItem("mandoubak_local_orders");
+      let ordersList: Order[] = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(ordersList)) {
+        ordersList = ordersList.map((o) =>
+          o.id === orderId ? { ...o, isArchived: false, archivedAt: undefined, updatedAt: now } : o
+        );
+        localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+      }
+    } catch (e) {}
+
+    return order || null;
   } catch (e) {
     console.warn("Failed to restore archived offline order:", e);
   }
@@ -464,7 +465,7 @@ export async function restoreArchivedOfflineOrder(orderId: string): Promise<Orde
 }
 
 /**
- * Batch archives all completed/delivered orders offline and returns separated arrays
+ * Batch archives all completed/cancelled orders offline and returns separated arrays
  */
 export async function archiveAllCompletedOfflineOrders(): Promise<{ count: number; activeOrders: Order[]; archivedOrders: Order[] }> {
   let count = 0;
@@ -477,36 +478,40 @@ export async function archiveAllCompletedOfflineOrders(): Promise<{ count: numbe
 
     if (Array.isArray(allOrders)) {
       updatedOrders = allOrders.map((order) => {
-        if (order.status === "completed" && !order.isArchived) {
+        if ((order.status === "completed" || order.status === "cancelled") && !order.isArchived) {
           count++;
-          return { ...order, isArchived: true, archivedAt: now };
+          return { ...order, isArchived: true, archivedAt: now, updatedAt: now };
         }
         return order;
       });
 
       for (const order of updatedOrders) {
-        if (order.status === "completed" && order.isArchived) {
+        if ((order.status === "completed" || order.status === "cancelled") && order.isArchived) {
           await performTransaction(STORES.ORDERS, "readwrite", (store) => {
             store.put(order);
           });
         }
       }
-
-      try {
-        const raw = localStorage.getItem("mandoubak_local_orders");
-        let ordersList: Order[] = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(ordersList)) {
-          ordersList = ordersList.map((o) => (o.status === "completed" && !o.isArchived ? { ...o, isArchived: true, archivedAt: now } : o));
-          localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
-        }
-      } catch (e) {}
     }
+
+    try {
+      const raw = localStorage.getItem("mandoubak_local_orders");
+      let ordersList: Order[] = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(ordersList)) {
+        ordersList = ordersList.map((o) =>
+          (o.status === "completed" || o.status === "cancelled") && !o.isArchived
+            ? { ...o, isArchived: true, archivedAt: now, updatedAt: now }
+            : o
+        );
+        localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+      }
+    } catch (e) {}
   } catch (e) {
     console.warn("Failed to archive completed offline orders:", e);
   }
 
-  const activeOrders = updatedOrders.filter((o) => !o.isArchived && o.status !== "completed");
-  const archivedOrders = updatedOrders.filter((o) => Boolean(o.isArchived || o.status === "completed"));
+  const activeOrders = updatedOrders.filter((o) => !o.isArchived);
+  const archivedOrders = updatedOrders.filter((o) => Boolean(o.isArchived));
 
   return { count, activeOrders, archivedOrders };
 }
@@ -529,6 +534,15 @@ export async function clearAllArchivedOfflineOrders(): Promise<number> {
         }
       }
     }
+
+    try {
+      const raw = localStorage.getItem("mandoubak_local_orders");
+      let ordersList: Order[] = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(ordersList)) {
+        ordersList = ordersList.filter((o) => !o.isArchived);
+        localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+      }
+    } catch (e) {}
   } catch (e) {
     console.warn("Failed to clear archived offline orders:", e);
   }

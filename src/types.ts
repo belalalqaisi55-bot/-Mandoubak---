@@ -66,6 +66,9 @@ export interface User {
   confirmationCode?: string;
   password?: string;
   deviceRegistered?: boolean;
+  fcmToken?: string;
+  fcmTokens?: string[];
+  fcmUpdatedAt?: string;
   createdAt?: string;
   // Added optional fields often used in partial objects
   userId?: string; 

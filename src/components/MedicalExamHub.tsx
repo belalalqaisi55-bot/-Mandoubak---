@@ -1928,7 +1928,7 @@ export const MedicalExamHub: React.FC<MedicalExamHubProps> = ({ onClose, userRol
                           outerRadius={80}
                           paddingAngle={5}
                           dataKey="value"
-                          label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                          label={({ name, percent }) => `${name} (${((percent || 0) * 100).toFixed(0)}%)`}
                         >
                           <Cell fill="#10b981" />
                           <Cell fill="#f43f5e" />

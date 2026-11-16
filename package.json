@@ -16,7 +16,9 @@
     "lint": "tsc --noEmit",
     "cap:sync": "npx cap sync android",
     "cap:copy": "npx cap copy android",
-    "build:android": "npm run build && npx cap sync android"
+    "build:android": "npm run build && npx cap sync android",
+    "deploy:hosting": "npm run build && npx -y firebase-tools@latest deploy --only hosting",
+    "deploy:firebase": "npm run build && npx -y firebase-tools@latest deploy --only hosting,firestore:rules"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

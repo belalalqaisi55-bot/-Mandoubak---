@@ -535,7 +535,7 @@ export const ClientProfileModal: React.FC<ClientProfileModalProps> = ({
                         <Phone className="h-3.5 w-3.5" />
                       </a>
                       <a
-                        href={`https://wa.me/${client.phone.replace(/\D/g, "")}`}
+                        href={`https://wa.me/${(client.phone || "").replace(/\D/g, "")}`}
                         target="_blank"
                         rel="noreferrer"
                         className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"

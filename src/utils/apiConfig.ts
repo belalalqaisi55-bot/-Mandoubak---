@@ -32,15 +32,21 @@ export function isNativeOrApkEnvironment(): boolean {
   return false;
 }
 
+export function isStaticFirebaseHosting(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  return host.endsWith(".web.app") || host.endsWith(".firebaseapp.com");
+}
+
 export function getApiUrl(endpoint: string): string {
   const cleanPath = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
 
-  if (isNativeOrApkEnvironment()) {
+  if (isNativeOrApkEnvironment() || isStaticFirebaseHosting()) {
     let customBase = "";
     try {
       customBase = localStorage.getItem("mandoubak_api_base")?.trim() || "";
     } catch (_) {}
-    const base = customBase || BACKEND_URL;
+    const base = customBase || OFFICIAL_APP_URL;
     return `${base.replace(/\/+$/, "")}${cleanPath}`;
   }
 
@@ -49,7 +55,8 @@ export function getApiUrl(endpoint: string): string {
 
 /**
  * Initializes global fetch interception so that all existing fetch('/api/...') calls
- * in every component automatically use the live backend when running on an Android APK.
+ * in every component automatically use the live backend when running on an Android APK
+ * or static Firebase Hosting.
  * Safely guards against non-writable/getter-only window.fetch properties in browser iframes.
  */
 export function initGlobalApiProxy(): void {
@@ -58,12 +65,12 @@ export function initGlobalApiProxy(): void {
   }
   (window as any).__MANDOUBAK_API_INITIALIZED__ = true;
 
-  // Only activate fetch interception if running in native APK/Android environment or with custom base URL
+  // Only activate fetch interception if running in native APK/Android environment, static Firebase Hosting, or with custom base URL
   let hasCustomBase = false;
   try {
     hasCustomBase = Boolean(localStorage.getItem("mandoubak_api_base")?.trim());
   } catch (_) {}
-  if (!isNativeOrApkEnvironment() && !hasCustomBase) {
+  if (!isNativeOrApkEnvironment() && !isStaticFirebaseHosting() && !hasCustomBase) {
     return;
   }
 

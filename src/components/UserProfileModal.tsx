@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { User } from "../types";
 import { updateUserProfile } from "../services/userProfileService";
+import { signInWithGoogle, signOutUser, formatFirebaseAuthError } from "../firebase";
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -162,15 +163,47 @@ export const UserProfileModal = ({
               <h4 className="text-xs font-bold text-sky-900 mb-2">حساب Google المرتبط</h4>
               {googleUser ? (
                 <div className="flex items-center gap-3">
-                  <img src={googleUser.picture} alt={googleUser.name} className="h-10 w-10 rounded-full" />
+                  {googleUser.picture && (
+                    <img src={googleUser.picture} alt={googleUser.name || "Google"} className="h-10 w-10 rounded-full" />
+                  )}
                   <div className="text-xs">
                     <p className="font-bold text-slate-900">{googleUser.name}</p>
                     <p className="text-slate-500">{googleUser.email}</p>
                   </div>
-                  <button onClick={() => window.location.href = '/auth/logout'} className="mr-auto text-rose-600 text-xs font-bold">تسجيل الخروج</button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await signOutUser();
+                        localStorage.removeItem("mandoubak_id_token");
+                        setStatusMessage("تم فك ارتباط حساب Google بنجاح.");
+                      } catch (err: any) {
+                        setErrorMessage(formatFirebaseAuthError(err));
+                      }
+                    }}
+                    className="mr-auto text-rose-600 text-xs font-bold cursor-pointer"
+                  >
+                    تسجيل الخروج
+                  </button>
                 </div>
               ) : (
-                <button type="button" onClick={() => window.location.href = '/auth/google'} className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold shadow-sm">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setErrorMessage("");
+                    try {
+                      const gUser = await signInWithGoogle();
+                      if (gUser) {
+                        const token = await (gUser as any).getIdToken();
+                        if (token) localStorage.setItem("mandoubak_id_token", token);
+                        setStatusMessage(`تم ربط حساب Google (${gUser.email || gUser.displayName}) بنجاح ✓`);
+                      }
+                    } catch (err: any) {
+                      setErrorMessage(formatFirebaseAuthError(err));
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-sm cursor-pointer"
+                >
                   <span>ربط حساب Google</span>
                 </button>
               )}

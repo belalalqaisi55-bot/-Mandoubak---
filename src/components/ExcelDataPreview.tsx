@@ -58,7 +58,7 @@ export const ExcelDataPreview: React.FC<ExcelDataPreviewProps> = ({
   const existingPhones = useMemo(() => {
     const set = new Set<string>();
     registeredUsers.forEach((u) => {
-      const clean = u.phone.replace(/[^\d]/g, "");
+      const clean = (u.phone || "").replace(/[^\d]/g, "");
       if (clean) set.add(clean);
     });
     return set;

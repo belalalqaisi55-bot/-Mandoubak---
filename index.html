@@ -9,7 +9,10 @@
           if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then((regs) => {
               for (const r of regs) {
-                r.unregister().catch(() => {});
+                const scriptUrl = r.active?.scriptURL || r.waiting?.scriptURL || r.installing?.scriptURL || '';
+                if (!scriptUrl.includes('firebase-messaging-sw.js')) {
+                  r.unregister().catch(() => {});
+                }
               }
             });
           }
@@ -184,7 +187,6 @@
     <meta name="copyright" content="جميع الحقوق محفوظة للدكتور بلال القيسي 2026-2051" />
     <meta name="theme-color" content="#0f766e" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="مندوبك الطبي" />
     <meta name="application-name" content="مندوبك الطبي" />
@@ -198,6 +200,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Web App Manifest for PWA installation -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Google reCAPTCHA Enterprise -->
+    <script src="https://www.google.com/recaptcha/enterprise.js?render=6LdS1yEuAAAAAGr4Px4Iyesc61yutVjaRfoW23DD" async defer></script>
   </head>
   <body class="bg-[#F8F7F4] text-[#1a1a1a] font-sans antialiased selection:bg-teal-100 selection:text-teal-900">
     <div id="root"></div>

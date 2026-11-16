@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider } from "firebase/app-check";
 import {
   getAuth,
   signInAnonymously,
@@ -47,6 +47,74 @@ let appCheck: any = null;
 let messaging: any = null;
 export { app, auth, db, storage, appCheck, messaging };
 const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: "select_account" });
+
+export function formatFirebaseAuthError(error: any): string {
+  const code = error?.code || "";
+  const message = error?.message || "";
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "";
+
+  if (code === "auth/unauthorized-domain" || message.includes("auth/unauthorized-domain")) {
+    return `النطاق الحالي (${hostname}) غير مصرح به في Firebase Authentication. يرجى إضافته في Authorized domains بلوحة تحكم Firebase.`;
+  }
+  if (code === "auth/operation-not-allowed" || message.includes("auth/operation-not-allowed")) {
+    return "طريقة تسجيل الدخول هذه غير مفعّلة في إعدادات Firebase Authentication (Sign-in method).";
+  }
+  if (code === "auth/invalid-email" || message.includes("auth/invalid-email")) {
+    return "صيغة البريد الإلكتروني غير صحيحة، يرجى التحقق والمحاولة مجدداً.";
+  }
+  if (code === "auth/user-disabled" || message.includes("auth/user-disabled")) {
+    return "تم تعطيل هذا الحساب. يرجى التواصل مع المندوب المسؤول د/ بلال القيسي.";
+  }
+  if (code === "auth/user-not-found" || message.includes("auth/user-not-found")) {
+    return "لا يوجد حساب مسجل بهذا البريد الإلكتروني. يمكنك الضغط على «إنشاء حساب جديد».";
+  }
+  if (code === "auth/wrong-password" || message.includes("auth/wrong-password")) {
+    return "كلمة المرور غير صحيحة. يرجى التأكد أو استخدام خيار «نسيت كلمة المرور؟».";
+  }
+  if (code === "auth/invalid-credential" || message.includes("auth/invalid-credential")) {
+    return "البريد الإلكتروني أو كلمة المرور غير صحيحة. يرجى التحقق والمحاولة مجدداً.";
+  }
+  if (code === "auth/email-already-in-use" || message.includes("auth/email-already-in-use")) {
+    return "هذا البريد الإلكتروني مسجل مسبقاً. يرجى تسجيل الدخول بدلاً من إنشاء حساب جديد.";
+  }
+  if (code === "auth/weak-password" || message.includes("auth/weak-password")) {
+    return "كلمة المرور ضعيفة جداً، يجب أن تتكون من 6 أحرف أو أرقام على الأقل.";
+  }
+  if (code === "auth/missing-password" || message.includes("auth/missing-password")) {
+    return "يرجى إدخال كلمة المرور.";
+  }
+  if (code === "auth/too-many-requests" || message.includes("auth/too-many-requests")) {
+    return "تم تجاوز عدد المحاولات المسموح بها مؤقتاً. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.";
+  }
+  if (code === "auth/requires-recent-login" || message.includes("auth/requires-recent-login")) {
+    return "لأسباب أمنية، يرجى إعادة تسجيل الدخول ثم المحاولة مجدداً.";
+  }
+  if (code === "auth/popup-blocked" || message.includes("auth/popup-blocked")) {
+    return "تم حظر النافذة المنبثقة لتسجيل الدخول بجوجل. يرجى السماح بالنوافذ المنبثقة (Popups) لهذا الموقع والمحاولة مجدداً.";
+  }
+  if (code === "auth/popup-closed-by-user" || message.includes("auth/popup-closed-by-user")) {
+    return "تم إغلاق نافذة تسجيل الدخول بحساب Google قبل إتمام العملية.";
+  }
+  if (code === "auth/cancelled-popup-request" || message.includes("auth/cancelled-popup-request")) {
+    return "تم إلغاء نافذة تسجيل الدخول السابقة، يرجى المحاولة مرة أخرى.";
+  }
+  if (code === "auth/network-request-failed" || message.includes("auth/network-request-failed")) {
+    return "تعذر الاتصال بخوادم المصادقة. يرجى التحقق من اتصال الإنترنت.";
+  }
+  if (
+    code === "auth/firebase-app-check-token-is-invalid" ||
+    code.includes("app-check") ||
+    message.includes("App Check") ||
+    message.includes("app-check")
+  ) {
+    return "تم تفعيل حماية Firebase App Check على المصادقة (Authentication) في لوحة تحكم Firebase للمشروع بدون مفتاح reCAPTCHA صالح. أوقف فرض App Check مؤقتاً على Authentication أو أضف مفتاح reCAPTCHA v3 الصحيح.";
+  }
+  if (code === "auth/internal-error" || message.includes("auth/internal-error")) {
+    return "تعذر إتمام المصادقة داخل المتصفح الحالي (قد يكون بسبب حظر ملفات تعريف الارتباط أو فرض App Check أو عدم تفعيل موفر تسجيل الدخول في Firebase).";
+  }
+  return message || "عذراً، تعذر إتمام تسجيل الدخول حالياً. يمكنك المحاولة بطريقة أخرى أو برقم هاتفك المسجل.";
+}
 
 if (isFirebaseConfigured) {
   try {
@@ -81,29 +149,47 @@ if (isFirebaseConfigured) {
       .catch(() => {});
 
     try {
-      const bucket = configAny.storageBucket || "gen-lang-client-0739281919.firebasestorage.app";
-      storage = getStorage(app, bucket);
+      storage = configAny.storageBucket ? getStorage(app, configAny.storageBucket) : getStorage(app);
     } catch (storageErr) {
       try {
         storage = getStorage(app);
-      } catch (fallbackErr) {
+      } catch {
         console.warn("Firebase Storage initialization notice:", storageErr);
       }
     }
 
-    // Initialize Firebase App Check only if explicitly enabled with a valid production key
-    const recaptchaSiteKey = (import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY;
-    const enableAppCheck = (import.meta as any).env?.VITE_ENABLE_APP_CHECK === "true";
-    if (enableAppCheck && typeof window !== "undefined" && recaptchaSiteKey && recaptchaSiteKey !== "6Leav78tAAAAAIC55RH3TEYNvLaxhbN0JQ6YzgYf") {
-      if ((import.meta as any).env?.DEV) {
-        (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    // Initialize Firebase App Check with reCAPTCHA Enterprise (or classic v3 if configured)
+    const DEFAULT_RECAPTCHA_SITE_KEY = "6LdS1yEuAAAAAGr4Px4Iyesc61yutVjaRfoW23DD";
+    const envRecaptchaSiteKey = (import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY;
+    const cleanEnvKey =
+      typeof envRecaptchaSiteKey === "string" &&
+      envRecaptchaSiteKey.trim() &&
+      envRecaptchaSiteKey.trim() !== "6Leav78tAAAAAIC55RH3TEYNvLaxhbN0JQ6YzgYf"
+        ? envRecaptchaSiteKey.trim()
+        : "";
+    const configRecaptchaSiteKey = typeof configAny.recaptchaSiteKey === "string" ? configAny.recaptchaSiteKey.trim() : "";
+    const recaptchaSiteKey = cleanEnvKey || configRecaptchaSiteKey || DEFAULT_RECAPTCHA_SITE_KEY;
+    const providerType = (import.meta as any).env?.VITE_RECAPTCHA_PROVIDER;
+    const useClassicV3 =
+      providerType === "v3" || recaptchaSiteKey === "6LcKGSEuAAAAAKhDasLhGYfZ9ReQl0efNofln7sP";
+    const disableAppCheck = (import.meta as any).env?.VITE_ENABLE_APP_CHECK === "false";
+    const debugTokenEnv = (import.meta as any).env?.VITE_APPCHECK_DEBUG_TOKEN;
+    if (!disableAppCheck && typeof window !== "undefined" && recaptchaSiteKey) {
+      if (debugTokenEnv) {
+        (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = debugTokenEnv === "true" ? true : debugTokenEnv;
       }
       try {
         appCheck = initializeAppCheck(app, {
-          provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+          provider: useClassicV3
+            ? new ReCaptchaV3Provider(recaptchaSiteKey)
+            : new ReCaptchaEnterpriseProvider(recaptchaSiteKey),
           isTokenAutoRefreshEnabled: true,
         });
-        console.log("✓ تم تفعيل Firebase App Check بنجاح لحماية التطبيق");
+        console.log(
+          useClassicV3
+            ? "✓ تم تفعيل Firebase App Check (reCAPTCHA v3) بنجاح"
+            : "✓ تم تفعيل Firebase App Check (reCAPTCHA Enterprise) بنجاح"
+        );
       } catch (appCheckErr) {
         console.error("خطأ في تفعيل App Check:", appCheckErr);
       }
@@ -329,21 +415,85 @@ export async function probeFirestoreDetailed(): Promise<FirestoreProbeResult> {
   }
 }
 
-export async function requestFcmToken() {
+function sanitizeAndValidateVapidKey(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const cleaned = raw.trim().replace(/^["']+|["']+$/g, "").replace(/\s+/g, "");
+  if (!cleaned || !/^[A-Za-z0-9\-_+/=]+$/.test(cleaned)) {
+    return undefined;
+  }
   try {
-    const vapidKey = "BEHZAw2EXT3QP8Xys_TX3zUJh5mYjW2fmzIeniR7LycadSd01-IYa0WIeVHEKP9h8k386fnkknmDXPxFKlszxQg";
-
-    const { getToken } = await import("firebase/messaging");
-    const token = await getToken(messaging, { vapidKey });
-    if (token) {
-      console.log("تم الحصول على توكن FCM بنجاح:", token);
-      return token;
-    } else {
-      console.warn("لم يتم الحصول على توكن، تحقق من صلاحيات المتصفح.");
-      return null;
+    const base64url = cleaned.replace(/=+$/, "");
+    const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
+    const base64 = (base64url + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = atob(base64);
+    // Standard Web Push VAPID public key is an uncompressed P-256 point (65 bytes, starting with 0x04)
+    if (decoded.length !== 65 || decoded.charCodeAt(0) !== 4) {
+      return undefined;
     }
-  } catch (err) {
-    console.error("خطأ أثناء الحصول على توكن FCM:", err);
+    return base64url;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function requestFcmToken(): Promise<string | null> {
+  if (!isFirebaseConfigured || !messaging || typeof window === "undefined") {
     return null;
   }
-};
+  if (!("Notification" in window) || window.Notification.permission !== "granted") {
+    return null;
+  }
+  try {
+    const configAny = firebaseConfig as any;
+    const rawVapidKey =
+      (import.meta as any).env?.VITE_FIREBASE_VAPID_KEY ||
+      configAny.vapidKey;
+    const vapidKey = sanitizeAndValidateVapidKey(rawVapidKey);
+
+    if (rawVapidKey && !vapidKey) {
+      console.warn("قيمة VITE_FIREBASE_VAPID_KEY غير صالحة (يجب أن تكون مفتاح Web Push VAPID بصيغة Base64URL من Firebase Console). سيتم استخدام المفتاح الافتراضي للـ SDK.");
+    }
+
+    let serviceWorkerRegistration: ServiceWorkerRegistration | undefined;
+    if ("serviceWorker" in navigator) {
+      try {
+        serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+      } catch (swErr) {
+        console.warn("FCM service worker registration notice:", swErr);
+      }
+    }
+
+    const { getToken } = await import("firebase/messaging");
+    const tokenOptions: { vapidKey?: string; serviceWorkerRegistration?: ServiceWorkerRegistration } = {};
+    if (vapidKey) {
+      tokenOptions.vapidKey = vapidKey;
+    }
+    if (serviceWorkerRegistration) {
+      tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
+    }
+
+    const token = await getToken(messaging, tokenOptions);
+    if (token) {
+      return token;
+    }
+    return null;
+  } catch (err) {
+    console.warn("FCM token retrieval notice:", err);
+    return null;
+  }
+}
+
+export async function subscribeToForegroundFcmMessages(
+  callback: (payload: any) => void
+): Promise<() => void> {
+  if (!isFirebaseConfigured || !messaging || typeof window === "undefined") {
+    return () => {};
+  }
+  try {
+    const { onMessage } = await import("firebase/messaging");
+    return onMessage(messaging, callback);
+  } catch (err) {
+    console.warn("FCM foreground listener notice:", err);
+    return () => {};
+  }
+}

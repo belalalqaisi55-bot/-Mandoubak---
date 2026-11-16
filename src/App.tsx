@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { authenticatedFetch as fetch } from "./utils/authenticatedFetch";
 import { Product, StockReport, Order, OrderItem, User, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
@@ -62,7 +62,7 @@ import {
   getSyncLogs
 } from "./utils/offlineSync";
 import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, deleteDoc, onSnapshot } from "firebase/firestore";
-import { db, isFirebaseConfigured, signInWithGoogle, signOutUser, subscribeToAuthState, getDocsWithTimeout } from "./firebase";
+import { auth, db, isFirebaseConfigured, signInWithGoogle, signInWithEmail, registerWithEmail, resetPassword, signOutUser, subscribeToAuthState, getDocsWithTimeout, handleFirestoreError, OperationType, formatFirebaseAuthError, requestFcmToken, subscribeToForegroundFcmMessages } from "./firebase";
 import { motion, AnimatePresence } from "motion/react";
 import { ConnectionStatusIndicator } from "./components/ConnectionStatusIndicator";
 import { useConnectionStatus } from "./hooks/useConnectionStatus";
@@ -156,7 +156,8 @@ import {
   Eye,
   Mic,
   Volume2,
-  FlaskConical
+  FlaskConical,
+  Mail
 } from "lucide-react";
 import {
   initNativeInteractions,
@@ -382,9 +383,16 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<any>(null);
 
   useEffect(() => {
+    const idToken = localStorage.getItem("mandoubak_id_token");
+    const currentFbUser = auth?.currentUser;
+    if (!idToken && (!currentFbUser || currentFbUser.isAnonymous)) {
+      setGoogleUser(null);
+      return;
+    }
+
     fetch('/api/me')
-      .then(res => res.json())
-      .then(data => setGoogleUser(data.user))
+      .then(res => (res.ok ? res.json() : { user: null }))
+      .then(data => setGoogleUser(data?.user || null))
       .catch(() => setGoogleUser(null));
   }, []);
 
@@ -431,6 +439,17 @@ export default function App() {
     if (!isFirebaseConfigured) return;
     const unsubscribe = subscribeToAuthState(async (firebaseUser) => {
       if (firebaseUser) {
+        if (!firebaseUser.isAnonymous) {
+          try {
+            const token = await firebaseUser.getIdToken();
+            if (token) localStorage.setItem("mandoubak_id_token", token);
+          } catch {}
+          setGoogleUser({
+            name: firebaseUser.displayName,
+            email: firebaseUser.email,
+            picture: firebaseUser.photoURL,
+          });
+        }
         const userEmail = (firebaseUser.email || "").toLowerCase().trim();
         const isRep = userEmail === "belalalqaisi55@gmail.com" || userEmail.startsWith("belalalqaisi55") || userEmail.includes("belalalqaisi");
         
@@ -465,6 +484,17 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<"phone" | "email">("phone");
+  const [emailAuthMode, setEmailAuthMode] = useState<"login" | "register">("login");
+  const [emailInput, setEmailInput] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
+  const [emailRegForm, setEmailRegForm] = useState({
+    name: "",
+    role: "pharmacy" as "pharmacy" | "doctor",
+    entityName: "",
+    phone: "",
+    location: "",
+  });
   const [regForm, setRegForm] = useState({
     name: "",
     role: "pharmacy" as "pharmacy" | "doctor" | "rep",
@@ -629,6 +659,13 @@ export default function App() {
   const [pushPermission, setPushPermission] = useState<NotificationPermission>(
     typeof window !== "undefined" && "Notification" in window ? window.Notification.permission : "default"
   );
+  const [fcmToken, setFcmToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("mandoubak_fcm_token");
+    } catch {
+      return null;
+    }
+  });
   const [knownNotifIds, setKnownNotifIds] = useState<Set<string>>(new Set());
 
   // App Modals & Gemini Chat Modal States
@@ -700,9 +737,9 @@ export default function App() {
   const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => {
     try {
       const cached = localStorage.getItem("mandoubak_local_clients");
-      if (cached) {
+      if (cached !== null) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.some((u: User) => u.role === "pharmacy" || u.role === "doctor")) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
@@ -1212,23 +1249,52 @@ export default function App() {
           console.warn("Settings realtime sync notice:", err.message);
         });
 
-        // Real-time synchronization of orders
-        unsubscribeOrders = onSnapshot(collection(db, "orders"), (snap) => {
-          const ordersList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-          setOrders(ordersList);
-          try {
-            localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
-          } catch (e) {}
-        });
+        // Real-time synchronization of orders (role-scoped to respect Firestore rules)
+        const ordersQuery =
+          user?.role === "rep" || user?.role === "admin"
+            ? collection(db, "orders")
+            : query(collection(db, "orders"), where("clientId", "==", user?.id || ""));
+
+        unsubscribeOrders = onSnapshot(
+          ordersQuery,
+          (snap) => {
+            const hasRemovals = snap.docChanges().some((c) => c.type === "removed");
+            if (!snap.empty || hasRemovals) {
+              const ordersList = snap.docs
+                .map((d) => ({ id: d.id, ...d.data() } as Order))
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+              setOrders(ordersList);
+              try {
+                localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+              } catch (e) {}
+            }
+          },
+          (err) => {
+            console.warn("Orders realtime sync notice:", err.message);
+          }
+        );
 
         // Real-time synchronization of stock reports
-        unsubscribeStockReports = onSnapshot(collection(db, "stockReports"), (snap) => {
-          const reportsList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as StockReport));
-          setStockReports(reportsList);
-          try {
-            localStorage.setItem("mandoubak_local_stock_reports", JSON.stringify(reportsList));
-          } catch (e) {}
-        });
+        const reportsQuery =
+          user?.role === "rep" || user?.role === "admin"
+            ? collection(db, "stockReports")
+            : query(collection(db, "stockReports"), where("clientId", "==", user?.id || ""));
+
+        unsubscribeStockReports = onSnapshot(
+          reportsQuery,
+          (snap) => {
+            if (!snap.empty) {
+              const reportsList = snap.docs.map((d) => ({ id: d.id, ...d.data() } as StockReport));
+              setStockReports(reportsList);
+              try {
+                localStorage.setItem("mandoubak_local_stock_reports", JSON.stringify(reportsList));
+              } catch (e) {}
+            }
+          },
+          (err) => {
+            console.warn("Stock reports realtime sync notice:", err.message);
+          }
+        );
 
       } catch (e) {}
     }
@@ -1370,6 +1436,73 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user]);
 
+  const registerDeviceFcmToken = async (targetUser: User) => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (window.Notification.permission !== "granted") return;
+    try {
+      const token = await requestFcmToken();
+      if (!token) return;
+      try {
+        localStorage.setItem("mandoubak_fcm_token", token);
+      } catch {
+        // Ignore storage errors
+      }
+      setFcmToken(token);
+      const nowIso = new Date().toISOString();
+      await fetch("/api/fcm/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: targetUser.id, token }),
+      }).catch((err) => console.warn("FCM server register notice:", err));
+
+      await syncToFirebase("users", "set", targetUser.id, {
+        ...targetUser,
+        fcmToken: token,
+        fcmUpdatedAt: nowIso,
+      }).catch((err) => console.warn("FCM Firestore sync notice:", err));
+    } catch (err) {
+      console.warn("registerDeviceFcmToken notice:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!user || pushPermission !== "granted") return;
+    registerDeviceFcmToken(user);
+  }, [user?.id, pushPermission]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    let unsubscribeFcm: (() => void) | null = null;
+    subscribeToForegroundFcmMessages((payload: any) => {
+      if (!active) return;
+      const title = payload?.notification?.title || payload?.data?.title || "إشعار فوري من مندوبك";
+      const body = payload?.notification?.body || payload?.data?.body || payload?.data?.message || "";
+      if (body) {
+        showSuccess(`${title}: ${body}`);
+      } else {
+        showSuccess(title);
+      }
+      nativeSendNotification({
+        title,
+        body: body || title,
+        channel: "broadcast",
+        tag: `fcm_${Date.now()}`,
+      });
+      fetchUserSpecificData(true);
+    }).then((unsub) => {
+      if (!active) {
+        unsub();
+      } else {
+        unsubscribeFcm = unsub;
+      }
+    });
+    return () => {
+      active = false;
+      if (unsubscribeFcm) unsubscribeFcm();
+    };
+  }, [user?.id]);
+
   const requestDeviceNotificationPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
       showError("المتصفح أو الجهاز الحالي لا يدعم ميزة إشعارات النظام المباشرة");
@@ -1379,6 +1512,9 @@ export default function App() {
       const perm = await window.Notification.requestPermission();
       setPushPermission(perm);
       if (perm === "granted") {
+        if (user) {
+          await registerDeviceFcmToken(user);
+        }
         showSuccess("تم تفعيل وتخويل إشعارات النظام على هاتفك بنجاح! 🔔");
         try {
           new window.Notification("تطبيق مندوبك الطبي 👨‍⚕️", {
@@ -1468,42 +1604,63 @@ export default function App() {
     try {
       // Run all user-specific data sync tasks concurrently in parallel with 3000ms timeouts
       const ordersTask = async () => {
-        let loadedOrders: Order[] = [];
+        let apiOrders: Order[] = [];
+        let fsOrders: Order[] = [];
+
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const ordersUrl = user?.role === "rep" ? "/api/orders" : `/api/orders?clientId=${user?.id}`;
           const idToken = localStorage.getItem("mandoubak_id_token");
-          const rOrders = await fetch(ordersUrl, { 
+          const rOrders = await fetch(ordersUrl, {
             signal: controller.signal,
-            headers: {
-              'Authorization': `Bearer ${idToken}`
-            }
+            headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
           });
           clearTimeout(timer);
           const ctOrders = rOrders.headers.get("content-type") || "";
           if (rOrders.ok && ctOrders.includes("application/json")) {
             const dOrders = await rOrders.json();
-            if (Array.isArray(dOrders)) loadedOrders = dOrders;
-          } else if (isFirebaseConfigured && db) {
-            const q = user?.role === "rep" 
-              ? collection(db, "orders")
-              : query(collection(db, "orders"), where("userId", "==", user?.id));
-            const snapshot = await getDocsWithTimeout(q, 2500);
-            const fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
-            loadedOrders = fsOrders;
+            if (Array.isArray(dOrders)) apiOrders = dOrders;
           }
         } catch (err) {
-          if (isFirebaseConfigured && db) {
-            try {
-              const snapshot = await getDocsWithTimeout(collection(db, "orders"), 2500);
-              const fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
-              loadedOrders = user?.role === "rep" ? fsOrders : fsOrders.filter((o: any) => o.clientId === user?.id || (o as any).userId === user?.id);
-            } catch (fsErr) {
-              console.warn("Firestore orders fallback err:", fsErr);
+          console.warn("API orders fetch notice:", err);
+        }
+
+        if (isFirebaseConfigured && db) {
+          try {
+            const q =
+              user?.role === "rep" || user?.role === "admin"
+                ? collection(db, "orders")
+                : query(collection(db, "orders"), where("clientId", "==", user?.id));
+            const snapshot = await getDocsWithTimeout(q, 2500);
+            fsOrders = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Order));
+          } catch (fsErr) {
+            console.warn("Firestore orders fallback err:", fsErr);
+          }
+        }
+
+        // Merge API and Firestore orders, keeping the most recently updated version per ID
+        const mergedMap = new Map<string, Order>();
+        for (const o of apiOrders) {
+          if (o && o.id) mergedMap.set(o.id, o);
+        }
+        for (const o of fsOrders) {
+          if (!o || !o.id) continue;
+          const existing = mergedMap.get(o.id);
+          if (!existing) {
+            mergedMap.set(o.id, o);
+          } else {
+            const existingTs = new Date(existing.updatedAt || existing.archivedAt || existing.createdAt || 0).getTime() || 0;
+            const fsTs = new Date(o.updatedAt || o.archivedAt || o.createdAt || 0).getTime() || 0;
+            if (fsTs >= existingTs) {
+              mergedMap.set(o.id, o);
             }
           }
         }
+
+        const loadedOrders = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
 
         if (loadedOrders.length > 0) {
           setOrders(loadedOrders);
@@ -1628,19 +1785,19 @@ export default function App() {
           if (rNotifs.ok && ctNotifs.includes("application/json")) {
             const dNotifs: Notification[] = await rNotifs.json();
             if (Array.isArray(dNotifs)) {
-              setNotifications(dNotifs);
+              setNotifications(dNotifs.filter(n => !n.isArchived));
             }
           } else if (isFirebaseConfigured && db) {
             const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
             const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
-            setNotifications(fsNotifs);
+            setNotifications(fsNotifs.filter((n: Notification) => !n.isArchived));
           }
         } catch (err) {
           if (isFirebaseConfigured && db) {
             try {
               const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
               const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
-              setNotifications(fsNotifs);
+              setNotifications(fsNotifs.filter((n: Notification) => !n.isArchived));
             } catch (fsErr) {
               console.warn("Firestore notifications fallback err:", fsErr);
             }
@@ -1808,32 +1965,56 @@ export default function App() {
     setLoading(true);
     try {
       const prodPrice = products.find(p => p.id === report.productId)?.price || "غير محدد";
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId: report.clientId,
-          clientName: report.clientName,
-          entityName: report.entityName,
-          items: [
-            {
-              productId: report.productId,
-              productName: report.productName,
-              quantity: Number(quickRestockQty),
-              price: prodPrice
-            }
-          ]
-        })
-      });
+      const timestamp = new Date().toISOString();
+      const orderPayload: Order & { userId?: string } = {
+        id: `ord_${Date.now()}`,
+        clientId: report.clientId,
+        userId: auth?.currentUser?.uid || report.clientId,
+        clientName: report.clientName || "عميل غير معروف",
+        entityName: report.entityName || "منشأة غير معروفة",
+        items: [
+          {
+            productId: report.productId,
+            productName: report.productName,
+            quantity: Number(quickRestockQty),
+            price: prodPrice
+          }
+        ],
+        status: "pending",
+        createdAt: timestamp,
+        syncStatus: isDeviceOnline() ? "synced" : "pending_sync",
+      };
 
-      if (res.ok) {
-        showSuccess(`تم إرسال طلبية إعادة تغذية عاجلة لـ ${report.entityName} بنجاح!`);
-        setQuickRestockItem(null);
-        setQuickRestockQty("");
-        fetchUserSpecificData();
-      } else {
-        showError("فشل إنشاء طلبية التوريد الفورية");
+      let savedOrder: Order = orderPayload;
+      let apiSucceeded = false;
+
+      try {
+        const res = await fetch("/api/orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(orderPayload)
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data?.order) savedOrder = data.order;
+          apiSucceeded = true;
+        }
+      } catch (apiErr) {
+        console.warn("Quick restock API error, falling back to Firestore/IndexedDB:", apiErr);
       }
+
+      // Persist locally + sync to Firestore
+      setOrders((prev) => [savedOrder, ...prev.filter((o) => o.id !== savedOrder.id)]);
+      await syncToFirebase("orders", "set", savedOrder.id, savedOrder);
+
+      if (apiSucceeded || isDeviceOnline()) {
+        showSuccess(`تم إرسال طلبية إعادة تغذية عاجلة لـ ${report.entityName} بنجاح!`);
+      } else {
+        showSuccess(`تم حفظ طلبية التوريد العاجلة محلياً وستُرسل تلقائياً فور توفر الاتصال!`);
+      }
+      setQuickRestockItem(null);
+      setQuickRestockQty("");
+      fetchUserSpecificData(true);
     } catch (e) {
       showError("حدث خطأ أثناء إرسال طلبية التوريد");
     } finally {
@@ -1951,7 +2132,18 @@ export default function App() {
         }),
       });
       if (res.ok) {
-        showSuccess("تم إرسال ونشر الإشعار بنجاح!");
+        const data = await res.json().catch(() => null);
+        if (data?.notification?.id) {
+          await syncToFirebase("notifications", "set", data.notification.id, data.notification).catch((err) =>
+            console.warn("Firestore notification sync notice:", err)
+          );
+        }
+        const fcmSuccessCount = data?.fcmDelivery?.successCount || 0;
+        showSuccess(
+          fcmSuccessCount > 0
+            ? `تم إرسال ونشر الإشعار بنجاح + بث سحابي FCM لـ ${fcmSuccessCount} جهاز!`
+            : "تم إرسال ونشر الإشعار بنجاح!"
+        );
         nativeSendNotification({
           title: newNotifForm.title,
           body: newNotifForm.message,
@@ -2021,14 +2213,23 @@ export default function App() {
       onConfirm: async () => {
         setLoading(true);
         try {
+          const targetNotif = notifications.find((n) => n.id === id);
+          const now = new Date().toISOString();
+          setNotifications((prev) => prev.filter((n) => n.id !== id));
+          if (targetNotif) {
+            await syncToFirebase("notifications", "set", id, {
+              ...targetNotif,
+              isArchived: true,
+              archivedAt: now,
+            });
+          }
           const res = await fetch(`/api/notifications/${id}/archive`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ isArchived: true }),
           });
-          if (res.ok) {
+          if (res.ok || targetNotif) {
             showSuccess("تم نقل الإشعار إلى الأرشيف بنجاح");
-            fetchUserSpecificData();
           } else {
             showError("فشل أرشفة الإشعار");
           }
@@ -2299,38 +2500,91 @@ export default function App() {
     }
   };
 
+  const DELETED_CLIENTS_STORAGE_KEY = "mandoubak_deleted_client_ids";
+
+  const getDeletedClientKeys = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem(DELETED_CLIENTS_STORAGE_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          return new Set(arr.filter((v) => typeof v === "string" && v.trim()));
+        }
+      }
+    } catch {}
+    return new Set();
+  };
+
+  const markClientsDeleted = (keys: Array<string | undefined | null>) => {
+    const cleanKeys = keys.map((k) => (typeof k === "string" ? k.trim() : "")).filter(Boolean);
+    if (cleanKeys.length === 0) return;
+    try {
+      const set = getDeletedClientKeys();
+      cleanKeys.forEach((k) => set.add(k));
+      localStorage.setItem(DELETED_CLIENTS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+    } catch {}
+  };
+
+  const unmarkClientsDeleted = (keys: Array<string | undefined | null>) => {
+    const cleanKeys = new Set(keys.map((k) => (typeof k === "string" ? k.trim() : "")).filter(Boolean));
+    if (cleanKeys.size === 0) return;
+    try {
+      const set = getDeletedClientKeys();
+      let changed = false;
+      cleanKeys.forEach((k) => {
+        if (set.delete(k)) changed = true;
+      });
+      if (changed) {
+        localStorage.setItem(DELETED_CLIENTS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+      }
+    } catch {}
+  };
+
+  const usersFetchInFlightRef = useRef<Promise<void> | null>(null);
+
   // Fetch registered users (for Representative view)
   const fetchAllRegisteredUsers = async () => {
+    if (usersFetchInFlightRef.current) {
+      return usersFetchInFlightRef.current;
+    }
+
+    const runFetch = async () => {
     try {
       let usersList: User[] = [];
+      let backendFetched = false;
 
       // 1. Fetch from backend API
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "AbortError")), 10000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
         const r = await fetch("/api/users", { signal: controller.signal });
-        clearTimeout(timer);
         const ct = r.headers.get("content-type") || "";
         if (r.ok && ct.includes("application/json")) {
           const data = await r.json();
-          if (Array.isArray(data) && data.length > 0) {
+          if (Array.isArray(data)) {
             usersList = data;
+            backendFetched = true;
           }
         }
       } catch (err) {
         console.warn("Backend /api/users unreachable, trying Firestore:", err);
+      } finally {
+        clearTimeout(timer);
       }
 
-      // 2. Fetch from Firestore
+      // 2. Fetch from Firestore (merge only non-deleted users)
       if (isFirebaseConfigured && db) {
         try {
           const snapshot = await getDocsWithTimeout(collection(db, "users"), 5000);
           const fsUsers = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as User));
           if (fsUsers.length > 0) {
             const existingIds = new Set(usersList.map((u) => u.id));
+            const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
             fsUsers.forEach((u: any) => {
-              if (!existingIds.has(u.id)) {
+              if (u && u.id && !existingIds.has(u.id) && (!u.phone || !existingPhones.has(u.phone))) {
                 usersList.push(u);
+                existingIds.add(u.id);
+                if (u.phone) existingPhones.add(u.phone);
               }
             });
           }
@@ -2339,47 +2593,53 @@ export default function App() {
         }
       }
 
-      // 3. Always merge local cache so client edits/additions are never lost
-      try {
-        const localSaved = localStorage.getItem("mandoubak_local_clients");
-        if (localSaved) {
-          const parsed = JSON.parse(localSaved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const existingIds = new Set(usersList.map((u) => u.id));
-            const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
-            parsed.forEach((u: User) => {
-              if (u && u.id && !existingIds.has(u.id) && (!u.phone || !existingPhones.has(u.phone))) {
-                usersList.push(u);
-              }
-            });
+      // 3. Only fall back to localStorage cache when backend was unreachable
+      if (!backendFetched) {
+        try {
+          const localSaved = localStorage.getItem("mandoubak_local_clients");
+          if (localSaved) {
+            const parsed = JSON.parse(localSaved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const existingIds = new Set(usersList.map((u) => u.id));
+              const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
+              parsed.forEach((u: User) => {
+                if (u && u.id && !existingIds.has(u.id) && (!u.phone || !existingPhones.has(u.phone))) {
+                  usersList.push(u);
+                }
+              });
+            }
           }
-        }
-      } catch (e) {}
-
-      // 4. Ensure baseline client roster is present if client count is empty or minimal
-      const hasClients = usersList.some((u) => u.role === "pharmacy" || u.role === "doctor");
-      if (!hasClients) {
-        const existingIds = new Set(usersList.map((u) => u.id));
-        const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
-        DEFAULT_CLIENTS.forEach((c) => {
-          if (!existingIds.has(c.id) && (!c.phone || !existingPhones.has(c.phone))) {
-            usersList.push(c);
-          }
-        });
+        } catch (e) {}
       }
 
+      // 4. Filter out legacy placeholder IDs and explicitly deleted clients (keeps deleted clients deleted even if Firestore rules denied doc deletion)
       const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
-      usersList = usersList.filter((u) => !defaultClientIds.has(u.id));
+      const deletedKeys = getDeletedClientKeys();
+      usersList = usersList.filter((u) => {
+        if (!u || defaultClientIds.has(u.id)) return false;
+        if (u.role !== "rep" && u.id !== "u_rep") {
+          if (deletedKeys.has(u.id) || (u.phone && deletedKeys.has(u.phone))) {
+            return false;
+          }
+        }
+        return true;
+      });
+
       setRegisteredUsers(usersList);
 
       try {
-        if (usersList.length > 0) {
-          localStorage.setItem("mandoubak_local_clients", JSON.stringify(usersList));
-        }
+        localStorage.setItem("mandoubak_local_clients", JSON.stringify(usersList));
       } catch (e) {}
     } catch (e) {
       console.error("Error fetching registered users", e);
     }
+    };
+
+    const task = runFetch().finally(() => {
+      usersFetchInFlightRef.current = null;
+    });
+    usersFetchInFlightRef.current = task;
+    return task;
   };
 
   // User Confirmation / Approval Actions (Admin)
@@ -2533,7 +2793,7 @@ export default function App() {
 
     setIsVerifyingCode(true);
     try {
-      const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone);
+      const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone || "");
       const res = await fetch("/api/auth/verify-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2560,7 +2820,7 @@ export default function App() {
     if (!pendingApprovalUser) return;
     setIsCheckingApprovalStatus(true);
     try {
-      const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone);
+      const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone || "");
       let approvedUser: User | null = null;
 
       // 1. Try Backend API
@@ -2592,7 +2852,7 @@ export default function App() {
           if (found) {
             const fData = found.data() as User;
             if (fData.isApproved || fData.status === "approved") {
-              approvedUser = { id: found.id, ...fData };
+              approvedUser = { ...fData, id: found.id };
             }
           }
         } catch (fsErr) {
@@ -2702,7 +2962,11 @@ export default function App() {
         setLastSyncTime(new Date());
         triggerSyncToast("تم الحفظ والمزامنة السحابية الفورية بنجاح ☁️✓");
       } catch (fsErr) {
-        console.warn(`Firestore sync middleware notice [${collectionName}/${action}]:`, fsErr);
+        handleFirestoreError(
+          fsErr,
+          action === "delete" ? OperationType.DELETE : OperationType.WRITE,
+          `${collectionName}/${id || ""}`
+        );
       }
     }
   };
@@ -2726,6 +2990,9 @@ export default function App() {
         location: clientForm.location.trim(),
         createdAt: new Date().toISOString()
       };
+
+      // Clear any prior delete tombstone if re-adding same phone/id
+      unmarkClientsDeleted([clientPayload.id, clientPayload.phone]);
 
       // Always update local state immediately
       setRegisteredUsers((prev) => {
@@ -2791,13 +3058,18 @@ export default function App() {
       }
 
       if (newUsers.length > 0) {
+        unmarkClientsDeleted(newUsers.flatMap((u) => [u.id, u.phone]));
         // Update local state immediately
         setRegisteredUsers((prev) => {
           const map = new Map<string, User>();
-          newUsers.forEach((u) => map.set(u.phone, u));
+          newUsers.forEach((u) => {
+            const key = u.phone || u.id;
+            if (key) map.set(key, u);
+          });
           prev.forEach((u) => {
-            if (!map.has(u.phone)) {
-              map.set(u.phone, u);
+            const key = u.phone || u.id;
+            if (key && !map.has(key)) {
+              map.set(key, u);
             }
           });
           return Array.from(map.values());
@@ -2910,6 +3182,7 @@ export default function App() {
 
       const data = await res.json();
       if (res.ok && data.success) {
+        unmarkClientsDeleted(clientsToImport.map((c) => cleanArabicPhone(c.phone)));
         showSuccess(`تم استيراد وإضافة ${data.addedCount} عميل بنجاح! (تم تخطي ${data.skippedCount} عملاء مسجلين مسبقاً) 🚀`);
         setExcelPasteText("");
         setShowExcelPreview(false);
@@ -2943,23 +3216,37 @@ export default function App() {
       onConfirm: async () => {
         setLoading(true);
         try {
+          const targetClient = registeredUsers.find((u) => u.id === id || u.phone === id);
+          const keysToDelete = [id, targetClient?.id, targetClient?.phone].filter(Boolean) as string[];
+          markClientsDeleted(keysToDelete);
+
           // Immediate local state update
-          setRegisteredUsers((prev) => prev.filter((u) => u.id !== id && u.phone !== id));
+          const isMatch = (u: any) =>
+            u.id === id ||
+            u.phone === id ||
+            (targetClient?.id && u.id === targetClient.id) ||
+            (targetClient?.phone && u.phone === targetClient.phone);
+
+          setRegisteredUsers((prev) => prev.filter((u) => !isMatch(u)));
           try {
             const localSaved = localStorage.getItem("mandoubak_local_clients");
             if (localSaved) {
               const parsed = JSON.parse(localSaved);
               if (Array.isArray(parsed)) {
-                const filtered = parsed.filter((u: any) => u.id !== id && u.phone !== id);
+                const filtered = parsed.filter((u: any) => !isMatch(u));
                 localStorage.setItem("mandoubak_local_clients", JSON.stringify(filtered));
               }
             }
           } catch (e) {}
 
-          // Synchronize deletion to Firestore
+          // Synchronize deletion to Firestore (check matching docs by id or phone)
           if (isFirebaseConfigured && db) {
             try {
               await deleteDoc(doc(db, "users", id));
+              if (targetClient?.phone) {
+                const phoneSnap = await getDocs(query(collection(db, "users"), where("phone", "==", targetClient.phone)));
+                await Promise.all(phoneSnap.docs.map((d) => deleteDoc(doc(db, "users", d.id))));
+              }
             } catch (fsErr) {
               console.warn("Firestore client delete error:", fsErr);
             }
@@ -2967,7 +3254,8 @@ export default function App() {
 
           // Call backend DELETE endpoint
           try {
-            await fetch(`/api/users/${id}`, {
+            const phoneQuery = targetClient?.phone ? `?phone=${encodeURIComponent(targetClient.phone)}` : "";
+            await fetch(`/api/users/${encodeURIComponent(id)}${phoneQuery}`, {
               method: "DELETE",
             });
           } catch (netErr) {
@@ -2995,8 +3283,13 @@ export default function App() {
       onConfirm: async () => {
         setLoading(true);
         try {
+          const allClientKeys = registeredUsers
+            .filter((u) => u.id !== "u_rep" && u.role !== "rep")
+            .flatMap((u) => [u.id, u.phone]);
+          markClientsDeleted(allClientKeys);
+
           // 1. Instantly clear local state and cache
-          setRegisteredUsers([]);
+          setRegisteredUsers((prev) => prev.filter((u) => u.id === "u_rep" || u.role === "rep"));
           try {
             localStorage.removeItem("mandoubak_local_clients");
             localStorage.setItem("mandoubak_local_clients", JSON.stringify([]));
@@ -3235,6 +3528,11 @@ export default function App() {
         // Store ID Token for API authentication
         const idToken = await (googleUser as any).getIdToken();
         localStorage.setItem("mandoubak_id_token", idToken);
+        setGoogleUser({
+          name: googleUser.displayName,
+          email: googleUser.email,
+          picture: googleUser.photoURL,
+        });
 
         // Strictly verify that only the authorized email gets the administrator/representative role
         const userEmail = (googleUser.email || "").toLowerCase().trim();
@@ -3263,13 +3561,196 @@ export default function App() {
         setUser(loggedUser);
         setPendingApprovalUser(null);
         localStorage.setItem("mandoubak_user", JSON.stringify(loggedUser));
-        localStorage.setItem("mandoubak_bound_phone", isRep ? "+967776600049" : loggedUser.phone);
+        localStorage.setItem("mandoubak_bound_phone", isRep ? "+967776600049" : (loggedUser.phone || ""));
         await syncToFirebase("users", "set", loggedUser.id, loggedUser);
         showSuccess(isRep ? "أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️" : `أهلاً بك ${loggedUser.name}! تم تسجيل الدخول بنجاح كعميل.`);
       }
     } catch (err: any) {
       console.warn("Google Sign-In notice:", err);
-      showError(err.message || "عذراً، يتعذر تسجيل الدخول عبر Google حالياً. يمكنك استخدام رقم هاتفك المسجل.");
+      showError(formatFirebaseAuthError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailLoginOrRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = emailInput.trim();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      showError("يرجى إدخال بريد إلكتروني صحيح");
+      return;
+    }
+    if (!emailPassword || emailPassword.length < 6) {
+      showError("يرجى إدخال كلمة مرور لا تقل عن 6 أحرف أو أرقام");
+      return;
+    }
+
+    if (emailAuthMode === "register") {
+      if (!emailRegForm.entityName.trim() || !emailRegForm.name.trim() || !emailRegForm.location.trim()) {
+        showError("يرجى ملء بيانات المنشأة والمسؤول والعنوان لإتمام إنشاء الحساب");
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      const fbUser =
+        emailAuthMode === "register"
+          ? await registerWithEmail(cleanEmail, emailPassword)
+          : await signInWithEmail(cleanEmail, emailPassword);
+
+      if (!fbUser) {
+        showError("تعذر إتمام المصادقة بالبريد الإلكتروني، يرجى المحاولة مجدداً");
+        return;
+      }
+
+      const idToken = await (fbUser as any).getIdToken();
+      if (idToken) {
+        localStorage.setItem("mandoubak_id_token", idToken);
+      }
+
+      const resolvedEmail = (fbUser.email || cleanEmail).trim();
+      const lowerEmail = resolvedEmail.toLowerCase();
+      const isRep =
+        lowerEmail === "belalalqaisi55@gmail.com" ||
+        lowerEmail.startsWith("belalalqaisi55") ||
+        lowerEmail.includes("belalalqaisi");
+
+      setGoogleUser({
+        name: fbUser.displayName || emailRegForm.name.trim() || resolvedEmail,
+        email: resolvedEmail,
+        picture: fbUser.photoURL || null,
+      });
+
+      if (emailAuthMode === "login") {
+        let existingUser: User | null = null;
+        if (isFirebaseConfigured && db) {
+          try {
+            const targetDocId = isRep ? "u_rep" : fbUser.uid;
+            const userSnap = await getDoc(doc(db, "users", targetDocId));
+            if (userSnap.exists()) {
+              existingUser = { id: userSnap.id, ...userSnap.data() } as User;
+            }
+          } catch (fsErr) {
+            handleFirestoreError(fsErr, OperationType.GET, `users/${isRep ? "u_rep" : fbUser.uid}`);
+          }
+        }
+
+        const loggedUser: User = existingUser || {
+          id: isRep ? "u_rep" : fbUser.uid,
+          email: isRep ? "belalalqaisi55@gmail.com" : resolvedEmail,
+          phone: isRep ? "+967776600049" : (fbUser.phoneNumber || resolvedEmail),
+          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : (fbUser.displayName || resolvedEmail.split("@")[0] || "عميل مسجل"),
+          role: isRep ? "rep" : "pharmacy",
+          entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : "منشأة طبية مسجلة بالبريد",
+          location: isRep ? "صنعاء / جميع المحافظات" : "مسجل بالبريد الإلكتروني",
+          isApproved: isRep ? true : !appSettings.requireApprovalForNewClients,
+          status: isRep ? "approved" : (appSettings.requireApprovalForNewClients ? "pending_approval" : "approved"),
+          createdAt: new Date().toISOString(),
+        };
+
+        if (!isRep && loggedUser.status === "suspended") {
+          showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
+          return;
+        }
+        if (!isRep && (loggedUser.isApproved === false || loggedUser.status === "pending_approval")) {
+          setPendingApprovalUser(loggedUser);
+          await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+          showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
+          return;
+        }
+
+        setUser(loggedUser);
+        setPendingApprovalUser(null);
+        localStorage.setItem("mandoubak_user", JSON.stringify(loggedUser));
+        if (loggedUser.phone) {
+          localStorage.setItem("mandoubak_bound_phone", loggedUser.phone);
+        }
+        setEmailPassword("");
+        await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+        showSuccess(
+          isRep
+            ? "أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️"
+            : `أهلاً بك ${loggedUser.name}! تم تسجيل الدخول بنجاح.`
+        );
+      } else {
+        const cleanRegPhone = cleanArabicPhone(emailRegForm.phone.trim());
+        const validatedRole: "pharmacy" | "doctor" | "rep" = isRep
+          ? "rep"
+          : emailRegForm.role === "doctor"
+          ? "doctor"
+          : "pharmacy";
+        const requiresApproval = !isRep && appSettings.requireApprovalForNewClients;
+        const randomCode = String(Math.floor(1000 + Math.random() * 9000));
+
+        const newUser: User = {
+          id: isRep ? "u_rep" : fbUser.uid,
+          email: resolvedEmail,
+          phone: isRep ? "+967776600049" : (cleanRegPhone || resolvedEmail),
+          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : emailRegForm.name.trim(),
+          role: validatedRole,
+          entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : emailRegForm.entityName.trim(),
+          location: isRep ? "صنعاء / جميع المحافظات" : emailRegForm.location.trim(),
+          isApproved: !requiresApproval,
+          status: requiresApproval ? "pending_approval" : "approved",
+          confirmationCode: randomCode,
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(newUser),
+          });
+        } catch {
+          // Silently continue with Firestore/local sync if offline
+        }
+
+        await syncToFirebase("users", "set", newUser.id, newUser);
+        if (cleanRegPhone) {
+          localStorage.setItem("mandoubak_bound_phone", cleanRegPhone);
+        }
+        setEmailPassword("");
+        fetchAllRegisteredUsers();
+
+        if (requiresApproval) {
+          setPendingApprovalUser(newUser);
+          setUser(null);
+          showSuccess("تم إنشاء الحساب بنجاح! حسابك بانتظار التأكيد والاعتماد من المندوب د/ بلال القيسي.");
+          const waPhone = "967776600049";
+          const codeText = newUser.confirmationCode ? `\n🔑 رمز التأكيد المقترح: ${newUser.confirmationCode}` : "";
+          const waMsg = `مرحباً د/ بلال القيسي 👋\nتم تسجيل منشأة جديدة في تطبيق مندوبك الطبي بالبريد الإلكتروني:\n🏥 المنشأة: ${newUser.entityName}\n👨‍⚕️ المسؤول: ${newUser.name}\n📧 البريد: ${newUser.email}\n📱 رقم الهاتف: ${newUser.phone}\n📍 العنوان: ${newUser.location}\nنوع الحساب: ${newUser.role === "pharmacy" ? "صيدلية" : "طبيب / عيادة"}${codeText}\n\n🌐 رابط المنصة المباشر:\n${getAppLiveUrl()}\n\nيرجى التكرم باعتماد وتأكيد الحساب.`;
+          const waUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(waMsg)}`;
+          setRegSuccessModal({ isOpen: true, user: newUser, waUrl });
+        } else {
+          setUser(newUser);
+          setPendingApprovalUser(null);
+          localStorage.setItem("mandoubak_user", JSON.stringify(newUser));
+          showSuccess("تم إنشاء الحساب وتسجيل الدخول بنجاح!");
+        }
+      }
+    } catch (err: any) {
+      console.warn("Email Auth notice:", err);
+      showError(formatFirebaseAuthError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const cleanEmail = emailInput.trim();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      showError("أدخل بريدك الإلكتروني أولاً لنرسل لك رابط إعادة تعيين كلمة المرور");
+      return;
+    }
+    setLoading(true);
+    try {
+      await resetPassword(cleanEmail);
+      showSuccess("تم إرسال رابط استعادة كلمة المرور إلى بريدك الإلكتروني (يرجى تفقد البريد الوارد والرسائل غير المرغوب فيها).");
+    } catch (err: any) {
+      console.warn("Reset password notice:", err);
+      showError(formatFirebaseAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -3427,12 +3908,15 @@ export default function App() {
       const timestamp = new Date().toISOString();
       const orderId = `ord_${Date.now()}`;
 
+      const firebaseUid = auth?.currentUser?.uid || user.id;
+
       // Build Order Object
-      let newOrderObj: Order | null = null;
+      let newOrderObj: (Order & { userId?: string }) | null = null;
       if (orderItemsToSubmit.length > 0) {
         newOrderObj = {
           id: orderId,
           clientId: user.id,
+          userId: firebaseUid,
           clientName: user.name,
           entityName: user.entityName || "منشأة عامة",
           items: orderItemsToSubmit,
@@ -3444,9 +3928,10 @@ export default function App() {
       }
 
       // Build Stock Report Objects
-      const newStockReportObjs: StockReport[] = reportsToSubmit.map((r, index) => ({
+      const newStockReportObjs: (StockReport & { userId?: string })[] = reportsToSubmit.map((r, index) => ({
         id: `rep_${Date.now()}_${index}`,
         clientId: user.id,
+        userId: firebaseUid,
         clientName: user.name,
         entityName: user.entityName || "منشأة عامة",
         productId: r.productId,
@@ -3498,10 +3983,14 @@ export default function App() {
             } catch (e) {}
 
             if (!stockOk && isFirebaseConfigured && db) {
-              for (const rep of newStockReportObjs) {
-                await setDoc(doc(db, "stockReports", rep.id), rep, { merge: true });
+              try {
+                for (const rep of newStockReportObjs) {
+                  await setDoc(doc(db, "stockReports", rep.id), rep, { merge: true });
+                }
+                stockOk = true;
+              } catch (fsStockErr) {
+                handleFirestoreError(fsStockErr, OperationType.WRITE, "stockReports");
               }
-              stockOk = true;
             }
           }
 
@@ -3512,10 +4001,14 @@ export default function App() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                  id: newOrderObj.id,
                   clientId: user.id,
+                  userId: firebaseUid,
                   clientName: user.name,
                   entityName: user.entityName || "منشأة عامة",
                   items: orderItemsToSubmit,
+                  status: newOrderObj.status,
+                  createdAt: newOrderObj.createdAt,
                   notes: agreedTermsNotes ? `[ما تم الاتفاق مع المندوب]: ${agreedTermsNotes}` : undefined,
                 }),
               });
@@ -3523,8 +4016,12 @@ export default function App() {
             } catch (e) {}
 
             if (!orderOk && isFirebaseConfigured && db) {
-              await setDoc(doc(db, "orders", newOrderObj.id), newOrderObj, { merge: true });
-              orderOk = true;
+              try {
+                await setDoc(doc(db, "orders", newOrderObj.id), newOrderObj, { merge: true });
+                orderOk = true;
+              } catch (fsOrderErr) {
+                handleFirestoreError(fsOrderErr, OperationType.WRITE, `orders/${newOrderObj.id}`);
+              }
             }
           }
 
@@ -4024,76 +4521,222 @@ export default function App() {
     fetchUserSpecificData(true);
   };
 
-  const handleArchiveOrder = async (orderId: string, archive: boolean = true) => {
+  const handleArchiveOrder = async (orderId: string, archive: boolean = true, silent: boolean = false): Promise<boolean> => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/orders/${orderId}/archive`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isArchived: archive }),
-      });
+      const now = new Date().toISOString();
+      const targetOrder = orders.find((o) => o.id === orderId);
+      const updatedOrder: Order = targetOrder
+        ? {
+            ...targetOrder,
+            isArchived: archive,
+            archivedAt: archive ? now : undefined,
+            updatedAt: now,
+          }
+        : ({
+            id: orderId,
+            clientId: user?.id || "unknown",
+            clientName: user?.name || "عميل",
+            entityName: user?.entityName || "منشأة",
+            items: [],
+            status: "completed",
+            createdAt: now,
+            isArchived: archive,
+            archivedAt: archive ? now : undefined,
+            updatedAt: now,
+          } as Order);
 
-      if (r.ok) {
-        showSuccess(archive ? "تمت أرشفة الطلب بنجاح" : "تمت استعادة الطلب بنجاح");
-        fetchUserSpecificData();
-      } else {
-        showError(archive ? "فشل أرشفة الطلب" : "فشل استعادة الطلب");
+      // 1. Optimistic state update
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+
+      // 2. Persist to IndexedDB, localStorage, and Cloud Firestore
+      const firestorePayload = {
+        ...updatedOrder,
+        archivedAt: archive ? now : null,
+      };
+      await syncToFirebase("orders", "set", orderId, firestorePayload);
+
+      // 3. Persist to backend API (passes order payload so server can upsert if missing from data-store.json)
+      try {
+        await fetch(`/api/orders/${orderId}/archive`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isArchived: archive, order: updatedOrder }),
+        });
+      } catch (apiErr) {
+        console.warn("Backend archive order sync notice:", apiErr);
       }
+
+      if (!silent) {
+        showSuccess(archive ? "تمت أرشفة الطلب ونقله لسلة الأرشيف بنجاح 📦" : "تمت استعادة الطلب إلى القائمة النشطة بنجاح 🔄");
+      }
+      return true;
     } catch (e) {
-      showError("حدث خطأ أثناء أرشفة/استعادة الطلب");
+      if (!silent) {
+        showError(archive ? "حدث خطأ أثناء أرشفة الطلب" : "حدث خطأ أثناء استعادة الطلب");
+      }
+      return false;
     } finally {
       setLoading(false);
     }
   };
 
-  const handleArchiveAllCompleted = async () => {
+  const handleArchiveAllCompleted = async (): Promise<number> => {
+    const toArchive = orders.filter(
+      (o) => (o.status === "completed" || o.status === "cancelled") && !o.isArchived
+    );
+    if (toArchive.length === 0) {
+      showError("لا توجد طلبيات مكتملة أو ملغاة غير مؤرشفة حالياً");
+      return 0;
+    }
+
     setLoading(true);
     try {
-      const r = await fetch("/api/orders/archive-completed", { method: "POST" });
-      const data = await r.json();
-      if (r.ok && data.success) {
-        showSuccess(data.message || "تم نقل الطلبيات المكتملة والملغاة إلى سلة الأرشيف بنجاح");
-        fetchUserSpecificData();
-      } else {
-        showError(data.error || "تعذر أرشفة الطلبيات المكتملة");
+      const now = new Date().toISOString();
+      const archivedBatch = toArchive.map((o) => ({
+        ...o,
+        isArchived: true,
+        archivedAt: now,
+        updatedAt: now,
+      }));
+      const archivedMap = new Map(archivedBatch.map((o) => [o.id, o]));
+
+      // 1. Optimistic update
+      setOrders((prev) => prev.map((o) => archivedMap.get(o.id) || o));
+
+      // 2. Persist all to IndexedDB, localStorage, and Cloud Firestore
+      await Promise.all(
+        archivedBatch.map((o) => syncToFirebase("orders", "set", o.id, o))
+      );
+
+      // 3. Sync batch to backend API
+      try {
+        await fetch("/api/orders/archive-completed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orders: archivedBatch }),
+        });
+      } catch (apiErr) {
+        console.warn("Backend batch archive notice:", apiErr);
       }
+
+      showSuccess(`تم نقل ${archivedBatch.length} طلبية مكتملة/ملغاة إلى سلة الأرشيف بنجاح 📦`);
+      return archivedBatch.length;
     } catch (e) {
-      showError("حدث خطأ أثناء أرشفة الطلبيات");
+      showError("حدث خطأ أثناء أرشفة الطلبيات المكتملة");
+      return 0;
     } finally {
       setLoading(false);
     }
   };
 
-  const handleClearAllArchived = async () => {
+  const handleRestoreAllArchived = async (): Promise<number> => {
+    const toRestore = orders.filter((o) => o.isArchived);
+    if (toRestore.length === 0) {
+      return 0;
+    }
+
     setLoading(true);
     try {
-      const r = await fetch("/api/orders/archive/clear", { method: "POST" });
-      const data = await r.json();
-      if (r.ok && data.success) {
-        showSuccess(data.message || "تم تفريغ الأرشيف وحذف الطلبيات نهائياً");
-        fetchUserSpecificData();
-      } else {
-        showError(data.error || "تعذر تفريغ سلة الأرشيف");
+      const now = new Date().toISOString();
+      const restoredBatch = toRestore.map((o) => ({
+        ...o,
+        isArchived: false,
+        archivedAt: undefined,
+        updatedAt: now,
+      }));
+      const restoredMap = new Map(restoredBatch.map((o) => [o.id, o]));
+
+      setOrders((prev) => prev.map((o) => restoredMap.get(o.id) || o));
+
+      await Promise.all(
+        restoredBatch.map((o) =>
+          syncToFirebase("orders", "set", o.id, { ...o, archivedAt: null })
+        )
+      );
+
+      await Promise.all(
+        restoredBatch.map((o) =>
+          fetch(`/api/orders/${o.id}/archive`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isArchived: false, order: o }),
+          }).catch(() => {})
+        )
+      );
+
+      showSuccess(`تمت استعادة ${restoredBatch.length} طلبية إلى القائمة النشطة بنجاح 🔄`);
+      return restoredBatch.length;
+    } catch (e) {
+      showError("حدث خطأ أثناء استعادة الطلبيات المؤرشفة");
+      return 0;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearAllArchived = async (): Promise<number> => {
+    const archivedList = orders.filter((o) => o.isArchived);
+    if (archivedList.length === 0) {
+      return 0;
+    }
+
+    setLoading(true);
+    try {
+      // 1. Optimistic update
+      setOrders((prev) => prev.filter((o) => !o.isArchived));
+
+      // 2. Delete from IndexedDB, localStorage, and Cloud Firestore
+      await Promise.all(
+        archivedList.map((o) => syncToFirebase("orders", "delete", o.id))
+      );
+
+      // 3. Mirror to backend (which records them in trash_archive and cleans data-store.json)
+      try {
+        await fetch("/api/orders/archive/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orders: archivedList }),
+        });
+      } catch (apiErr) {
+        console.warn("Backend clear archived orders notice:", apiErr);
       }
+
+      showSuccess(`تم تفريغ الأرشيف ونقل ${archivedList.length} طلبية إلى سلة المحذوفات بنجاح 🗑️`);
+      return archivedList.length;
     } catch (e) {
       showError("حدث خطأ أثناء إفراغ الأرشيف");
+      return 0;
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePermanentDeleteOrder = async (order: Order) => {
+  const handlePermanentDeleteOrder = async (order: Order): Promise<boolean> => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/orders/${order.id}`, { method: "DELETE" });
-      if (r.ok) {
-        showSuccess(`تم حذف الطلبية #${order.id.slice(-6)} نهائياً من الأرشيف`);
-        fetchUserSpecificData();
-      } else {
-        showError("تعذر حذف الطلبية من قاعدة البيانات");
+      // 1. Optimistic update
+      setOrders((prev) => prev.filter((o) => o.id !== order.id));
+
+      // 2. Delete from IndexedDB, localStorage, and Cloud Firestore
+      await syncToFirebase("orders", "delete", order.id);
+
+      // 3. Delete on backend & record in trash_archive
+      try {
+        await fetch(`/api/orders/${order.id}`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order }),
+        });
+      } catch (apiErr) {
+        console.warn("Backend permanent delete order notice:", apiErr);
       }
+
+      showSuccess(`تم حذف الطلبية #${String(order.id).slice(-6)} نهائياً من الأرشيف 🗑️`);
+      return true;
     } catch (e) {
       showError("حدث خطأ أثناء حذف الطلبية");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -4245,12 +4888,17 @@ export default function App() {
             <Bell className="h-5 w-5" />
           </div>
           <div className="space-y-0.5">
-            <h5 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 justify-start">
+            <h5 className="text-xs font-bold text-slate-900 flex flex-wrap items-center gap-1.5 justify-start">
               إشعارات نظام الهاتف المباشرة 📲
               {pushPermission === "granted" && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-3xs font-bold text-emerald-800">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   مُفعّلة على هذا الجهاز
+                </span>
+              )}
+              {pushPermission === "granted" && fcmToken && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-3xs font-bold text-sky-800">
+                  FCM جاهز ☁️
                 </span>
               )}
             </h5>
@@ -4740,134 +5388,360 @@ export default function App() {
                     </div>
                   </div>
                 ) : !isRegistering ? (
-                  /* STEP 1: Phone Login */
-                  <form onSubmit={handleLogin} className="space-y-4" id="form-login">
-                    {/* Device Binding Badge if registered before */}
-                    {localStorage.getItem("mandoubak_bound_phone") && (
-                      <div className="rounded-xl bg-teal-50/80 border border-teal-200 p-2.5 flex items-center justify-between text-xs text-teal-900">
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <Smartphone className="h-4 w-4 text-teal-600" />
-                          <span>الجهاز مقترن بالرقم:</span>
-                          <span className="font-mono text-teal-950 font-black">{localStorage.getItem("mandoubak_bound_phone")}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const bound = localStorage.getItem("mandoubak_bound_phone") || "";
-                            setPhone(bound);
-                          }}
-                          className="text-3xs font-bold text-teal-700 hover:underline cursor-pointer"
-                        >
-                          استخدام
-                        </button>
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
-                        رقم هاتف المنشأة المعتمد 📱
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="tel"
-                          placeholder="مثال: 770000000"
-                          value={phone}
-                          onChange={(e) => setPhone(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 pl-10 text-right font-medium text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                          id="input-phone"
-                          required
-                        />
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                          +
-                        </span>
-                      </div>
-                      <p className="text-3xs text-slate-400 mt-1">
-                        🔒 الدخول مقتصر على رقم واحد موثق لكل منشأة بعد التأكيد والاعتماد.
-                      </p>
-                    </div>
-
-                    {(() => {
-                      const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-                      let cleanDigits = phone;
-                      for (let i = 0; i < 10; i++) {
-                        cleanDigits = cleanDigits.replaceAll(arabicDigits[i], String(i));
-                      }
-                      cleanDigits = cleanDigits.replace(/\D/g, "");
-                      const isRepNumber = cleanDigits.endsWith("776600049");
-                      return isRepNumber ? (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          className="space-y-2 overflow-hidden"
-                        >
-                          <label className="block text-xs font-bold uppercase tracking-wider text-rose-700">
-                            كلمة المرور الخاصة بالمسؤول د/ بلال القيسي 🔒
-                          </label>
-                          <input
-                            type="password"
-                            placeholder="أدخل كلمة المرور السرية للمسؤول..."
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full rounded-xl border border-rose-300 bg-rose-50/20 px-4 py-3.5 text-right font-medium text-slate-900 transition-colors focus:border-rose-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
-                            id="input-password"
-                            required
-                          />
-                        </motion.div>
-                      ) : null;
-                    })()}
-
-                    {/* Quick Biometric Fingerprint / Face ID Login Button */}
-                    <button
-                      type="button"
-                      onClick={handleQuickBiometricLogin}
-                      disabled={loading}
-                      className="w-full rounded-xl bg-linear-to-r from-emerald-600 via-teal-600 to-emerald-700 py-3.5 px-4 font-bold text-white shadow-md shadow-teal-600/20 hover:from-emerald-700 hover:to-teal-700 transition-all flex items-center justify-center gap-2 text-xs sm:text-sm active:scale-[0.98] cursor-pointer"
-                      id="btn-biometric-quick-login"
-                    >
-                      <Fingerprint className="h-5 w-5 text-emerald-200 animate-pulse shrink-0" />
-                      <span>تسجيل الدخول السريع بالبصمة / Face ID 🔐</span>
-                    </button>
-
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full rounded-xl bg-slate-900 py-3.5 font-bold text-white transition-all hover:bg-teal-600 hover:shadow-lg focus:outline-none active:scale-[0.98] cursor-pointer"
-                      id="btn-login-submit"
-                    >
-                      {loading ? "جاري التحقق..." : "تسجيل الدخول برقم الهاتف / استمرار"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleGoogleSignIn}
-                      disabled={loading}
-                      className="w-full rounded-xl bg-white border border-slate-300 py-3 font-bold text-slate-800 hover:bg-slate-50 hover:border-slate-400 transition-all flex items-center justify-center gap-2 text-xs sm:text-sm active:scale-[0.98] shadow-2xs cursor-pointer"
-                      id="btn-google-signin"
-                    >
-                      <svg className="h-4.5 w-4.5 shrink-0" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                      </svg>
-                      <span>تسجيل الدخول الآمن بحساب Google</span>
-                    </button>
-
-                    <div className="pt-3 border-t border-slate-100 mt-3 text-center">
+                  <div className="space-y-4">
+                    {/* Login Method Switcher */}
+                    <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1 border border-slate-200/80">
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsRegistering(true);
-                          setRegForm(prev => ({ ...prev, phone: phone }));
-                        }}
-                        className="text-xs font-bold text-teal-700 hover:text-teal-900 transition-colors py-1 inline-flex items-center gap-1.5 cursor-pointer"
-                        id="btn-switch-to-register"
+                        onClick={() => setLoginMethod("phone")}
+                        className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
+                          loginMethod === "phone"
+                            ? "bg-white text-teal-800 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                        id="tab-login-phone"
                       >
-                        <Building className="h-3.5 w-3.5" />
-                        <span>منشأة أو عيادة جديدة؟ اضغط هنا للتسجيل 📝</span>
+                        <Smartphone className="h-3.5 w-3.5" />
+                        <span>رقم الهاتف</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLoginMethod("email")}
+                        className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition-all cursor-pointer ${
+                          loginMethod === "email"
+                            ? "bg-white text-teal-800 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                        id="tab-login-email"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        <span>البريد وكلمة المرور</span>
                       </button>
                     </div>
-                  </form>
+
+                    {loginMethod === "phone" ? (
+                      /* STEP 1: Phone Login */
+                      <form onSubmit={handleLogin} className="space-y-4" id="form-login">
+                        {/* Device Binding Badge if registered before */}
+                        {localStorage.getItem("mandoubak_bound_phone") && (
+                          <div className="rounded-xl bg-teal-50/80 border border-teal-200 p-2.5 flex items-center justify-between text-xs text-teal-900">
+                            <div className="flex items-center gap-1.5 font-bold">
+                              <Smartphone className="h-4 w-4 text-teal-600" />
+                              <span>الجهاز مقترن بالرقم:</span>
+                              <span className="font-mono text-teal-950 font-black">{localStorage.getItem("mandoubak_bound_phone")}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const bound = localStorage.getItem("mandoubak_bound_phone") || "";
+                                setPhone(bound);
+                              }}
+                              className="text-3xs font-bold text-teal-700 hover:underline cursor-pointer"
+                            >
+                              استخدام
+                            </button>
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
+                            رقم هاتف المنشأة المعتمد 📱
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="tel"
+                              placeholder="مثال: 770000000"
+                              value={phone}
+                              onChange={(e) => setPhone(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 pl-10 text-right font-medium text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                              id="input-phone"
+                              required
+                            />
+                            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              +
+                            </span>
+                          </div>
+                          <p className="text-3xs text-slate-400 mt-1">
+                            🔒 الدخول مقتصر على رقم واحد موثق لكل منشأة بعد التأكيد والاعتماد.
+                          </p>
+                        </div>
+
+                        {(() => {
+                          const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+                          let cleanDigits = phone;
+                          for (let i = 0; i < 10; i++) {
+                            cleanDigits = cleanDigits.replaceAll(arabicDigits[i], String(i));
+                          }
+                          cleanDigits = cleanDigits.replace(/\D/g, "");
+                          const isRepNumber = cleanDigits.endsWith("776600049");
+                          return isRepNumber ? (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              className="space-y-2 overflow-hidden"
+                            >
+                              <label className="block text-xs font-bold uppercase tracking-wider text-rose-700">
+                                كلمة المرور الخاصة بالمسؤول د/ بلال القيسي 🔒
+                              </label>
+                              <input
+                                type="password"
+                                placeholder="أدخل كلمة المرور السرية للمسؤول..."
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full rounded-xl border border-rose-300 bg-rose-50/20 px-4 py-3.5 text-right font-medium text-slate-900 transition-colors focus:border-rose-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                                id="input-password"
+                                required
+                              />
+                            </motion.div>
+                          ) : null;
+                        })()}
+
+                        {/* Quick Biometric Fingerprint / Face ID Login Button */}
+                        <button
+                          type="button"
+                          onClick={handleQuickBiometricLogin}
+                          disabled={loading}
+                          className="w-full rounded-xl bg-linear-to-r from-emerald-600 via-teal-600 to-emerald-700 py-3.5 px-4 font-bold text-white shadow-md shadow-teal-600/20 hover:from-emerald-700 hover:to-teal-700 transition-all flex items-center justify-center gap-2 text-xs sm:text-sm active:scale-[0.98] cursor-pointer"
+                          id="btn-biometric-quick-login"
+                        >
+                          <Fingerprint className="h-5 w-5 text-emerald-200 animate-pulse shrink-0" />
+                          <span>تسجيل الدخول السريع بالبصمة / Face ID 🔐</span>
+                        </button>
+
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="w-full rounded-xl bg-slate-900 py-3.5 font-bold text-white transition-all hover:bg-teal-600 hover:shadow-lg focus:outline-none active:scale-[0.98] cursor-pointer"
+                          id="btn-login-submit"
+                        >
+                          {loading ? "جاري التحقق..." : "تسجيل الدخول برقم الهاتف / استمرار"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleGoogleSignIn}
+                          disabled={loading}
+                          className="w-full rounded-xl bg-white border border-slate-300 py-3 font-bold text-slate-800 hover:bg-slate-50 hover:border-slate-400 transition-all flex items-center justify-center gap-2 text-xs sm:text-sm active:scale-[0.98] shadow-2xs cursor-pointer"
+                          id="btn-google-signin"
+                        >
+                          <svg className="h-4.5 w-4.5 shrink-0" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                          </svg>
+                          <span>تسجيل الدخول الآمن بحساب Google</span>
+                        </button>
+
+                        <div className="pt-3 border-t border-slate-100 mt-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsRegistering(true);
+                              setRegForm(prev => ({ ...prev, phone: phone }));
+                            }}
+                            className="text-xs font-bold text-teal-700 hover:text-teal-900 transition-colors py-1 inline-flex items-center gap-1.5 cursor-pointer"
+                            id="btn-switch-to-register"
+                          >
+                            <Building className="h-3.5 w-3.5" />
+                            <span>منشأة أو عيادة جديدة؟ اضغط هنا للتسجيل 📝</span>
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      /* STEP 1B: Email & Password Sign-In / Sign-Up */
+                      <form onSubmit={handleEmailLoginOrRegister} className="space-y-3.5" id="form-email-auth">
+                        <div className="flex items-center justify-between rounded-xl bg-teal-50/70 border border-teal-200/70 p-1">
+                          <button
+                            type="button"
+                            onClick={() => setEmailAuthMode("login")}
+                            className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                              emailAuthMode === "login"
+                                ? "bg-teal-600 text-white shadow-2xs"
+                                : "text-teal-800 hover:bg-teal-100/60"
+                            }`}
+                            id="btn-email-mode-login"
+                          >
+                            تسجيل الدخول
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEmailAuthMode("register")}
+                            className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                              emailAuthMode === "register"
+                                ? "bg-teal-600 text-white shadow-2xs"
+                                : "text-teal-800 hover:bg-teal-100/60"
+                            }`}
+                            id="btn-email-mode-register"
+                          >
+                            إنشاء حساب جديد
+                          </button>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1.5">
+                            البريد الإلكتروني ✉️
+                          </label>
+                          <input
+                            type="email"
+                            dir="ltr"
+                            placeholder="name@example.com"
+                            value={emailInput}
+                            onChange={(e) => setEmailInput(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left font-medium text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                            id="input-auth-email"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="block text-xs font-bold text-slate-600">
+                              كلمة المرور 🔒
+                            </label>
+                            {emailAuthMode === "login" && (
+                              <button
+                                type="button"
+                                onClick={handleForgotPassword}
+                                disabled={loading}
+                                className="text-2xs font-bold text-teal-700 hover:underline cursor-pointer"
+                                id="btn-forgot-password"
+                              >
+                                نسيت كلمة المرور؟
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="password"
+                            dir="ltr"
+                            placeholder="••••••••"
+                            minLength={6}
+                            value={emailPassword}
+                            onChange={(e) => setEmailPassword(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left font-medium text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                            id="input-auth-email-password"
+                            required
+                          />
+                          {emailAuthMode === "register" && (
+                            <p className="text-3xs text-slate-400 mt-1">
+                              يجب أن تتكون كلمة المرور من 6 أحرف أو أرقام على الأقل.
+                            </p>
+                          )}
+                        </div>
+
+                        {emailAuthMode === "register" && (
+                          <div className="space-y-3 pt-1 border-t border-slate-100">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-600 mb-1">
+                                اسم المنشأة الطبية (الصيدلية أو العيادة) *
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="مثال: صيدلية الشفاء الحديثة"
+                                value={emailRegForm.entityName}
+                                onChange={(e) => setEmailRegForm({ ...emailRegForm, entityName: e.target.value })}
+                                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-right text-sm font-medium text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                                id="input-email-entity"
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-600 mb-1">
+                                اسم الصيدلاني أو الطبيب المسؤول *
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="مثال: د. محمد العلي"
+                                value={emailRegForm.name}
+                                onChange={(e) => setEmailRegForm({ ...emailRegForm, name: e.target.value })}
+                                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-right text-sm font-medium text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                                id="input-email-name"
+                                required
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2.5">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">
+                                  نوع المنشأة *
+                                </label>
+                                <select
+                                  value={emailRegForm.role}
+                                  onChange={(e) => setEmailRegForm({ ...emailRegForm, role: e.target.value as "pharmacy" | "doctor" })}
+                                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-right text-sm font-medium text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                                  id="select-email-role"
+                                >
+                                  <option value="pharmacy">صيدلية</option>
+                                  <option value="doctor">عيادة / طبيب</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">
+                                  رقم الهاتف للتواصل
+                                </label>
+                                <input
+                                  type="tel"
+                                  placeholder="770000000"
+                                  value={emailRegForm.phone}
+                                  onChange={(e) => setEmailRegForm({ ...emailRegForm, phone: e.target.value })}
+                                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-right text-sm font-medium text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                                  id="input-email-phone"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-600 mb-1">
+                                عنوان وموقع المنشأة *
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="مثال: صنعاء - شارع حدة"
+                                value={emailRegForm.location}
+                                onChange={(e) => setEmailRegForm({ ...emailRegForm, location: e.target.value })}
+                                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-right text-sm font-medium text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                                id="input-email-location"
+                                required
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="w-full rounded-xl bg-slate-900 py-3.5 font-bold text-white transition-all hover:bg-teal-600 hover:shadow-lg focus:outline-none active:scale-[0.98] cursor-pointer"
+                          id="btn-email-auth-submit"
+                        >
+                          {loading
+                            ? "جاري المعالجة..."
+                            : emailAuthMode === "register"
+                            ? "إنشاء حساب جديد بالبريد الإلكتروني"
+                            : "تسجيل الدخول بالبريد الإلكتروني"}
+                        </button>
+
+                        <div className="relative flex py-1 items-center">
+                          <div className="grow border-t border-slate-200"></div>
+                          <span className="shrink mx-3 text-3xs font-bold text-slate-400">أو المتابعة عبر</span>
+                          <div className="grow border-t border-slate-200"></div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleGoogleSignIn}
+                          disabled={loading}
+                          className="w-full rounded-xl bg-white border border-slate-300 py-3 font-bold text-slate-800 hover:bg-slate-50 hover:border-slate-400 transition-all flex items-center justify-center gap-2 text-xs sm:text-sm active:scale-[0.98] shadow-2xs cursor-pointer"
+                          id="btn-email-google-signin"
+                        >
+                          <svg className="h-4.5 w-4.5 shrink-0" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                          </svg>
+                          <span>تسجيل الدخول الآمن بحساب Google</span>
+                        </button>
+                      </form>
+                    )}
+                  </div>
                 ) : (
                   /* STEP 2: Registration */
                   <form onSubmit={handleRegister} className="space-y-4" id="form-register">
@@ -8585,9 +9459,20 @@ export default function App() {
                     onRestoreOrder={(orderId) => handleArchiveOrder(orderId, false)}
                     onPermanentDeleteOrder={handlePermanentDeleteOrder}
                     onClearAllArchived={handleClearAllArchived}
-                    onRestoreAllArchived={async () => {
-                      for (const o of orders.filter(o => o.isArchived)) {
-                        await handleArchiveOrder(o.id, false);
+                    onRestoreAllArchived={handleRestoreAllArchived}
+                    onArchiveAllCompleted={handleArchiveAllCompleted}
+                    onRestoreSuccess={async (itemType, restoredData) => {
+                      if (itemType === "order" && restoredData?.id) {
+                        const restoredOrder: Order = { ...restoredData, isArchived: false, archivedAt: undefined };
+                        setOrders((prev) => [restoredOrder, ...prev.filter((o) => o.id !== restoredOrder.id)]);
+                        await syncToFirebase("orders", "set", restoredOrder.id, { ...restoredOrder, archivedAt: null });
+                      } else if (itemType === "product" && restoredData?.id) {
+                        setProducts((prev) => [restoredData, ...prev.filter((p) => p.id !== restoredData.id)]);
+                        await syncToFirebase("products", "set", restoredData.id, restoredData);
+                      } else if (itemType === "client" && restoredData?.id) {
+                        unmarkClientsDeleted([restoredData.id, restoredData.phone]);
+                        setRegisteredUsers((prev) => [restoredData, ...prev.filter((u) => u.id !== restoredData.id)]);
+                        await syncToFirebase("users", "set", restoredData.id, restoredData);
                       }
                     }}
                     onNavigateToActiveOrders={() => setRepTab("orders")}
@@ -10670,7 +11555,7 @@ export default function App() {
         onClose={() => setIsDeviceContactsModalOpen(false)}
         onImportBatch={handleImportDeviceContactsBatch}
         onSelectSingle={handleSelectSingleContactForForm}
-        existingPhones={new Set(registeredUsers.map(u => u.phone))}
+        existingPhones={new Set(registeredUsers.map(u => u.phone).filter((p): p is string => Boolean(p)))}
       />
 
       {/* Hardware & Battery Device Info Modal */}

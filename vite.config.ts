@@ -35,6 +35,7 @@ export default defineConfig(() => {
           dir: 'rtl',
           scope: '/',
           start_url: '/',
+          prefer_related_applications: false,
           categories: ['medical', 'business', 'shopping'],
           icons: [
             {
@@ -236,7 +237,7 @@ export default defineConfig(() => {
           },
         },
       },
-      chunkSizeWarningLimit: 800,
+      chunkSizeWarningLimit: 2000,
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

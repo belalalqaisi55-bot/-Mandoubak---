@@ -74,12 +74,13 @@ interface AdminArchiveViewProps {
   isRep?: boolean;
   adminName?: string;
   archivedOrders?: Order[];
-  onArchiveOrder?: (orderId: string) => Promise<void>;
-  onUpdateOrderStatus?: (orderId: string, status: "pending" | "approved" | "completed" | "cancelled") => Promise<void>;
-  onRestoreOrder?: (orderId: string) => Promise<void>;
-  onPermanentDeleteOrder?: (order: Order) => void;
-  onClearAllArchived?: () => Promise<void>;
-  onRestoreAllArchived?: () => Promise<void>;
+  onArchiveOrder?: (orderId: string) => Promise<any>;
+  onUpdateOrderStatus?: (orderId: string, status: "pending" | "approved" | "completed" | "cancelled") => Promise<any>;
+  onRestoreOrder?: (orderId: string) => Promise<any>;
+  onPermanentDeleteOrder?: (order: Order) => Promise<any> | void;
+  onClearAllArchived?: () => Promise<any>;
+  onArchiveAllCompleted?: () => Promise<any>;
+  onRestoreAllArchived?: () => Promise<any>;
   onExportCSV?: (ordersToExport: Order[]) => void;
   onNavigateToActiveOrders?: () => void;
   onPrintOrder?: (order: Order) => void;
@@ -98,6 +99,7 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
   onRestoreOrder,
   onPermanentDeleteOrder,
   onClearAllArchived,
+  onArchiveAllCompleted,
   onRestoreAllArchived,
   onExportCSV,
   onNavigateToActiveOrders,
@@ -182,8 +184,9 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
     try {
       if (onRestoreOrder) {
         await onRestoreOrder(orderId);
+      } else {
+        notify("تمت استعادة الطلبية للقائمة النشطة بنجاح 🔄", "success");
       }
-      notify("تمت استعادة الطلبية للقائمة النشطة بنجاح 🔄", "success");
     } catch (err) {
       notify("حدث خطأ أثناء استعادة الطلبية للقائمة النشطة", "error");
     } finally {
@@ -192,12 +195,14 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
   };
 
   // Handle permanent order delete
-  const handleExecutePermanentDeleteOrder = (order: Order) => {
+  const handleExecutePermanentDeleteOrder = async (order: Order) => {
     try {
       if (onPermanentDeleteOrder) {
-        onPermanentDeleteOrder(order);
+        await onPermanentDeleteOrder(order);
+      } else {
+        notify("تم حذف الطلبية نهائياً من الأرشيف 🗑️", "success");
       }
-      notify("تم حذف الطلبية نهائياً من الأرشيف 🗑️", "success");
+      fetchTrash();
     } catch (err) {
       notify("تعذر حذف الطلبية نهائياً", "error");
     } finally {
@@ -768,40 +773,65 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
             </div>
 
             {/* Batch Action Buttons */}
-            {archivedOrders.length > 0 && (
-              <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
-                {onRestoreAllArchived && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setIsBatchActionLoading(true);
-                      await onRestoreAllArchived();
+            <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+              {onArchiveAllCompleted && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsBatchActionLoading(true);
+                    try {
+                      await onArchiveAllCompleted();
+                    } finally {
                       setIsBatchActionLoading(false);
-                      notify("تمت استعادة كافة الطلبيات إلى القائمة النشطة بنجاح 🔄", "success");
-                    }}
-                    disabled={isBatchActionLoading}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
-                    title="استعادة كافة الطلبيات المؤرشفة للقائمة النشطة"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 text-teal-700" />
-                    <span>استعادة الكل للقائمة النشطة 🔄</span>
-                  </button>
-                )}
+                    }
+                  }}
+                  disabled={isBatchActionLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="أرشفة كافة الطلبيات المكتملة"
+                >
+                  <Archive className="h-3.5 w-3.5 text-emerald-700" />
+                  <span>أرشفة المكتملة 🗄️</span>
+                </button>
+              )}
+              {archivedOrders.length > 0 && (
+                <>
+                  {onRestoreAllArchived && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsBatchActionLoading(true);
+                        try {
+                          await onRestoreAllArchived();
+                        } finally {
+                          setIsBatchActionLoading(false);
+                        }
+                      }}
+                      disabled={isBatchActionLoading}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
+                      title="استعادة كافة الطلبيات المؤرشفة للقائمة النشطة"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 text-teal-700" />
+                      <span>استعادة الكل للقائمة النشطة 🔄</span>
+                    </button>
+                  )}
 
-                {onClearAllArchived && (
-                  <button
-                    type="button"
-                    onClick={() => setIsConfirmClearAllOrdersOpen(true)}
-                    disabled={isBatchActionLoading}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
-                    title="حذف نهائي لكافة الطلبيات المؤرشفة"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-rose-600" />
-                    <span>إفراغ الأرشيف نهائياً</span>
-                  </button>
-                )}
-              </div>
-            )}
+                  {onClearAllArchived && (
+                    <button
+                      type="button"
+                      onClick={() => setIsConfirmClearAllOrdersOpen(true)}
+                      disabled={isBatchActionLoading}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
+                      title="حذف نهائي لكافة الطلبيات المؤرشفة"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                      <span>إفراغ الأرشيف نهائياً</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+
           </div>
 
           {/* Batch Clear All Confirmation Alert */}
@@ -820,9 +850,12 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
                   onClick={async () => {
                     if (onClearAllArchived) {
                       setIsBatchActionLoading(true);
-                      await onClearAllArchived();
-                      setIsBatchActionLoading(false);
-                      notify("تم إفراغ أرشيف الطلبيات نهائياً 🗑️", "success");
+                      try {
+                        await onClearAllArchived();
+                        fetchTrash();
+                      } finally {
+                        setIsBatchActionLoading(false);
+                      }
                     }
                     setIsConfirmClearAllOrdersOpen(false);
                   }}
@@ -1060,30 +1093,28 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
                             </button>
                           )}
 
-                          {/* زر 'أرشفة' أيقوني بجانب أزرار حالة كل طلبية */}
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              setOrderActionLoadingId(order.id);
-                              try {
-                                if (onArchiveOrder) {
+                          {!order.isArchived && onArchiveOrder && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setOrderActionLoadingId(order.id);
+                                try {
                                   await onArchiveOrder(order.id);
+                                } catch {
+                                  notify("حدث خطأ أثناء أرشفة الطلبية", "error");
+                                } finally {
+                                  setOrderActionLoadingId(null);
                                 }
-                                notify("تم تأكيد أرشفة الطلبية كـ completed وتحديث Firebase فورياً 🗄️✓", "success");
-                              } catch {
-                                notify("حدث خطأ أثناء أرشفة الطلبية", "error");
-                              } finally {
-                                setOrderActionLoadingId(null);
-                              }
-                            }}
-                            disabled={isItemActionBusy}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs border border-teal-600/70 transition-all shadow-2xs active:scale-95 cursor-pointer disabled:opacity-50 group"
-                            title="أرشفة هذه الطلبية فوراً بنقرة واحدة وتحديث حالتها إلى completed في Firebase والأرشيف"
-                            id={`btn-archive-admin-order-${order.id}`}
-                          >
-                            <Archive className="h-3.5 w-3.5 text-teal-200 group-hover:scale-110 transition-transform shrink-0" />
-                            <span>أرشفة 🗄️</span>
-                          </button>
+                              }}
+                              disabled={isItemActionBusy}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs border border-teal-600/70 transition-all shadow-2xs active:scale-95 cursor-pointer disabled:opacity-50 group"
+                              title="أرشفة هذه الطلبية فوراً بنقرة واحدة"
+                              id={`btn-archive-admin-order-${order.id}`}
+                            >
+                              <Archive className="h-3.5 w-3.5 text-teal-200 group-hover:scale-110 transition-transform shrink-0" />
+                              <span>أرشفة 🗄️</span>
+                            </button>
+                          )}
 
                           {/* 1. BUTTON: استعادة الطلبية للقائمة النشطة */}
                           <button
@@ -1557,7 +1588,7 @@ export const AdminArchiveView: React.FC<AdminArchiveViewProps> = ({
                       {(selectedItemForDetails.data.items || []).map((it: any, idx: number) => (
                         <div key={idx} className="p-2.5 flex items-center justify-between bg-white text-xs">
                           <div>
-                            <span className="font-bold text-slate-900 block">{it.name}</span>
+                            <span className="font-bold text-slate-900 block">{it.productName || it.name || "صنف"}</span>
                             <span className="text-3xs text-slate-500">
                               السعر: {it.price} | البونص: {it.bonus || "لا يوجد"}
                             </span>

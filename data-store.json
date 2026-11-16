@@ -61,7 +61,7 @@
       "isApproved": true,
       "status": "approved",
       "lat": 15.3218,
-      "lng": 44.1950,
+      "lng": 44.195,
       "createdAt": "2026-09-11T09:30:00.000Z"
     },
     {
@@ -74,7 +74,7 @@
       "isApproved": true,
       "status": "approved",
       "lat": 15.3275,
-      "lng": 44.1890,
+      "lng": 44.189,
       "createdAt": "2026-09-12T10:00:00.000Z"
     },
     {
@@ -86,7 +86,7 @@
       "role": "pharmacy",
       "isApproved": true,
       "status": "approved",
-      "lat": 15.3610,
+      "lat": 15.361,
       "lng": 44.1872,
       "createdAt": "2026-09-12T10:30:00.000Z"
     },
@@ -99,8 +99,8 @@
       "role": "pharmacy",
       "isApproved": true,
       "status": "approved",
-      "lat": 15.3850,
-      "lng": 44.2010,
+      "lat": 15.385,
+      "lng": 44.201,
       "createdAt": "2026-09-13T11:00:00.000Z"
     },
     {
@@ -112,7 +112,7 @@
       "role": "pharmacy",
       "isApproved": true,
       "status": "approved",
-      "lat": 15.3480,
+      "lat": 15.348,
       "lng": 44.2015,
       "createdAt": "2026-09-13T11:30:00.000Z"
     },
@@ -125,8 +125,8 @@
       "role": "doctor",
       "isApproved": true,
       "status": "approved",
-      "lat": 15.2980,
-      "lng": 44.2250,
+      "lat": 15.298,
+      "lng": 44.225,
       "createdAt": "2026-09-14T12:00:00.000Z"
     },
     {
@@ -138,8 +138,8 @@
       "role": "pharmacy",
       "isApproved": true,
       "status": "approved",
-      "lat": 15.3120,
-      "lng": 44.1780,
+      "lat": 15.312,
+      "lng": 44.178,
       "createdAt": "2026-09-14T12:30:00.000Z"
     }
   ],
@@ -284,5 +284,6 @@
     "drProfileAvatar": "/dr-belal.jpg"
   },
   "complaints": [],
-  "trashArchive": []
+  "trashArchive": [],
+  "geminiWebhooks": []
 }

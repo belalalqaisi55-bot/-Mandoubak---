@@ -12,6 +12,10 @@
   "theme_color": "#0f766e",
   "lang": "ar",
   "dir": "rtl",
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
   "categories": ["medical", "business", "shopping"],
   "icons": [
     {

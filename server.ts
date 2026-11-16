@@ -5,8 +5,10 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
+import { getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
+import { getMessaging as getAdminMessaging } from "firebase-admin/messaging";
 import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
 
 const ai = new GoogleGenAI({
@@ -46,12 +48,15 @@ if (fs.existsSync(firebaseConfigPath)) {
       } else {
         dbAdmin = getFirestore();
       }
-      isFirebaseEnabled = true;
       console.log("Firebase Admin initialized for project:", config.projectId, "Database:", config.firestoreDatabaseId || "(default)");
 
-      // Probe Admin permissions
-      dbAdmin.collection("products").limit(1).get()
+      // Only enable Firebase Admin routes AFTER verifying server credentials (with a strict 3s timeout)
+      Promise.race([
+        dbAdmin.collection("products").limit(1).get(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Admin probe timeout (>3000ms)")), 3000))
+      ])
         .then(() => {
+          isFirebaseEnabled = true;
           console.log("Firebase Admin server permissions verified.");
         })
         .catch((err: any) => {
@@ -84,6 +89,15 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Parse JSON and URL-encoded request bodies (with rawBody preserved for webhook signature verification)
+app.use(express.json({
+  limit: "50mb",
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // --- AUTHENTICATION MIDDLEWARE ---
 const verifyToken = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -123,7 +137,7 @@ app.get('/auth/logout', (req, res) => {
 
 // Auto-categorize product based on active ingredient
 app.post("/api/categorize-product", verifyToken, async (req, res) => {
-  const { productName, activeIngredient, description } = req.body;
+  const { productName, activeIngredient, description } = req.body || {};
   if (!activeIngredient) {
     return res.status(400).json({ error: "Active ingredient is required" });
   }
@@ -337,6 +351,9 @@ interface User {
   isApproved?: boolean;
   status?: "approved" | "pending_approval" | "suspended" | "rejected";
   confirmationCode?: string;
+  fcmToken?: string;
+  fcmTokens?: string[];
+  fcmUpdatedAt?: string;
   createdAt: string;
   lat?: number;
   lng?: number;
@@ -584,6 +601,8 @@ interface Notification {
   targetClientId?: string;
   targetClientName?: string;
   createdAt: string;
+  isArchived?: boolean;
+  archivedAt?: string;
 }
 
 export type AgreementType = "bonus" | "samples" | "gift_support" | "discount_terms" | "other";
@@ -770,8 +789,11 @@ async function fetchAllUsersFromDB(): Promise<User[]> {
 
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      const snap = await dbAdmin.collection("users").get();
-      snap.forEach((doc) => {
+      const snap = (await Promise.race([
+        dbAdmin.collection("users").get(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore users fetch timeout")), 2500))
+      ])) as any;
+      snap.forEach((doc: any) => {
         if (!defaultClientIds.has(doc.id)) {
           list.push(doc.data() as User);
         } else {
@@ -791,9 +813,9 @@ async function fetchAllUsersFromDB(): Promise<User[]> {
 
   list = list.filter((u) => !defaultClientIds.has(u.id));
 
-  // Ensure rep is synced so rep always exists
+  // Ensure only the rep/admin account is always present (never resurrect deleted clients)
   let hasChanges = false;
-  for (const defU of DEFAULT_USERS) {
+  for (const defU of DEFAULT_USERS.filter((u) => u.role === "rep" || u.id === "u_rep")) {
     const existing = list.find((u) => u.id === defU.id || (defU.phone && u.phone === defU.phone));
     if (!existing) {
       list.push(defU);
@@ -1059,7 +1081,7 @@ async function fetchOrdersFromDB(clientId?: string): Promise<Order[]> {
 async function saveOrderToDB(order: Order): Promise<void> {
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      await dbAdmin.collection("orders").doc(order.id).set(order);
+      await dbAdmin.collection("orders").doc(order.id).set(order, { merge: true });
       return;
     } catch (e: any) {
       console.warn("Firebase operation fallback (save order):", e.message);
@@ -1067,7 +1089,12 @@ async function saveOrderToDB(order: Order): Promise<void> {
     }
   }
   const db = getDB();
-  db.orders.unshift(order);
+  const idx = db.orders.findIndex((o) => o.id === order.id);
+  if (idx !== -1) {
+    db.orders[idx] = { ...db.orders[idx], ...order };
+  } else {
+    db.orders.unshift(order);
+  }
   saveDB(db);
 }
 
@@ -1113,8 +1140,11 @@ async function updateOrderStatusInDB(id: string, status: string, orderData?: any
   return null;
 }
 
-async function archiveOrderInDB(id: string, isArchived: boolean = true): Promise<Order | null> {
-  const archivedAt = isArchived ? new Date().toISOString() : undefined;
+async function archiveOrderInDB(id: string, isArchived: boolean = true, orderData?: any): Promise<Order | null> {
+  const now = new Date().toISOString();
+  const archivedAt = isArchived ? now : undefined;
+  let fbResult: Order | null = null;
+
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const docRef = dbAdmin.collection("orders").doc(id);
@@ -1122,69 +1152,146 @@ async function archiveOrderInDB(id: string, isArchived: boolean = true): Promise
       if (doc.exists) {
         await docRef.update({
           isArchived,
-          archivedAt: archivedAt || null
+          archivedAt: archivedAt || null,
+          updatedAt: now
         });
         const updated = await docRef.get();
-        return updated.data() as Order;
+        fbResult = updated.data() as Order;
+      } else if (orderData) {
+        const upsertOrder: Order = {
+          ...orderData,
+          id,
+          isArchived,
+          updatedAt: now,
+          ...(archivedAt ? { archivedAt } : {})
+        };
+        if (!isArchived) delete (upsertOrder as any).archivedAt;
+        await docRef.set(upsertOrder, { merge: true });
+        fbResult = upsertOrder;
       }
     } catch (e: any) {
       console.warn("Firebase archive order fallback:", e.message);
     }
   }
+
   const db = getDB();
   const idx = db.orders.findIndex((o) => o.id === id);
   if (idx !== -1) {
     db.orders[idx].isArchived = isArchived;
+    db.orders[idx].updatedAt = now;
     if (archivedAt) {
       db.orders[idx].archivedAt = archivedAt;
     } else {
       delete db.orders[idx].archivedAt;
     }
     saveDB(db);
-    return db.orders[idx];
+    return fbResult || db.orders[idx];
   }
+
+  if (fbResult || orderData) {
+    const source = fbResult || orderData;
+    const upserted: Order = {
+      ...source,
+      id,
+      isArchived,
+      updatedAt: now,
+      createdAt: source.createdAt || now,
+    };
+    if (archivedAt) {
+      upserted.archivedAt = archivedAt;
+    } else {
+      delete upserted.archivedAt;
+    }
+    db.orders.unshift(upserted);
+    saveDB(db);
+    return upserted;
+  }
+
   return null;
 }
 
-async function archiveAllCompletedOrdersInDB(): Promise<number> {
-  let count = 0;
+async function archiveAllCompletedOrdersInDB(clientOrders?: Order[]): Promise<number> {
+  let fbCount = 0;
+  let localCount = 0;
   const now = new Date().toISOString();
+
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const snapCompleted = await dbAdmin.collection("orders").where("status", "==", "completed").get();
       const snapCancelled = await dbAdmin.collection("orders").where("status", "==", "cancelled").get();
       const batch = dbAdmin.batch();
+      const seenIds = new Set<string>();
       snapCompleted.forEach((doc) => {
         const data = doc.data();
+        seenIds.add(doc.id);
         if (!data.isArchived) {
-          batch.update(doc.ref, { isArchived: true, archivedAt: now });
-          count++;
+          batch.update(doc.ref, { isArchived: true, archivedAt: now, updatedAt: now });
+          fbCount++;
         }
       });
       snapCancelled.forEach((doc) => {
         const data = doc.data();
+        seenIds.add(doc.id);
         if (!data.isArchived) {
-          batch.update(doc.ref, { isArchived: true, archivedAt: now });
-          count++;
+          batch.update(doc.ref, { isArchived: true, archivedAt: now, updatedAt: now });
+          fbCount++;
         }
       });
-      if (count > 0) {
+      if (Array.isArray(clientOrders)) {
+        for (const co of clientOrders) {
+          if (co && co.id && !seenIds.has(co.id) && (co.status === "completed" || co.status === "cancelled")) {
+            batch.set(dbAdmin.collection("orders").doc(co.id), { ...co, isArchived: true, archivedAt: co.archivedAt || now, updatedAt: now }, { merge: true });
+            fbCount++;
+          }
+        }
+      }
+      if (fbCount > 0) {
         await batch.commit();
       }
     } catch (e: any) {
       console.warn("Firebase batch archive completed orders fallback:", e.message);
     }
   }
+
   const db = getDB();
+  const existingMap = new Map<string, number>();
+  db.orders.forEach((o, i) => existingMap.set(o.id, i));
+
   db.orders.forEach((o) => {
     if ((o.status === "completed" || o.status === "cancelled") && !o.isArchived) {
       o.isArchived = true;
       o.archivedAt = now;
-      count++;
+      o.updatedAt = now;
+      localCount++;
     }
   });
-  if (count > 0) saveDB(db);
-  return count;
+
+  if (Array.isArray(clientOrders)) {
+    for (const co of clientOrders) {
+      if (!co || !co.id) continue;
+      if (co.status !== "completed" && co.status !== "cancelled") continue;
+      const existingIdx = existingMap.get(co.id);
+      if (existingIdx !== undefined) {
+        if (!db.orders[existingIdx].isArchived) {
+          db.orders[existingIdx].isArchived = true;
+          db.orders[existingIdx].archivedAt = co.archivedAt || now;
+          db.orders[existingIdx].updatedAt = now;
+          localCount++;
+        }
+      } else {
+        db.orders.unshift({
+          ...co,
+          isArchived: true,
+          archivedAt: co.archivedAt || now,
+          updatedAt: now
+        });
+        localCount++;
+      }
+    }
+  }
+
+  if (localCount > 0) saveDB(db);
+  return Math.max(fbCount, localCount);
 }
 
 // ---------------- ADMIN TRASH & RECYCLE BIN ARCHIVE ----------------
@@ -1399,15 +1506,31 @@ async function clearTrashArchiveFromDB(itemType?: string): Promise<number> {
   return deletedCount;
 }
 
-async function deleteOrderFromDB(id: string, deletedBy = "د. بلال القيسي"): Promise<boolean> {
+async function deleteOrderFromDB(id: string, deletedBy = "د. بلال القيسي", orderData?: any): Promise<boolean> {
   const db = getDB();
-  const existingOrder = db.orders.find((o) => o.id === id);
+  let existingOrder = db.orders.find((o) => o.id === id) || orderData;
+
+  let deleted = false;
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      const docRef = dbAdmin.collection("orders").doc(id);
+      const doc = await docRef.get();
+      if (doc.exists) {
+        if (!existingOrder) existingOrder = doc.data() as Order;
+        await docRef.delete();
+        deleted = true;
+      }
+    } catch (e: any) {
+      console.warn("Firebase delete order fallback:", e.message);
+    }
+  }
+
   if (existingOrder) {
     const oAny = existingOrder as any;
     await addTrashItemToDB({
       id: `trash_order_${id}_${Date.now()}`,
       itemType: "order",
-      title: `طلبية #${oAny.orderNumber || existingOrder.id.slice(-6)} - ${existingOrder.clientName || existingOrder.entityName || "العميل"}`,
+      title: `طلبية #${oAny.orderNumber || String(existingOrder.id || id).slice(-6)} - ${existingOrder.clientName || existingOrder.entityName || "العميل"}`,
       subtitle: `القيمة: ${oAny.totalAmount || 0} ر.ي (${existingOrder.items?.length || 0} صنف) | هاتف: ${oAny.clientPhone || oAny.phone || "غير مسجل"}`,
       originalId: id,
       deletedAt: new Date().toISOString(),
@@ -1423,21 +1546,9 @@ async function deleteOrderFromDB(id: string, deletedBy = "د. بلال القي�
       },
       data: existingOrder
     });
+    if (orderData) deleted = true;
   }
 
-  let deleted = false;
-  if (isFirebaseEnabled && dbAdmin) {
-    try {
-      const docRef = dbAdmin.collection("orders").doc(id);
-      const doc = await docRef.get();
-      if (doc.exists) {
-        await docRef.delete();
-        deleted = true;
-      }
-    } catch (e: any) {
-      console.warn("Firebase delete order fallback:", e.message);
-    }
-  }
   const initialLen = db.orders.length;
   db.orders = db.orders.filter((o) => o.id !== id);
   if (db.orders.length < initialLen) {
@@ -1447,15 +1558,48 @@ async function deleteOrderFromDB(id: string, deletedBy = "د. بلال القي�
   return deleted;
 }
 
-async function clearAllArchivedOrdersFromDB(deletedBy = "د. بلال القيسي"): Promise<number> {
+async function clearAllArchivedOrdersFromDB(deletedBy = "د. بلال القيسي", clientArchivedOrders?: Order[]): Promise<number> {
   const db = getDB();
-  const archivedOrders = db.orders.filter((o) => o.isArchived);
-  for (const o of archivedOrders) {
+  const localArchived = db.orders.filter((o) => o.isArchived);
+  const archivedMap = new Map<string, Order>();
+  localArchived.forEach((o) => archivedMap.set(o.id, o));
+  if (Array.isArray(clientArchivedOrders)) {
+    clientArchivedOrders.forEach((o) => {
+      if (o && o.id && !archivedMap.has(o.id)) {
+        archivedMap.set(o.id, o);
+      }
+    });
+  }
+
+  let fbDeletedCount = 0;
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      const snap = await dbAdmin.collection("orders").where("isArchived", "==", true).get();
+      const batch = dbAdmin.batch();
+      snap.forEach((doc) => {
+        const docOrder = doc.data() as Order;
+        if (!archivedMap.has(doc.id)) {
+          archivedMap.set(doc.id, { ...docOrder, id: doc.id });
+        }
+        batch.delete(doc.ref);
+        fbDeletedCount++;
+      });
+      if (fbDeletedCount > 0) {
+        await batch.commit();
+      }
+    } catch (e: any) {
+      console.warn("Firebase clear archived orders fallback:", e.message);
+    }
+  }
+
+  const allArchived = Array.from(archivedMap.values());
+  let idx = 0;
+  for (const o of allArchived) {
     const oAny = o as any;
     await addTrashItemToDB({
-      id: `trash_order_${o.id}_${Date.now()}`,
+      id: `trash_order_${o.id}_${Date.now()}_${idx++}`,
       itemType: "order",
-      title: `طلبية سابقة #${oAny.orderNumber || o.id.slice(-6)} - ${o.clientName || o.entityName || "العميل"}`,
+      title: `طلبية سابقة #${oAny.orderNumber || String(o.id).slice(-6)} - ${o.clientName || o.entityName || "العميل"}`,
       subtitle: `القيمة: ${oAny.totalAmount || 0} ر.ي | الحالة: مسلّمة ومؤرشفة`,
       originalId: o.id,
       deletedAt: new Date().toISOString(),
@@ -1465,35 +1609,21 @@ async function clearAllArchivedOrdersFromDB(deletedBy = "د. بلال القيس
         clientName: o.clientName || o.entityName,
         phone: oAny.clientPhone || oAny.phone,
         totalAmount: oAny.totalAmount,
+        itemsCount: o.items?.length || 0,
         status: o.status
       },
       data: o
     });
   }
 
-  let deletedCount = 0;
-  if (isFirebaseEnabled && dbAdmin) {
-    try {
-      const snap = await dbAdmin.collection("orders").where("isArchived", "==", true).get();
-      const batch = dbAdmin.batch();
-      snap.forEach((doc) => {
-        batch.delete(doc.ref);
-        deletedCount++;
-      });
-      if (deletedCount > 0) {
-        await batch.commit();
-      }
-    } catch (e: any) {
-      console.warn("Firebase clear archived orders fallback:", e.message);
-    }
-  }
   const initialLen = db.orders.length;
-  db.orders = db.orders.filter((o) => !o.isArchived);
-  deletedCount = initialLen - db.orders.length;
-  if (deletedCount > 0) {
+  const archivedIdSet = new Set(allArchived.map((o) => o.id));
+  db.orders = db.orders.filter((o) => !o.isArchived && !archivedIdSet.has(o.id));
+  const localDeletedCount = initialLen - db.orders.length;
+  if (localDeletedCount > 0) {
     saveDB(db);
   }
-  return deletedCount;
+  return Math.max(fbDeletedCount, localDeletedCount, allArchived.length);
 }
 
 async function resetSystemInDB(): Promise<void> {
@@ -1698,7 +1828,7 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.post("/api/auth/register", async (req, res) => {
-  const { phone, name, role, entityName, location } = req.body || {};
+  const { id, phone, name, role, entityName, location } = req.body || {};
 
   if (!phone || !name) {
     return res.status(400).json({ error: "جميع الحقول الأساسية مطلوبة للتسجيل" });
@@ -1735,9 +1865,13 @@ app.post("/api/auth/register", async (req, res) => {
   // Security: Public registration can only be client (pharmacy or doctor), never rep
   const clientRole: "pharmacy" | "doctor" = role === "doctor" ? "doctor" : "pharmacy";
   const randomCode = String(Math.floor(1000 + Math.random() * 9000));
+  const safeId =
+    typeof id === "string" && id.trim() && id.trim() !== "u_rep" && /^[a-zA-Z0-9_\-]+$/.test(id.trim())
+      ? id.trim()
+      : "u_" + Math.random().toString(36).substr(2, 9);
 
   const newUser: User = {
-    id: "u_" + Math.random().toString(36).substr(2, 9),
+    id: safeId,
     phone: phone.trim(),
     name: name.trim(),
     role: clientRole,
@@ -1846,7 +1980,7 @@ app.get("/api/admin/dr-avatar", async (req, res) => {
 });
 
 app.post("/api/admin/dr-avatar", async (req, res) => {
-  const { avatar } = req.body;
+  const { avatar } = req.body || {};
   const current = await fetchSettingsFromDB();
   const updated: AppSettings = { ...current, drProfileAvatar: avatar || "" };
   await saveSettingsToDB(updated);
@@ -1861,7 +1995,7 @@ app.get("/api/users", async (req, res) => {
 });
 
 app.post("/api/users/batch-import", async (req, res) => {
-  const { clients } = req.body;
+  const { clients } = req.body || {};
   if (!clients || !Array.isArray(clients)) {
     return res.status(400).json({ error: "قائمة العملاء غير صالحة" });
   }
@@ -2015,11 +2149,28 @@ app.delete("/api/users", async (req, res) => {
   return res.json({ success: true, count: count || (initialCount - db.users.length) });
 });
 
-async function deleteClientFromDB(id: string, deletedBy = "د. بلال القيسي"): Promise<boolean> {
+async function deleteClientFromDB(id: string, deletedBy = "د. بلال القيسي", phone?: string): Promise<boolean> {
   const db = getDB();
-  const idx = db.users.findIndex((u) => u.id === id || u.phone === id);
-  if (idx !== -1) {
-    const client = db.users[idx];
+  const cleanTargetPhone = phone ? cleanPhoneDigits(phone) : "";
+  const isTargetMatch = (u: User) => {
+    if (u.role === "rep" || u.id === "u_rep") return false;
+    if (u.id === id || u.phone === id) return true;
+    if (phone && u.phone === phone) return true;
+    if (cleanTargetPhone && cleanTargetPhone.length >= 6) {
+      const uDigits = cleanPhoneDigits(u.phone || "");
+      if (uDigits === cleanTargetPhone) return true;
+      if (uDigits.length >= 8 && cleanTargetPhone.length >= 8 && uDigits.slice(-8) === cleanTargetPhone.slice(-8)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const matches = db.users.filter(isTargetMatch);
+  let deletedFromFirestore = false;
+
+  if (matches.length > 0) {
+    const client = matches[0];
     await addTrashItemToDB({
       id: `trash_client_${client.id}_${Date.now()}`,
       itemType: "client",
@@ -2042,31 +2193,47 @@ async function deleteClientFromDB(id: string, deletedBy = "د. بلال القي
     });
 
     if (isFirebaseEnabled && dbAdmin) {
-      try {
-        await dbAdmin.collection("users").doc(client.id).delete();
-      } catch (e: any) {
-        console.warn("Firestore delete user error:", e.message);
+      for (const m of matches) {
+        try {
+          await dbAdmin.collection("users").doc(m.id).delete();
+          deletedFromFirestore = true;
+        } catch (e: any) {
+          console.warn("Firestore delete user error:", e.message);
+        }
       }
     }
 
-    db.users.splice(idx, 1);
+    const matchedIds = new Set(matches.map((m) => m.id));
+    db.users = db.users.filter((u) => !matchedIds.has(u.id) && !isTargetMatch(u));
     saveDB(db);
     return true;
   }
-  return false;
+
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      await dbAdmin.collection("users").doc(id).delete();
+      deletedFromFirestore = true;
+    } catch (e: any) {
+      console.warn("Firestore direct delete user error:", e.message);
+    }
+  }
+
+  return deletedFromFirestore;
 }
 
 app.delete("/api/users/:id", async (req, res) => {
   const { id } = req.params;
+  const phone = (req.query.phone as string) || (req.body?.phone as string) || undefined;
   const deletedBy = (req.query.deletedBy as string) || (req.body?.deletedBy as string) || "د. بلال القيسي";
-  const success = await deleteClientFromDB(id, deletedBy);
+  const success = await deleteClientFromDB(id, deletedBy, phone);
   return res.json({ success });
 });
 
 app.delete("/api/clients/:id", async (req, res) => {
   const { id } = req.params;
+  const phone = (req.query.phone as string) || (req.body?.phone as string) || undefined;
   const deletedBy = (req.query.deletedBy as string) || (req.body?.deletedBy as string) || "د. بلال القيسي";
-  const success = await deleteClientFromDB(id, deletedBy);
+  const success = await deleteClientFromDB(id, deletedBy, phone);
   return res.json({ success });
 });
 
@@ -2127,7 +2294,7 @@ app.get("/api/products", async (req, res) => {
 
 // Add a new product (by Representative)
 app.post("/api/products", async (req, res) => {
-  const { id, name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body;
+  const { id, name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body || {};
 
   if (!name || !price) {
     return res.status(400).json({ error: "اسم الصنف وسعر الصنف مطلوبان" });
@@ -2158,7 +2325,7 @@ app.post("/api/products", async (req, res) => {
 // Update product (by Representative)
 app.put("/api/products/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body;
+  const { name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body || {};
 
   const existingProducts = await fetchProductsFromDB();
   const existing = existingProducts.find((p) => p.id === id);
@@ -2201,7 +2368,7 @@ app.delete("/api/products/:id", async (req, res) => {
 
 // Batch submit stock remaining levels
 app.post("/api/stock-reports", async (req, res) => {
-  const { clientId, clientName, entityName, reports } = req.body;
+  const { clientId, clientName, entityName, reports } = req.body || {};
 
   if (!clientId || !reports || !Array.isArray(reports)) {
     return res.status(400).json({ error: "معلومات الجرد غير مكتملة" });
@@ -2222,7 +2389,7 @@ app.get("/api/stock-reports", async (req, res) => {
 // --- ORDERS API ---
 
 app.post("/api/orders", async (req, res) => {
-  const { clientId, clientName, entityName, items, id: customId } = req.body;
+  const { clientId, clientName, entityName, items, id: customId } = req.body || {};
 
   if (!clientId || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "الرجاء تحديد الأصناف والكميات لإنشاء الطلب" });
@@ -2257,7 +2424,7 @@ app.get("/api/orders", async (req, res) => {
 
 app.patch("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
-  const { status, isArchived, order: clientOrder } = req.body; // pending, approved, completed, cancelled
+  const { status, isArchived, order: clientOrder } = req.body || {}; // pending, approved, completed, cancelled
 
   if (!status && isArchived === undefined) {
     return res.status(400).json({ error: "حالة الطلب أو حالة الأرشفة مطلوبة" });
@@ -2268,7 +2435,7 @@ app.patch("/api/orders/:id", async (req, res) => {
   try {
     let order;
     if (isArchived !== undefined) {
-      order = await archiveOrderInDB(id, isArchived !== false);
+      order = await archiveOrderInDB(id, isArchived !== false, clientOrder);
     } else {
       order = await updateOrderStatusInDB(id, status, clientOrder);
     }
@@ -2302,14 +2469,16 @@ app.patch("/api/orders/:id", async (req, res) => {
 });
 
 app.post("/api/orders/archive-completed", async (req, res) => {
-  const count = await archiveAllCompletedOrdersInDB();
+  const clientOrders = Array.isArray(req.body?.orders) ? req.body.orders : undefined;
+  const count = await archiveAllCompletedOrdersInDB(clientOrders);
   res.json({ success: true, count, message: `تم نقل ${count} طلبية مسلمة إلى الأرشيف بنجاح` });
 });
 
 app.patch("/api/orders/:id/archive", async (req, res) => {
   const { id } = req.params;
   const isArchived = req.body?.isArchived !== false;
-  const order = await archiveOrderInDB(id, isArchived);
+  const clientOrder = req.body?.order;
+  const order = await archiveOrderInDB(id, isArchived, clientOrder);
   if (!order) {
     return res.status(404).json({ error: "الطلب غير موجود" });
   }
@@ -2322,7 +2491,8 @@ app.patch("/api/orders/:id/archive", async (req, res) => {
 
 app.delete("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
-  const success = await deleteOrderFromDB(id);
+  const clientOrder = req.body?.order;
+  const success = await deleteOrderFromDB(id, "د. بلال القيسي", clientOrder);
   if (!success) {
     return res.status(404).json({ error: "الطلب غير موجود أو تعذر حذفه" });
   }
@@ -2332,7 +2502,7 @@ app.delete("/api/orders/:id", async (req, res) => {
 // Send Order Status Update via Email Notification
 app.post("/api/orders/:id/email-update", async (req, res) => {
   const { id } = req.params;
-  const { recipientEmail, recipientName, entityName, status, subject, message, repName, repPhone } = req.body;
+  const { recipientEmail, recipientName, entityName, status, subject, message, repName, repPhone } = req.body || {};
 
   if (!recipientEmail || typeof recipientEmail !== "string" || !recipientEmail.includes("@")) {
     return res.status(400).json({ error: "يرجى إدخال عنوان بريد إلكتروني صالح للعميل" });
@@ -2372,7 +2542,8 @@ app.post("/api/orders/:id/email-update", async (req, res) => {
 });
 
 app.post("/api/orders/archive/clear", async (req, res) => {
-  const count = await clearAllArchivedOrdersFromDB();
+  const clientArchivedOrders = Array.isArray(req.body?.orders) ? req.body.orders : undefined;
+  const count = await clearAllArchivedOrdersFromDB("د. بلال القيسي", clientArchivedOrders);
   res.json({ success: true, count, message: `تم إفراغ الأرشيف وحذف ${count} طلبية نهائياً` });
 });
 
@@ -2432,7 +2603,7 @@ async function fetchNotificationsFromDB(clientId?: string): Promise<Notification
       const list: Notification[] = [];
       snap.forEach((doc) => {
         const notif = doc.data() as Notification;
-        if (!clientId || notif.type === "broadcast" || notif.targetClientId === clientId) {
+        if ((!clientId || notif.type === "broadcast" || notif.targetClientId === clientId) && !notif.isArchived) {
           list.push(notif);
         }
       });
@@ -2445,7 +2616,7 @@ async function fetchNotificationsFromDB(clientId?: string): Promise<Notification
   }
   const db = getDB();
   const list = db.notifications || [];
-  const filtered = clientId ? list.filter((n) => n.type === "broadcast" || n.targetClientId === clientId) : list;
+  const filtered = (clientId ? list.filter((n) => n.type === "broadcast" || n.targetClientId === clientId) : list).filter(n => !n.isArchived);
   return filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
@@ -2465,6 +2636,127 @@ async function saveNotificationToDB(notif: Notification): Promise<void> {
   saveDB(db);
 }
 
+async function registerUserFcmToken(userId: string, token: string): Promise<void> {
+  const cleanToken = token.trim();
+  if (!cleanToken) return;
+  const now = new Date().toISOString();
+
+  if (isFirebaseEnabled && dbAdmin && userId) {
+    try {
+      const userRef = dbAdmin.collection("users").doc(userId);
+      const snap = await userRef.get();
+      const existingData = snap.exists ? (snap.data() as User) : undefined;
+      const existingTokens = Array.isArray(existingData?.fcmTokens) ? existingData.fcmTokens : [];
+      const mergedTokens = Array.from(new Set([cleanToken, ...existingTokens])).slice(0, 10);
+      await userRef.set(
+        {
+          fcmToken: cleanToken,
+          fcmTokens: mergedTokens,
+          fcmUpdatedAt: now,
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.warn("Firebase FCM token persist fallback:", e.message);
+    }
+  }
+
+  const db = getDB();
+  const idx = db.users.findIndex((u) => u.id === userId);
+  if (idx !== -1) {
+    const existingTokens = Array.isArray(db.users[idx].fcmTokens) ? db.users[idx].fcmTokens! : [];
+    db.users[idx].fcmToken = cleanToken;
+    db.users[idx].fcmTokens = Array.from(new Set([cleanToken, ...existingTokens])).slice(0, 10);
+    db.users[idx].fcmUpdatedAt = now;
+    saveDB(db);
+  }
+}
+
+async function sendFcmNotificationToUsers(params: {
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+  targetClientId?: string;
+  directToken?: string;
+}): Promise<{ attempted: boolean; tokenCount: number; successCount: number; failureCount: number; reason?: string }> {
+  const { title, body, data, targetClientId, directToken } = params;
+  const tokensSet = new Set<string>();
+
+  if (directToken && directToken.trim()) {
+    tokensSet.add(directToken.trim());
+  } else {
+    const users = await fetchAllUsersFromDB();
+    for (const u of users) {
+      if (targetClientId && u.id !== targetClientId) continue;
+      if (u.fcmToken && u.fcmToken.trim()) tokensSet.add(u.fcmToken.trim());
+      if (Array.isArray(u.fcmTokens)) {
+        for (const t of u.fcmTokens) {
+          if (t && t.trim()) tokensSet.add(t.trim());
+        }
+      }
+    }
+  }
+
+  const tokens = Array.from(tokensSet);
+  if (tokens.length === 0) {
+    return { attempted: false, tokenCount: 0, successCount: 0, failureCount: 0, reason: "no_registered_tokens" };
+  }
+  if (getApps().length === 0 || !isFirebaseEnabled) {
+    return { attempted: false, tokenCount: tokens.length, successCount: 0, failureCount: 0, reason: "firebase_admin_unauthenticated" };
+  }
+
+  try {
+    const messagingAdmin = getAdminMessaging();
+    const safeData: Record<string, string> = {};
+    if (data) {
+      for (const [k, v] of Object.entries(data)) {
+        if (v !== undefined && v !== null) safeData[k] = String(v);
+      }
+    }
+
+    const batchRes = (await Promise.race([
+      messagingAdmin.sendEachForMulticast({
+        tokens,
+        notification: { title, body },
+        data: safeData,
+        android: {
+          ttl: 3600 * 1000,
+          collapseKey: "mandoubak_updates",
+          notification: {
+            channelId: "messages",
+          },
+        },
+        webpush: {
+          notification: {
+            title,
+            body,
+            icon: "/icons/pwa-192x192.png",
+            dir: "rtl",
+            lang: "ar",
+          },
+        },
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("FCM send timeout")), 4000)),
+    ])) as any;
+
+    return {
+      attempted: true,
+      tokenCount: tokens.length,
+      successCount: batchRes?.successCount || 0,
+      failureCount: batchRes?.failureCount || 0,
+    };
+  } catch (err: any) {
+    console.warn("FCM push dispatch notice:", err?.message || err);
+    return {
+      attempted: true,
+      tokenCount: tokens.length,
+      successCount: 0,
+      failureCount: tokens.length,
+      reason: err?.message || "fcm_send_failed",
+    };
+  }
+}
+
 // --- NEW VISITS & NOTIFICATIONS ENDPOINTS ---
 
 app.get("/api/visits", async (req, res) => {
@@ -2474,7 +2766,7 @@ app.get("/api/visits", async (req, res) => {
 });
 
 app.post("/api/visits", async (req, res) => {
-  const { clientId, clientName, entityName, visitDate, notes, summary, tasks } = req.body;
+  const { clientId, clientName, entityName, visitDate, notes, summary, tasks } = req.body || {};
 
   if (!clientId || !notes || !visitDate) {
     return res.status(400).json({ error: "معلومات الزيارة غير مكتملة" });
@@ -2498,7 +2790,7 @@ app.post("/api/visits", async (req, res) => {
 
 app.patch("/api/visits/:id", async (req, res) => {
   const { id } = req.params;
-  const { tasks, summary, notes } = req.body;
+  const { tasks, summary, notes } = req.body || {};
 
   const visits = await fetchVisitsFromDB();
   const visit = visits.find((v) => v.id === id);
@@ -2521,8 +2813,35 @@ app.get("/api/notifications", async (req, res) => {
   res.json(list);
 });
 
+app.post("/api/fcm/register", async (req, res) => {
+  const { userId, token } = req.body || {};
+  if (!token || typeof token !== "string") {
+    return res.status(400).json({ error: "رمز التسجيل (FCM Token) مطلوب" });
+  }
+  if (!userId || typeof userId !== "string") {
+    return res.status(400).json({ error: "معرّف المستخدم مطلوب" });
+  }
+  await registerUserFcmToken(userId, token);
+  res.json({ success: true, userId, tokenRegistered: true });
+});
+
+app.post("/api/fcm/send", async (req, res) => {
+  const { title, body, token, targetClientId, data } = req.body || {};
+  if (!title || !body) {
+    return res.status(400).json({ error: "عنوان ونص الإشعار مطلوبان" });
+  }
+  const fcmDelivery = await sendFcmNotificationToUsers({
+    title: String(title).trim(),
+    body: String(body).trim(),
+    targetClientId,
+    directToken: token,
+    data,
+  });
+  res.json({ success: true, fcmDelivery });
+});
+
 app.post("/api/notifications", async (req, res) => {
-  const { title, message, type, targetClientId, targetClientName } = req.body;
+  const { title, message, type, targetClientId, targetClientName } = req.body || {};
 
   if (!title || !message) {
     return res.status(400).json({ error: "عنوان الإشعار ونص الإشعار مطلوبان" });
@@ -2539,7 +2858,50 @@ app.post("/api/notifications", async (req, res) => {
   };
 
   await saveNotificationToDB(newNotif);
-  res.json({ success: true, notification: newNotif });
+  const fcmDelivery = await sendFcmNotificationToUsers({
+    title: newNotif.title,
+    body: newNotif.message,
+    targetClientId: newNotif.type === "target" ? newNotif.targetClientId : undefined,
+    data: {
+      notification_id: newNotif.id,
+      type: newNotif.type,
+    },
+  });
+  res.json({ success: true, notification: newNotif, fcmDelivery });
+});
+
+app.patch("/api/notifications/:id/archive", async (req, res) => {
+  const { id } = req.params;
+  const isArchived = req.body?.isArchived !== false;
+  const now = new Date().toISOString();
+
+  if (isFirebaseEnabled && dbAdmin) {
+    try {
+      const ref = dbAdmin.collection("notifications").doc(id);
+      const doc = await ref.get();
+      if (doc.exists) {
+        await ref.update({ isArchived, archivedAt: isArchived ? now : null });
+      }
+    } catch (e: any) {
+      console.warn("Firebase archive notification fallback:", e.message);
+    }
+  }
+
+  const db = getDB();
+  if (!db.notifications) db.notifications = [];
+  const idx = db.notifications.findIndex((n) => n.id === id);
+  if (idx !== -1) {
+    (db.notifications[idx] as Notification).isArchived = isArchived;
+    if (isArchived) {
+      (db.notifications[idx] as Notification).archivedAt = now;
+    } else {
+      delete (db.notifications[idx] as Notification).archivedAt;
+    }
+    saveDB(db);
+    return res.json({ success: true, notification: db.notifications[idx] });
+  }
+
+  res.json({ success: true });
 });
 
 app.delete("/api/notifications/:id", async (req, res) => {
@@ -3231,7 +3593,7 @@ async function callOpenRouterChat({
 // --- GEMINI AI VISITS ANALYZER API ---
 
 app.post("/api/visits/analyze", async (req, res) => {
-  const { notes } = req.body;
+  const { notes } = req.body || {};
   if (!notes || notes.trim() === "") {
     return res.status(400).json({ error: "ملاحظات الزيارة مطلوبة للتحليل" });
   }
@@ -3314,7 +3676,7 @@ app.post("/api/visits/analyze", async (req, res) => {
 // --- GEMINI AI DRUGS SCIENTIFIC SEARCH API ---
 
 app.post("/api/drugs/scientific-search", async (req, res) => {
-  const { drugQuery } = req.body;
+  const { drugQuery } = req.body || {};
   if (!drugQuery || drugQuery.trim() === "") {
     return res.status(400).json({ error: "اسم الدواء أو المادة الفعالة مطلوبة للبحث" });
   }
@@ -3449,7 +3811,7 @@ app.post("/api/drugs/scientific-search", async (req, res) => {
 
 // --- ACCREDITED ENGLISH MEDICAL BOARD EXAM GENERATION API ---
 app.post("/api/ai/generate-medical-exam", async (req, res) => {
-  const { specialty, topic, count = 5, difficulty = "medium" } = req.body;
+  const { specialty, topic, count = 5, difficulty = "medium" } = req.body || {};
 
   try {
     const ai = new GoogleGenAI({
@@ -3645,7 +4007,7 @@ app.get("/api/ai/providers", (req, res) => {
 });
 
 app.post("/api/ai/openrouter/chat", async (req, res) => {
-  const { messages, model, systemInstruction, temperature } = req.body;
+  const { messages, model, systemInstruction, temperature } = req.body || {};
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة" });
   }
@@ -3832,7 +4194,7 @@ app.post("/api/chat", async (req, res) => {
 });
 
 app.post("/api/ai/suggest-category", async (req, res) => {
-  const { name, description } = req.body;
+  const { name, description } = req.body || {};
   const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY!,
     httpOptions: {
@@ -3853,7 +4215,7 @@ app.post("/api/ai/suggest-category", async (req, res) => {
 
 // Standard Gemini Generate Endpoint per AI Studio @google/genai guidelines
 app.post("/api/gemini/generate", async (req, res) => {
-  const { prompt, contents, systemInstruction } = req.body;
+  const { prompt, contents, systemInstruction } = req.body || {};
   const userPrompt = prompt || (typeof contents === "string" ? contents : contents?.parts?.[0]?.text) || "مرحباً";
 
   try {
@@ -3891,7 +4253,7 @@ app.post("/api/gemini/generate", async (req, res) => {
 
 // Streaming Gemini API Endpoint (Server-Sent Events) with gemini-3.8-flash
 app.post("/api/gemini/stream", async (req, res) => {
-  const { prompt, contents, systemInstruction } = req.body;
+  const { prompt, contents, systemInstruction } = req.body || {};
   const userPrompt = prompt || (typeof contents === "string" ? contents : contents?.parts?.[0]?.text) || "مرحباً";
 
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -3934,7 +4296,7 @@ app.post("/api/gemini/stream", async (req, res) => {
 
 // --- GOOGLE GENAI INTERACTIONS AGENT API (ANTIGRAVITY & DEEP RESEARCH) ---
 app.post("/api/ai/agent-interaction", async (req, res) => {
-  const { input, prompt, agent = "antigravity-preview-05-2026", background = false } = req.body;
+  const { input, prompt, agent = "antigravity-preview-05-2026", background = false } = req.body || {};
   const userInput = input || prompt;
   if (!userInput || typeof userInput !== "string" || userInput.trim() === "") {
     return res.status(400).json({ error: "نص الإدخال (input/prompt) مطلوب لبدء المحادثة مع الوكيل الذكي" });
@@ -4041,7 +4403,7 @@ app.get("/api/ai/agent-interaction/:id", async (req, res) => {
 
 // --- GEMINI AI IMAGE GENERATION API ---
 app.post("/api/ai/generate-image", async (req, res) => {
-  const { prompt, aspectRatio = "1:1", imageSize = "1K" } = req.body;
+  const { prompt, aspectRatio = "1:1", imageSize = "1K" } = req.body || {};
   if (!prompt || typeof prompt !== "string" || prompt.trim() === "") {
     return res.status(400).json({ error: "نص التوجيه (Prompt) مطلوب لتوليد الصورة" });
   }
@@ -4110,7 +4472,7 @@ app.post("/api/ai/generate-image", async (req, res) => {
 
 // --- GEMINI AI IMAGE EDITING API ---
 app.post("/api/ai/edit-image", async (req, res) => {
-  const { prompt, imageBase64, mimeType = "image/png" } = req.body;
+  const { prompt, imageBase64, mimeType = "image/png" } = req.body || {};
   if (!prompt || !imageBase64) {
     return res.status(400).json({ error: "الصورة والنص التوجيهي مطلوبان لتعديل الصورة" });
   }
@@ -4638,7 +5000,7 @@ print(f"Created webhook: {webhook.name}, {webhook.id}")`
 });
 
 app.post("/api/gemini-callback/config", async (req, res) => {
-  const { secret } = req.body;
+  const { secret } = req.body || {};
   const db = getDB();
   if (!db.settings) db.settings = { ...DEFAULT_SETTINGS };
   db.settings.geminiWebhookSecret = (secret || "").trim();
@@ -4651,7 +5013,7 @@ app.post("/api/gemini-callback/config", async (req, res) => {
 });
 
 app.post("/api/gemini-callback/test", async (req, res) => {
-  const { eventType = "batch.succeeded", batchId, model = "gemini-3.8-flash", shouldSimulateSignature = true } = req.body;
+  const { eventType = "batch.succeeded", batchId, model = "gemini-3.8-flash", shouldSimulateSignature = true } = req.body || {};
 
   const actualBatchId = batchId || `batches/batch_${Date.now().toString(36)}`;
   const testPayload = {
@@ -4694,7 +5056,7 @@ app.post("/api/gemini-callback/test", async (req, res) => {
     batchId: actualBatchId,
     model,
     status: eventType === "batch.succeeded" ? "succeeded" : "failed",
-    outputUri: testPayload.data.output_uri,
+    outputUri: testPayload.data.output_uri || undefined,
     totalCount: testPayload.data.total_count,
     completedCount: testPayload.data.completed_count,
     failedCount: testPayload.data.failed_count,
@@ -4730,7 +5092,8 @@ app.post("/api/system/reset", async (req, res) => {
 
 async function startServer() {
   const distPath = path.join(process.cwd(), "dist");
-  if (process.env.NODE_ENV === "production" && fs.existsSync(distPath)) {
+  const isCompiledServer = typeof process.argv[1] === "string" && process.argv[1].endsWith("server.cjs");
+  if ((process.env.NODE_ENV === "production" || isCompiledServer) && fs.existsSync(path.join(distPath, "index.html"))) {
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

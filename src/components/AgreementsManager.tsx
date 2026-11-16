@@ -94,7 +94,7 @@ export const AgreementsManager: React.FC<AgreementsManagerProps> = ({
       clientId: activeClients.length > 0 ? activeClients[0].id : "",
       clientName: activeClients.length > 0 ? activeClients[0].name : "",
       entityName: activeClients.length > 0 ? (activeClients[0].entityName || activeClients[0].name) : "",
-      clientPhone: activeClients.length > 0 ? activeClients[0].phone : "",
+      clientPhone: activeClients.length > 0 ? (activeClients[0].phone || "") : "",
       type: "bonus",
       typeLabel: "بونص إضافي",
       details: "",
@@ -145,7 +145,7 @@ export const AgreementsManager: React.FC<AgreementsManagerProps> = ({
         clientId: found.id,
         clientName: found.name,
         entityName: found.entityName || found.name,
-        clientPhone: found.phone
+        clientPhone: found.phone || ""
       }));
     } else {
       setFormData((prev) => ({
