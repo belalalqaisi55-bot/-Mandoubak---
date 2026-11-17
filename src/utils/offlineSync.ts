@@ -274,26 +274,36 @@ export async function getOfflineOrders(clientId?: string, role?: string): Promis
  */
 export async function updateOfflineOrderStatus(orderId: string, status: Order["status"]): Promise<void> {
   try {
+    const now = new Date().toISOString();
     const order = await performTransaction<Order | undefined>(STORES.ORDERS, "readonly", (store) => {
       return store.get(orderId);
     });
 
-    if (order) {
-      order.status = status;
-      await performTransaction(STORES.ORDERS, "readwrite", (store) => {
-        store.put(order);
-      });
+    const buildUpdatedOrder = (existing: Order): Order => ({
+      ...existing,
+      status,
+      updatedAt: now,
+      respondedAt: existing.respondedAt || (status !== "pending" ? now : undefined),
+      approvedAt: existing.approvedAt || (status === "approved" ? now : undefined),
+      completedAt: existing.completedAt || (status === "completed" ? now : undefined),
+    });
 
-      // Update localStorage backup
-      try {
-        const raw = localStorage.getItem("mandoubak_local_orders");
-        let ordersList: Order[] = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(ordersList)) {
-          ordersList = ordersList.map((o) => (o.id === orderId ? { ...o, status } : o));
-          localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
-        }
-      } catch (e) {}
+    if (order) {
+      const updatedOrder = buildUpdatedOrder(order);
+      await performTransaction(STORES.ORDERS, "readwrite", (store) => {
+        store.put(updatedOrder);
+      });
     }
+
+    // Update localStorage backup
+    try {
+      const raw = localStorage.getItem("mandoubak_local_orders");
+      let ordersList: Order[] = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(ordersList)) {
+        ordersList = ordersList.map((o) => (o.id === orderId ? buildUpdatedOrder(o) : o));
+        localStorage.setItem("mandoubak_local_orders", JSON.stringify(ordersList));
+      }
+    } catch (e) {}
   } catch (e) {
     console.warn("Failed to update offline order status:", e);
   }

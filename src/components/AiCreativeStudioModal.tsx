@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useModalBackHandler } from "../hooks/useModalBackHandler";
 import {
   Sparkles,
   Image as ImageIcon,
@@ -63,6 +64,8 @@ export const AiCreativeStudioModal: React.FC<AiCreativeStudioModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoImageInputRef = useRef<HTMLInputElement>(null);
+
+  useModalBackHandler(isOpen, onClose, "ai-creative-studio");
 
   if (!isOpen) return null;
 

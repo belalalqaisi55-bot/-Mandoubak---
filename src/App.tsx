@@ -37,6 +37,7 @@ import { SystemStatus } from "./components/SystemStatus";
 import { SecretCVPage } from "./components/SecretCVPage";
 import { CVBarcodeModal } from "./components/CVBarcodeModal";
 import { SalesReports } from "./components/SalesReports";
+import { OrderResponseSpeedChart } from "./components/OrderResponseSpeedChart";
 import {
   PREDEFINED_CATEGORIES,
   DEFAULT_CATEGORY_COLORS,
@@ -157,7 +158,9 @@ import {
   Mic,
   Volume2,
   FlaskConical,
-  Mail
+  Mail,
+  ArrowUpDown,
+  Gauge
 } from "lucide-react";
 import {
   initNativeInteractions,
@@ -402,7 +405,14 @@ export default function App() {
       const saved = localStorage.getItem("mandoubak_user");
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === "object" && (parsed.isApproved === false || parsed.status === "pending_approval")) {
+        const isBelalAdmin =
+          parsed &&
+          typeof parsed === "object" &&
+          (parsed.role === "rep" ||
+            parsed.role === "admin" ||
+            (parsed.email && parsed.email.toLowerCase().includes("belalalqaisi")) ||
+            (parsed.phone && parsed.phone.includes("776600049")));
+        if (!isBelalAdmin && parsed && typeof parsed === "object" && (parsed.isApproved === false || parsed.status === "pending_approval")) {
           return parsed;
         }
       }
@@ -464,7 +474,27 @@ export default function App() {
             const userDocRef = doc(db, "users", isRep ? "u_rep" : firebaseUser.uid);
             const userDocSnap = await getDoc(userDocRef);
             if (userDocSnap.exists()) {
-              const fireData = userDocSnap.data() as User;
+              const fireData = { ...userDocSnap.data(), id: userDocSnap.id } as User;
+              if (isRep) {
+                setPendingApprovalUser(null);
+                setUser({
+                  ...fireData,
+                  id: "u_rep",
+                  role: "rep",
+                  email: fireData.email || "belalalqaisi55@gmail.com",
+                  isApproved: true,
+                  status: "approved",
+                });
+                return;
+              }
+              if (fireData.status === "suspended") {
+                return;
+              }
+              if (fireData.isApproved === false || fireData.status === "pending_approval") {
+                setPendingApprovalUser(fireData);
+                return;
+              }
+              setPendingApprovalUser(null);
               setUser(fireData);
               return;
             }
@@ -717,6 +747,14 @@ export default function App() {
     return [];
   });
   const [orderStatusFilter, setOrderStatusFilter] = useState<"all" | "pending" | "approved" | "completed" | "cancelled">("all");
+  const [orderSearchQuery, setOrderSearchQuery] = useState("");
+  const [orderEntityFilter, setOrderEntityFilter] = useState("");
+  const [orderClientFilter, setOrderClientFilter] = useState("");
+  const [orderDatePreset, setOrderDatePreset] = useState<"all" | "today" | "week" | "month" | "custom">("all");
+  const [orderDateFrom, setOrderDateFrom] = useState("");
+  const [orderDateTo, setOrderDateTo] = useState("");
+  const [orderSortBy, setOrderSortBy] = useState<"newest" | "oldest" | "entityName" | "clientName">("newest");
+  const [showOrderResponseStats, setShowOrderResponseStats] = useState(true);
   const [orderToPrint, setOrderToPrint] = useState<Order | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
 
@@ -2793,21 +2831,46 @@ export default function App() {
 
     setIsVerifyingCode(true);
     try {
+      const codeAttempt = confirmationCodeInput.trim();
       const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone || "");
-      const res = await fetch("/api/auth/verify-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: cleanPhone, code: confirmationCodeInput.trim() }),
-      });
+      let verifiedUser: User | null = null;
 
-      const data = await res.json();
-      if (res.ok && data.user) {
-        setUser(data.user);
+      try {
+        const res = await fetch("/api/auth/verify-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: cleanPhone, code: codeAttempt }),
+        });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.user) {
+          verifiedUser = data.user;
+        }
+      } catch {
+        // Fallback to Firestore / local verification below
+      }
+
+      if (!verifiedUser && isFirebaseConfigured && db && pendingApprovalUser.id) {
+        try {
+          const snap = await getDoc(doc(db, "users", pendingApprovalUser.id));
+          if (snap.exists()) {
+            const fireUser = { id: snap.id, ...snap.data() } as User;
+            if (fireUser.confirmationCode && fireUser.confirmationCode.trim() === codeAttempt) {
+              verifiedUser = { ...fireUser, isApproved: true, status: "approved" };
+              await syncToFirebase("users", "set", verifiedUser.id, verifiedUser);
+            }
+          }
+        } catch {
+          // Ignore Firestore fallback error
+        }
+      }
+
+      if (verifiedUser) {
+        setUser(verifiedUser);
         setPendingApprovalUser(null);
-        localStorage.setItem("mandoubak_user", JSON.stringify(data.user));
+        localStorage.setItem("mandoubak_user", JSON.stringify(verifiedUser));
         showSuccess("تم التحقق وتأكيد حسابك بنجاح! أهلاً بك في تطبيق مندوبك الطبي 🎉");
       } else {
-        showError(data.error || "رمز التأكيد غير صحيح. يرجى التواصل مع المندوب د/ بلال القيسي.");
+        showError("رمز التأكيد غير صحيح. يرجى التواصل مع المندوب د/ بلال القيسي.");
       }
     } catch (err) {
       showError("تعذر الاتصال بالخادم للتحقق من الرمز، يرجى المحاولة لاحقاً");
@@ -2821,38 +2884,55 @@ export default function App() {
     setIsCheckingApprovalStatus(true);
     try {
       const cleanPhone = cleanArabicPhone(pendingApprovalUser.phone || "");
+      const pendingEmail = (pendingApprovalUser.email || "").toLowerCase().trim();
       let approvedUser: User | null = null;
 
-      // 1. Try Backend API
-      try {
-        const res = await fetch("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: cleanPhone }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.user && (data.user.isApproved || data.user.status === "approved")) {
-            approvedUser = data.user;
+      // 1. Try Backend API (only if phone is meaningful)
+      if (cleanPhone && cleanPhone.length >= 6) {
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone: cleanPhone }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.user && (data.user.isApproved || data.user.status === "approved")) {
+              approvedUser = data.user;
+            }
           }
+        } catch (apiErr) {
+          console.warn("API check approval error:", apiErr);
         }
-      } catch (apiErr) {
-        console.warn("API check approval error:", apiErr);
       }
 
-      // 2. Try Firestore query if not resolved
+      // 2. Try Firestore direct doc lookup by ID first, then email/phone query
       if (!approvedUser && isFirebaseConfigured && db) {
         try {
-          const snapshot = await getDocs(collection(db, "users"));
-          const found = snapshot.docs.find(d => {
-            const uData = d.data();
-            const uPhone = cleanArabicPhone(uData.phone || "");
-            return uPhone === cleanPhone || (uPhone.length >= 8 && cleanPhone.length >= 8 && uPhone.slice(-8) === cleanPhone.slice(-8));
-          });
-          if (found) {
-            const fData = found.data() as User;
-            if (fData.isApproved || fData.status === "approved") {
-              approvedUser = { ...fData, id: found.id };
+          if (pendingApprovalUser.id) {
+            const directSnap = await getDoc(doc(db, "users", pendingApprovalUser.id));
+            if (directSnap.exists()) {
+              const dData = directSnap.data() as User;
+              if (dData.isApproved || dData.status === "approved") {
+                approvedUser = { ...dData, id: directSnap.id };
+              }
+            }
+          }
+          if (!approvedUser) {
+            const snapshot = await getDocs(collection(db, "users"));
+            const found = snapshot.docs.find(d => {
+              const uData = d.data();
+              const uEmail = (uData.email || "").toLowerCase().trim();
+              if (pendingEmail && uEmail && uEmail === pendingEmail) return true;
+              const uPhone = cleanArabicPhone(uData.phone || "");
+              if (!cleanPhone || cleanPhone.length < 6 || !uPhone || uPhone.length < 6) return false;
+              return uPhone === cleanPhone || (uPhone.length >= 8 && cleanPhone.length >= 8 && uPhone.slice(-8) === cleanPhone.slice(-8));
+            });
+            if (found) {
+              const fData = found.data() as User;
+              if (fData.isApproved || fData.status === "approved") {
+                approvedUser = { ...fData, id: found.id };
+              }
             }
           }
         } catch (fsErr) {
@@ -2863,7 +2943,11 @@ export default function App() {
       // 3. Try registeredUsers state
       if (!approvedUser) {
         const localFound = registeredUsers.find(u => {
+          if (pendingApprovalUser.id && u.id === pendingApprovalUser.id) return true;
+          const uEmail = (u.email || "").toLowerCase().trim();
+          if (pendingEmail && uEmail && uEmail === pendingEmail) return true;
           const uPhone = cleanArabicPhone(u.phone || "");
+          if (!cleanPhone || cleanPhone.length < 6 || !uPhone || uPhone.length < 6) return false;
           return uPhone === cleanPhone || (uPhone.length >= 8 && cleanPhone.length >= 8 && uPhone.slice(-8) === cleanPhone.slice(-8));
         });
         if (localFound && (localFound.isApproved || localFound.status === "approved")) {
@@ -2875,7 +2959,9 @@ export default function App() {
         setUser(approvedUser);
         setPendingApprovalUser(null);
         localStorage.setItem("mandoubak_user", JSON.stringify(approvedUser));
-        localStorage.setItem("mandoubak_bound_phone", cleanPhone);
+        if (cleanPhone && cleanPhone.length >= 6) {
+          localStorage.setItem("mandoubak_bound_phone", cleanPhone);
+        }
         showSuccess("تهانينا! تم تأكيد واعتماد حسابك من قبل المندوب د/ بلال القيسي 🎉");
       } else {
         showError("حسابك لا يزال قيد المراجعة والاعتماد من قبل المندوب د/ بلال القيسي (776600049)");
@@ -3538,22 +3624,62 @@ export default function App() {
         const userEmail = (googleUser.email || "").toLowerCase().trim();
         const isRep = userEmail === "belalalqaisi55@gmail.com" || userEmail.startsWith("belalalqaisi55") || userEmail.includes("belalalqaisi");
 
-        const loggedUser: User = {
-          id: isRep ? "u_rep" : googleUser.uid,
-          email: isRep ? "belalalqaisi55@gmail.com" : (googleUser.email || undefined),
-          phone: isRep ? "+967776600049" : (googleUser.phoneNumber || googleUser.email || "google_user"),
-          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : (googleUser.displayName || "مستخدم Google"),
-          role: isRep ? "rep" : "pharmacy",
-          entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : (googleUser.displayName ? `منشأة ${googleUser.displayName}` : "منشأة طبية مسجلة"),
-          location: isRep ? "صنعاء / جميع المحافظات" : "مسجل عبر Google Auth",
-          isApproved: isRep ? true : !appSettings.requireApprovalForNewClients,
-          status: isRep ? "approved" : (appSettings.requireApprovalForNewClients ? "pending_approval" : "approved"),
-          createdAt: new Date().toISOString()
-        };
+        let existingUser: User | null = null;
+        if (!isRep && isFirebaseConfigured && db) {
+          try {
+            const directSnap = await getDoc(doc(db, "users", googleUser.uid));
+            if (directSnap.exists()) {
+              existingUser = { id: directSnap.id, ...directSnap.data() } as User;
+            }
+          } catch (fsErr) {
+            handleFirestoreError(fsErr, OperationType.GET, `users/${googleUser.uid}`);
+          }
+        }
+        if (!isRep && !existingUser) {
+          existingUser =
+            registeredUsers.find(
+              (u) =>
+                u.id === googleUser.uid ||
+                (userEmail && (u.email || "").toLowerCase().trim() === userEmail)
+            ) || null;
+        }
+
+        const loggedUser: User = isRep
+          ? {
+              id: "u_rep",
+              email: "belalalqaisi55@gmail.com",
+              phone: "+967776600049",
+              name: "د/ بلال القيسي (المسؤول والمندوب الطبي)",
+              role: "rep",
+              entityName: "المكتب العلمي والمبيعات الطبية (الإدارة)",
+              location: "صنعاء / جميع المحافظات",
+              isApproved: true,
+              status: "approved",
+              createdAt: new Date().toISOString(),
+            }
+          : existingUser || {
+              id: googleUser.uid,
+              email: googleUser.email || undefined,
+              phone: googleUser.phoneNumber || googleUser.email || "google_user",
+              name: googleUser.displayName || "مستخدم Google",
+              role: "pharmacy",
+              entityName: googleUser.displayName ? `منشأة ${googleUser.displayName}` : "منشأة طبية مسجلة",
+              location: "مسجل عبر Google Auth",
+              isApproved: !appSettings.requireApprovalForNewClients,
+              status: appSettings.requireApprovalForNewClients ? "pending_approval" : "approved",
+              createdAt: new Date().toISOString(),
+            };
+
+        if (!isRep && loggedUser.status === "suspended") {
+          showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
+          return;
+        }
 
         if (!isRep && (loggedUser.isApproved === false || loggedUser.status === "pending_approval")) {
           setPendingApprovalUser(loggedUser);
-          await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+          if (!existingUser) {
+            await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+          }
           showError("تم تسجيل الحساب! حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
           return;
         }
@@ -4433,10 +4559,22 @@ export default function App() {
     setLoading(true);
 
     const targetOrder = orders.find((o) => o.id === orderId);
+    const nowIso = new Date().toISOString();
+    const respondedAt = targetOrder?.respondedAt || (status !== "pending" ? nowIso : undefined);
+    const approvedAt = targetOrder?.approvedAt || (status === "approved" ? nowIso : undefined);
+    const completedAt = targetOrder?.completedAt || (status === "completed" ? nowIso : undefined);
+
+    const statusUpdateFields: Partial<Order> = {
+      status,
+      updatedAt: nowIso,
+      ...(respondedAt ? { respondedAt } : {}),
+      ...(approvedAt ? { approvedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+    };
 
     // 1. Optimistic Local State Update so UI responds immediately
     setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status, updatedAt: new Date().toISOString() } : o))
+      prev.map((o) => (o.id === orderId ? { ...o, ...statusUpdateFields } : o))
     );
 
     // 2. Persist to local IndexedDB & LocalStorage
@@ -4451,7 +4589,7 @@ export default function App() {
       try {
         await setDoc(
           doc(db, "orders", orderId),
-          { status, updatedAt: new Date().toISOString() },
+          statusUpdateFields,
           { merge: true }
         );
       } catch (fsErr) {
@@ -4467,7 +4605,7 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             status,
-            order: targetOrder ? { ...targetOrder, status } : undefined,
+            order: targetOrder ? { ...targetOrder, ...statusUpdateFields } : undefined,
           }),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -5380,10 +5518,12 @@ export default function App() {
                         onClick={() => {
                           setPendingApprovalUser(null);
                           setPhone("");
+                          localStorage.removeItem("mandoubak_user");
+                          signOutUser().catch(() => {});
                         }}
                         className="text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors py-1 cursor-pointer"
                       >
-                        تسجيل الدخول برقم هاتف آخر 🔄
+                        تسجيل الدخول بحساب أو رقم آخر 🔄
                       </button>
                     </div>
                   </div>
@@ -7601,6 +7741,84 @@ export default function App() {
                 const archivedCount = orders.filter(o => o.isArchived).length;
                 const canArchiveCount = activeOrders.filter(o => o.status === "completed" || o.status === "cancelled").length;
 
+                const entityCounts = new Map<string, number>();
+                const clientCounts = new Map<string, number>();
+                activeOrders.forEach((o) => {
+                  const entity = (o.entityName || "").trim();
+                  const client = (o.clientName || "").trim();
+                  if (entity) entityCounts.set(entity, (entityCounts.get(entity) || 0) + 1);
+                  if (client) clientCounts.set(client, (clientCounts.get(client) || 0) + 1);
+                });
+                const uniqueEntities = Array.from(entityCounts.entries()).sort((a, b) => a[0].localeCompare(b[0], "ar"));
+                const uniqueClients = Array.from(clientCounts.entries()).sort((a, b) => a[0].localeCompare(b[0], "ar"));
+
+                const normalizedQuery = orderSearchQuery.trim().toLowerCase();
+                const nowDate = new Date();
+                const startOfToday = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+                const startOfWeek = startOfToday - 6 * 24 * 60 * 60 * 1000;
+                const startOfMonth = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1).getTime();
+                const customFromMs = orderDateFrom ? new Date(`${orderDateFrom}T00:00:00`).getTime() : null;
+                const customToMs = orderDateTo ? new Date(`${orderDateTo}T23:59:59.999`).getTime() : null;
+
+                const filteredOrders = activeOrders
+                  .filter((o) => {
+                    if (orderStatusFilter !== "all" && o.status !== orderStatusFilter) return false;
+                    if (orderEntityFilter && (o.entityName || "").trim() !== orderEntityFilter) return false;
+                    if (orderClientFilter && (o.clientName || "").trim() !== orderClientFilter) return false;
+                    if (orderDatePreset !== "all") {
+                      const orderTime = new Date(o.createdAt).getTime();
+                      if (Number.isNaN(orderTime)) return false;
+                      if (orderDatePreset === "today" && orderTime < startOfToday) return false;
+                      if (orderDatePreset === "week" && orderTime < startOfWeek) return false;
+                      if (orderDatePreset === "month" && orderTime < startOfMonth) return false;
+                      if (orderDatePreset === "custom") {
+                        if (customFromMs !== null && orderTime < customFromMs) return false;
+                        if (customToMs !== null && orderTime > customToMs) return false;
+                      }
+                    }
+                    if (normalizedQuery) {
+                      const matchesClient = (o.clientName || "").toLowerCase().includes(normalizedQuery);
+                      const matchesEntity = (o.entityName || "").toLowerCase().includes(normalizedQuery);
+                      const matchesId = (o.id || "").toLowerCase().includes(normalizedQuery);
+                      if (!matchesClient && !matchesEntity && !matchesId) return false;
+                    }
+                    return true;
+                  })
+                  .sort((a, b) => {
+                    if (orderSortBy === "entityName") {
+                      return (a.entityName || "").localeCompare(b.entityName || "", "ar");
+                    }
+                    if (orderSortBy === "clientName") {
+                      return (a.clientName || "").localeCompare(b.clientName || "", "ar");
+                    }
+                    if (orderSortBy === "oldest") {
+                      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                    }
+                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                  });
+
+                const resetAllOrderFilters = () => {
+                  setOrderStatusFilter("all");
+                  setOrderSearchQuery("");
+                  setOrderEntityFilter("");
+                  setOrderClientFilter("");
+                  setOrderDatePreset("all");
+                  setOrderDateFrom("");
+                  setOrderDateTo("");
+                  setOrderSortBy("newest");
+                };
+
+                const hasActiveFilters = Boolean(
+                  orderStatusFilter !== "all" ||
+                  orderSearchQuery.trim() ||
+                  orderEntityFilter ||
+                  orderClientFilter ||
+                  orderDatePreset !== "all" ||
+                  orderDateFrom ||
+                  orderDateTo ||
+                  orderSortBy !== "newest"
+                );
+
                 return (
                   <div className="divide-y divide-slate-100">
                     <div className="bg-slate-50 p-4 flex items-center justify-between flex-wrap gap-2">
@@ -7613,6 +7831,21 @@ export default function App() {
                         </span>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
+                        {orders.length > 0 && (
+                          <button
+                            onClick={() => setShowOrderResponseStats((prev) => !prev)}
+                            className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                              showOrderResponseStats
+                                ? "bg-teal-50 text-teal-800 border-teal-300 hover:bg-teal-100"
+                                : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
+                            }`}
+                            title="عرض أو إخفاء لوحة متوسط سرعة الاستجابة للطلبيات"
+                            id="btn-toggle-order-response-speed"
+                          >
+                            <Gauge className="h-4 w-4 text-teal-600" />
+                            <span>{showOrderResponseStats ? "إخفاء سرعة الاستجابة" : "متوسط سرعة الاستجابة"}</span>
+                          </button>
+                        )}
                         {canArchiveCount > 0 && (
                           <button
                             onClick={handleArchiveAllCompleted}
@@ -7642,6 +7875,13 @@ export default function App() {
                         )}
                       </div>
                     </div>
+
+                    {/* Order Response Speed Recharts Analytics Panel */}
+                    {showOrderResponseStats && orders.length > 0 && (
+                      <div className="p-4 bg-slate-50/60 border-b border-slate-200">
+                        <OrderResponseSpeedChart orders={orders} compact />
+                      </div>
+                    )}
 
                     {/* Order Status Filters Bar */}
                     {activeOrders.length > 0 && (
@@ -7703,6 +7943,158 @@ export default function App() {
                       </div>
                     )}
 
+                    {/* Unified Client, Pharmacy, Date & Sort Filter Bar */}
+                    {activeOrders.length > 0 && (
+                      <div className="p-3 bg-white border-b border-slate-200 space-y-2.5" id="orders-client-pharmacy-filter-bar">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+                          {/* Instant Search by Client or Pharmacy Name */}
+                          <div className="relative">
+                            <Search className="h-4 w-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              value={orderSearchQuery}
+                              onChange={(e) => setOrderSearchQuery(e.target.value)}
+                              placeholder="بحث باسم العميل أو الصيدلية..."
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-8 py-2 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                              id="input-orders-search-client-pharmacy"
+                            />
+                            {orderSearchQuery && (
+                              <button
+                                type="button"
+                                onClick={() => setOrderSearchQuery("")}
+                                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                                title="مسح البحث"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Filter by Pharmacy / Entity Name from current orders */}
+                          <div className="relative">
+                            <Building className="h-4 w-4 text-teal-600 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <select
+                              value={orderEntityFilter}
+                              onChange={(e) => setOrderEntityFilter(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs font-bold text-slate-800 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 cursor-pointer"
+                              id="select-orders-filter-pharmacy"
+                            >
+                              <option value="">كل الصيدليات / المنشآت ({uniqueEntities.length})</option>
+                              {uniqueEntities.map(([entityName, count]) => (
+                                <option key={entityName} value={entityName}>
+                                  {entityName} ({count})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Filter by Client Name from current orders */}
+                          <div className="relative">
+                            <UserIcon className="h-4 w-4 text-teal-600 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <select
+                              value={orderClientFilter}
+                              onChange={(e) => setOrderClientFilter(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs font-bold text-slate-800 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 cursor-pointer"
+                              id="select-orders-filter-client"
+                            >
+                              <option value="">كل العملاء ({uniqueClients.length})</option>
+                              {uniqueClients.map(([clientName, count]) => (
+                                <option key={clientName} value={clientName}>
+                                  {clientName} ({count})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Filter by Date Preset */}
+                          <div className="relative">
+                            <Calendar className="h-4 w-4 text-teal-600 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <select
+                              value={orderDatePreset}
+                              onChange={(e) => {
+                                const val = e.target.value as "all" | "today" | "week" | "month" | "custom";
+                                setOrderDatePreset(val);
+                                if (val !== "custom") {
+                                  setOrderDateFrom("");
+                                  setOrderDateTo("");
+                                }
+                              }}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs font-bold text-slate-800 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 cursor-pointer"
+                              id="select-orders-filter-date"
+                            >
+                              <option value="all">التاريخ: كل التواريخ</option>
+                              <option value="today">التاريخ: اليوم فقط</option>
+                              <option value="week">التاريخ: آخر 7 أيام</option>
+                              <option value="month">التاريخ: هذا الشهر</option>
+                              <option value="custom">التاريخ: تحديد فترة مخصصة...</option>
+                            </select>
+                          </div>
+
+                          {/* Sort by Date, Pharmacy Name, or Client Name */}
+                          <div className="relative">
+                            <ArrowUpDown className="h-4 w-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <select
+                              value={orderSortBy}
+                              onChange={(e) => setOrderSortBy(e.target.value as "newest" | "oldest" | "entityName" | "clientName")}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-3 py-2 text-xs font-bold text-slate-800 focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 cursor-pointer"
+                              id="select-orders-sort-by"
+                            >
+                              <option value="newest">الفرز: الأحدث أولاً</option>
+                              <option value="oldest">الفرز: الأقدم أولاً</option>
+                              <option value="entityName">الفرز: حسب اسم الصيدلية (أ - ي)</option>
+                              <option value="clientName">الفرز: حسب اسم العميل (أ - ي)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {orderDatePreset === "custom" && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 bg-teal-50/50 border border-teal-200/70 rounded-xl p-2.5">
+                            <div className="flex items-center gap-2">
+                              <label htmlFor="input-orders-date-from" className="text-xs font-bold text-slate-700 shrink-0">
+                                من تاريخ:
+                              </label>
+                              <input
+                                type="date"
+                                id="input-orders-date-from"
+                                value={orderDateFrom}
+                                onChange={(e) => setOrderDateFrom(e.target.value)}
+                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label htmlFor="input-orders-date-to" className="text-xs font-bold text-slate-700 shrink-0">
+                                إلى تاريخ:
+                              </label>
+                              <input
+                                type="date"
+                                id="input-orders-date-to"
+                                value={orderDateTo}
+                                onChange={(e) => setOrderDateTo(e.target.value)}
+                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {hasActiveFilters && (
+                          <div className="flex items-center justify-between gap-2 text-2xs pt-0.5">
+                            <span className="font-bold text-slate-600">
+                              النتائج المعروضة: <span className="text-teal-700 font-black">{filteredOrders.length}</span> من أصل {activeOrders.length} طلبية
+                            </span>
+                            <button
+                              type="button"
+                              onClick={resetAllOrderFilters}
+                              className="inline-flex items-center gap-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 font-bold transition-colors cursor-pointer"
+                              id="btn-reset-orders-name-filters"
+                            >
+                              <X className="h-3 w-3" />
+                              <span>مسح كل الفلاتر</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {activeOrders.length === 0 ? (
                       <div className="p-8 text-center text-slate-500 space-y-3">
                         <ShoppingCart className="mx-auto h-12 w-12 text-slate-300" />
@@ -7719,11 +8111,22 @@ export default function App() {
                           </div>
                         )}
                       </div>
+                    ) : filteredOrders.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500 space-y-3">
+                        <Search className="mx-auto h-10 w-10 text-slate-300" />
+                        <p className="font-bold text-slate-700 text-sm">لا توجد طلبيات مطابقة لخيارات التصفية المحددة.</p>
+                        <button
+                          type="button"
+                          onClick={resetAllOrderFilters}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-4 py-2 text-xs font-bold shadow-xs transition-all cursor-pointer"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          <span>عرض جميع الطلبيات</span>
+                        </button>
+                      </div>
                     ) : (
                       <>
-                        {activeOrders
-                          .filter(o => orderStatusFilter === "all" || o.status === orderStatusFilter)
-                          .map((order, orderIdx) => (
+                        {filteredOrders.map((order, orderIdx) => (
                           <div key={`adm-ord-${order.id || 'o'}-${orderIdx}`} className="p-3.5 sm:p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 w-full">
                             <div className="space-y-2 w-full">
                               <div className="flex items-center gap-2 flex-wrap justify-between sm:justify-start">

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useModalBackHandler } from '../hooks/useModalBackHandler';
 import {
   Sparkles,
   Send,
@@ -145,6 +146,8 @@ export function GeminiChatModal({
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useModalBackHandler(isOpen, onClose, "gemini-ai-chat");
 
   useEffect(() => {
     if (isOpen) {

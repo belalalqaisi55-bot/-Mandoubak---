@@ -570,6 +570,9 @@ interface Order {
   status: "pending" | "approved" | "completed" | "cancelled";
   createdAt: string;
   notes?: string;
+  respondedAt?: string;
+  approvedAt?: string;
+  completedAt?: string;
   updatedAt?: string;
   isArchived?: boolean;
   archivedAt?: string;
@@ -1105,7 +1108,18 @@ async function updateOrderStatusInDB(id: string, status: string, orderData?: any
       const docRef = dbAdmin.collection("orders").doc(id);
       const doc = await docRef.get();
       if (doc.exists) {
-        await docRef.update({ status, updatedAt: now });
+        const currentData = (doc.data() || {}) as Partial<Order>;
+        const updateFields: Record<string, any> = { status, updatedAt: now };
+        if (status !== "pending" && !currentData.respondedAt) {
+          updateFields.respondedAt = now;
+        }
+        if (status === "approved" && !currentData.approvedAt) {
+          updateFields.approvedAt = now;
+        }
+        if (status === "completed" && !currentData.completedAt) {
+          updateFields.completedAt = now;
+        }
+        await docRef.update(updateFields);
         const updated = await docRef.get();
         return updated.data() as Order;
       }
@@ -1117,8 +1131,18 @@ async function updateOrderStatusInDB(id: string, status: string, orderData?: any
   const db = getDB();
   const idx = db.orders.findIndex((o) => o.id === id);
   if (idx !== -1) {
-    db.orders[idx].status = status as any;
-    db.orders[idx].updatedAt = now;
+    const current = db.orders[idx] as any;
+    current.status = status as any;
+    current.updatedAt = now;
+    if (status !== "pending" && !current.respondedAt) {
+      current.respondedAt = now;
+    }
+    if (status === "approved" && !current.approvedAt) {
+      current.approvedAt = now;
+    }
+    if (status === "completed" && !current.completedAt) {
+      current.completedAt = now;
+    }
     saveDB(db);
     return db.orders[idx];
   }
@@ -1130,6 +1154,9 @@ async function updateOrderStatusInDB(id: string, status: string, orderData?: any
       id,
       status: status as any,
       updatedAt: now,
+      respondedAt: orderData.respondedAt || (status !== "pending" ? now : undefined),
+      approvedAt: orderData.approvedAt || (status === "approved" ? now : undefined),
+      completedAt: orderData.completedAt || (status === "completed" ? now : undefined),
       createdAt: orderData.createdAt || now,
     };
     db.orders.unshift(newOrder);
@@ -2442,6 +2469,7 @@ app.patch("/api/orders/:id", async (req, res) => {
 
     if (!order) {
       // Upsert fallback so order status update never fails
+      const now = new Date().toISOString();
       const db = getDB();
       const fallbackOrder: Order = clientOrder || {
         id,
@@ -2450,11 +2478,20 @@ app.patch("/api/orders/:id", async (req, res) => {
         entityName: req.body.entityName || "منشأة",
         items: req.body.items || [],
         status: status as any,
-        createdAt: new Date().toISOString()
+        createdAt: now
       };
       fallbackOrder.id = id;
       fallbackOrder.status = status as any;
-      fallbackOrder.updatedAt = new Date().toISOString();
+      fallbackOrder.updatedAt = now;
+      if (status !== "pending" && !fallbackOrder.respondedAt) {
+        fallbackOrder.respondedAt = now;
+      }
+      if (status === "approved" && !fallbackOrder.approvedAt) {
+        fallbackOrder.approvedAt = now;
+      }
+      if (status === "completed" && !fallbackOrder.completedAt) {
+        fallbackOrder.completedAt = now;
+      }
       db.orders.unshift(fallbackOrder);
       saveDB(db);
       order = fallbackOrder;

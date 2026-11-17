@@ -67,9 +67,13 @@
         "entityName": { "type": "string", "maxLength": 128 },
         "items": { "type": "string", "maxLength": 2000 },
         "total": { "type": "number" },
-        "status": { "type": "string", "enum": ["pending", "processing", "completed", "cancelled"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "processing", "completed", "cancelled"] },
         "notes": { "type": "string", "maxLength": 500 },
-        "createdAt": { "type": "string", "maxLength": 64 }
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "respondedAt": { "type": "string", "maxLength": 64 },
+        "approvedAt": { "type": "string", "maxLength": 64 },
+        "completedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "userId", "items", "status"]
     },

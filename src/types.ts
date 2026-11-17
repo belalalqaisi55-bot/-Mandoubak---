@@ -153,6 +153,8 @@ export interface Order {
   syncError?: string;
   isArchived?: boolean;
   archivedAt?: string;
+  respondedAt?: string;
+  approvedAt?: string;
   completedAt?: string;
   updatedAt?: string;
 }

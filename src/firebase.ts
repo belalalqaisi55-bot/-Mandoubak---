@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider, getToken as getAppCheckToken } from "firebase/app-check";
 import {
   getAuth,
   signInAnonymously,
@@ -111,7 +111,15 @@ export function formatFirebaseAuthError(error: any): string {
     return "تم تفعيل حماية Firebase App Check على المصادقة (Authentication) في لوحة تحكم Firebase للمشروع بدون مفتاح reCAPTCHA صالح. أوقف فرض App Check مؤقتاً على Authentication أو أضف مفتاح reCAPTCHA v3 الصحيح.";
   }
   if (code === "auth/internal-error" || message.includes("auth/internal-error")) {
-    return "تعذر إتمام المصادقة داخل المتصفح الحالي (قد يكون بسبب حظر ملفات تعريف الارتباط أو فرض App Check أو عدم تفعيل موفر تسجيل الدخول في Firebase).";
+    const appCheckDetail = error?.__appCheckError;
+    if (appCheckDetail) {
+      return `فشل التحقق من حماية App Check / reCAPTCHA: مشروع Firebase يفرض App Check على المصادقة، لكن التحقق من المفتاح فشل على هذا الدومين (${appCheckDetail}). تأكد من حفظ الـ Secret Key في Firebase App Check وإضافة الدومين في Google reCAPTCHA، أو اجعل Authentication غير مفروض (Unenforced) مؤقتاً في Firebase Console ← App Check ← APIs.`;
+    }
+    const rawDetail = error?.customData?.message || error?.customData?._tokenResponse?.error?.message || message || code;
+    return `تعذر إتمام المصادقة داخل المتصفح الحالي (قد يكون بسبب حظر النوافذ المنبثقة/ملفات تعريف الارتباط، أو عدم اكتمال إعداد App Check في Firebase). جرّب فتح التطبيق في متصفح Chrome خارجياً أو الدخول بالبريد وكلمة المرور. (${rawDetail})`;
+  }
+  if (code) {
+    return `${message || "تعذر إتمام تسجيل الدخول حالياً."} (${code})`;
   }
   return message || "عذراً، تعذر إتمام تسجيل الدخول حالياً. يمكنك المحاولة بطريقة أخرى أو برقم هاتفك المسجل.";
 }
@@ -158,8 +166,8 @@ if (isFirebaseConfigured) {
       }
     }
 
-    // Initialize Firebase App Check with reCAPTCHA Enterprise (or classic v3 if configured)
-    const DEFAULT_RECAPTCHA_SITE_KEY = "6LdS1yEuAAAAAGr4Px4Iyesc61yutVjaRfoW23DD";
+    // Initialize Firebase App Check when configured via env, firebaseConfig, or project site key
+    const PROJECT_RECAPTCHA_SITE_KEY = "6LfCoSQuAAAAAKom-xj-27ElUa4l2dE-jtI-K1Dx";
     const envRecaptchaSiteKey = (import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY;
     const cleanEnvKey =
       typeof envRecaptchaSiteKey === "string" &&
@@ -168,10 +176,13 @@ if (isFirebaseConfigured) {
         ? envRecaptchaSiteKey.trim()
         : "";
     const configRecaptchaSiteKey = typeof configAny.recaptchaSiteKey === "string" ? configAny.recaptchaSiteKey.trim() : "";
-    const recaptchaSiteKey = cleanEnvKey || configRecaptchaSiteKey || DEFAULT_RECAPTCHA_SITE_KEY;
+    const recaptchaSiteKey = cleanEnvKey || configRecaptchaSiteKey || PROJECT_RECAPTCHA_SITE_KEY;
     const providerType = (import.meta as any).env?.VITE_RECAPTCHA_PROVIDER;
     const useClassicV3 =
-      providerType === "v3" || recaptchaSiteKey === "6LcKGSEuAAAAAKhDasLhGYfZ9ReQl0efNofln7sP";
+      providerType === "v3" ||
+      (providerType !== "enterprise" &&
+        (recaptchaSiteKey === "6LcKGSEuAAAAAKhDasLhGYfZ9ReQl0efNofln7sP" ||
+          recaptchaSiteKey === "6Ldr1yMuAAAAAPgQKz4zV8hzN0mml0pkGjGlp4id"));
     const disableAppCheck = (import.meta as any).env?.VITE_ENABLE_APP_CHECK === "false";
     const debugTokenEnv = (import.meta as any).env?.VITE_APPCHECK_DEBUG_TOKEN;
     if (!disableAppCheck && typeof window !== "undefined" && recaptchaSiteKey) {
@@ -223,28 +234,63 @@ export async function getDocsWithTimeout(queryRef: any, timeoutMs: number = 1000
   return Promise.race([fetchPromise, timeoutPromise]);
 }
 
+async function attachAppCheckDiagnostics(err: any) {
+  if (!err || (err?.code !== "auth/internal-error" && !String(err?.message || "").includes("auth/internal-error"))) {
+    return;
+  }
+  const host = typeof window !== "undefined" ? window.location.hostname : "unknown-host";
+  if (!appCheck) {
+    err.__appCheckError = `App Check not initialized (${host})`;
+    return;
+  }
+  try {
+    await Promise.race([
+      getAppCheckToken(appCheck, false),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("App Check token timeout")), 2500))
+    ]);
+  } catch (acErr: any) {
+    const detail = acErr?.code ? `${acErr.code}: ${acErr.message || ""}` : (acErr?.message || String(acErr));
+    err.__appCheckError = `${detail} | host: ${host}`;
+  }
+}
+
 export async function signInWithGoogle() {
   if (!isFirebaseConfigured || !auth) {
     throw new Error("خدمة Firebase غير مهيأة بعد على هذا المشروع");
   }
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (err) {
+    await attachAppCheckDiagnostics(err);
+    throw err;
+  }
 }
 
 export async function signInWithEmail(email: string, pass: string) {
   if (!isFirebaseConfigured || !auth) {
     throw new Error("خدمة Firebase غير مهيأة بعد على هذا المشروع");
   }
-  const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-  return userCredential.user;
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+    return userCredential.user;
+  } catch (err) {
+    await attachAppCheckDiagnostics(err);
+    throw err;
+  }
 }
 
 export async function registerWithEmail(email: string, pass: string) {
   if (!isFirebaseConfigured || !auth) {
     throw new Error("خدمة Firebase غير مهيأة بعد على هذا المشروع");
   }
-  const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
-  return userCredential.user;
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+    return userCredential.user;
+  } catch (err) {
+    await attachAppCheckDiagnostics(err);
+    throw err;
+  }
 }
 
 export async function signOutUser() {
@@ -256,7 +302,12 @@ export async function resetPassword(email: string) {
   if (!isFirebaseConfigured || !auth) {
     throw new Error("خدمة Firebase غير مهيأة بعد على هذا المشروع");
   }
-  await sendPasswordResetEmail(auth, email);
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (err) {
+    await attachAppCheckDiagnostics(err);
+    throw err;
+  }
 }
 
 export function subscribeToAuthState(callback: (user: any) => void) {

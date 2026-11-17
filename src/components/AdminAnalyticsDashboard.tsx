@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
 import { DailyOrderVolumeChart } from "./DailyOrderVolumeChart";
+import { OrderResponseSpeedChart } from "./OrderResponseSpeedChart";
 import { GeminiChatModal } from "./GeminiChatModal";
 
 
@@ -807,6 +808,8 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
                   <PharmacyOrdersChart orders={orders} />
                   <DailyOrderVolumeChart orders={orders} />
                 </div>
+
+                <OrderResponseSpeedChart orders={orders} />
 
                 {/* Visit Tracking Highlights Summary */}
                 {isVisitTrackingEnabled && (
