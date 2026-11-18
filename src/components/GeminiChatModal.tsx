@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { authenticatedFetch as fetch } from '../utils/authenticatedFetch';
 import { useModalBackHandler } from '../hooks/useModalBackHandler';
 import {
   Sparkles,
@@ -117,12 +118,12 @@ export function GeminiChatModal({
     {
       id: "init_1",
       role: "assistant",
-      text: `أهلاً بك دكتور/أستاذ ${userName}! 👨‍⚕️✨ أنا مساعد الذكاء الاصطناعي لمنصة **مندوبك الطبي** (مدعوم بنماذج Gemini المتقدمة: gemini-4-argon للمهام المعقدة، gemini-3.8-flash للمهام العامة مع بحث جوجل وخرائط جوجل، و gemini-3.1-flash-lite للاستجابة السريعة، بالإضافة إلى مفرّغ الصوت gemini-3.5-transcribe).
+      text: `أهلاً بك دكتور/أستاذ ${userName}! 👨‍⚕️✨ أنا مساعد الذكاء الاصطناعي لمنصة **مندوبك الطبي** (مدعوم بنماذج Gemini المتقدمة: gemini-4-hydrogen للمهام العامة وبحث جوجل وخرائط جوجل، و gemini-4-argon للمهام المعقدة، و gemini-3.1-flash-lite للاستجابة السريعة، بالإضافة إلى مفرّغ الصوت gemini-3.5-transcribe).
 
 يمكنك سؤالي عن:
-• الاستشارات الدوائية والتداخلات السريرية 💊 (gemini-4-argon)
-• البحث الحي عن أحدث الدراسات عبر Google Search 🔍 (gemini-3.8-flash)
-• مواقع الصيدليات والمستشفيات عبر Google Maps 📍 (gemini-3.8-flash)
+• الاستشارات الدوائية والتداخلات السريرية 💊 (gemini-4-argon / 4-hydrogen)
+• البحث الحي عن أحدث الدراسات عبر Google Search 🔍 (gemini-4-hydrogen)
+• مواقع الصيدليات والمستشفيات عبر Google Maps 📍 (gemini-4-hydrogen)
 • التحدث الصوتي بالميكروفون والتفريغ الفوري 🎙️ (gemini-3.5-transcribe)
 • استراتيجيات تسويق وتطوير مبيعات المندوب 📈`,
       timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
@@ -149,26 +150,31 @@ export function GeminiChatModal({
 
   useModalBackHandler(isOpen, onClose, "gemini-ai-chat");
 
+  // Fetch providers & geolocation only when modal opens (not on every streamed token)
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchProviders();
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setUserCoordinates({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude
+          });
+        },
+        (err) => {
+          console.log("Using default Yemen coordinates for Maps Grounding:", err.message);
+        },
+        { timeout: 5000 }
+      );
+    }
+  }, [isOpen]);
+
+  // Auto-scroll on message updates
   useEffect(() => {
     if (isOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      fetchProviders();
-
-      // Try fetching precise geolocation if supported
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            setUserCoordinates({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude
-            });
-          },
-          (err) => {
-            console.log("Using default Yemen coordinates for Maps Grounding:", err.message);
-          },
-          { timeout: 5000 }
-        );
-      }
     }
   }, [messages, isOpen]);
 
@@ -202,6 +208,9 @@ export function GeminiChatModal({
     if (!textToSend) setInput("");
     setLoading(true);
 
+    const botMsgId = "b_" + Date.now();
+    let botPlaceholderAdded = false;
+
     try {
       const currentRole = ROLE_DEFINITIONS[chatbotRole];
       const systemInstruction = currentRole.instruction;
@@ -217,10 +226,12 @@ export function GeminiChatModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: newMessages.map((m) => ({
-            role: m.role === "user" ? "user" : "assistant",
-            text: m.text
-          })),
+          messages: newMessages
+            .filter((m) => !m.id.startsWith("err_"))
+            .map((m) => ({
+              role: m.role === "user" ? "user" : "assistant",
+              text: m.text
+            })),
           mode: chatMode,
           provider: aiProvider,
           openRouterModel: aiProvider === "openrouter" ? openRouterModel : undefined,
@@ -229,78 +240,123 @@ export function GeminiChatModal({
         })
       });
 
+      if (!response.ok) {
+        let errMessage = `تعذر الاتصال بالخادم (HTTP ${response.status})`;
+        try {
+          const errJson = await response.json();
+          if (errJson?.error) errMessage = errJson.error;
+        } catch {
+          // ignore non-json body
+        }
+        throw new Error(errMessage);
+      }
+
       if (!response.body) throw new Error("لا توجد استجابة من الخادم");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let sseBuffer = "";
+      let streamError: string | null = null;
+
       let botMsg: ChatMessage = {
-        id: "b_" + Date.now(),
+        id: botMsgId,
         role: "assistant",
         text: "",
         provider: "gemini",
         timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
       };
       setMessages((prev) => [...prev, botMsg]);
+      botPlaceholderAdded = true;
+
+      const processLine = (rawLine: string) => {
+        const line = rawLine.trim();
+        if (!line.startsWith("data:")) return;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") return;
+
+        let json: any = null;
+        try {
+          json = JSON.parse(data);
+        } catch (parseErr) {
+          console.warn("Malformed SSE JSON chunk skipped:", data);
+          return;
+        }
+
+        if (json.error) {
+          streamError = String(json.error);
+          return;
+        }
+        if (json.text) {
+          botMsg.text += json.text;
+        }
+        if (json.groundingSources && Array.isArray(json.groundingSources)) {
+          botMsg.groundingSources = [
+            ...(botMsg.groundingSources || []),
+            ...json.groundingSources
+          ];
+        }
+        if (json.provider) botMsg.provider = json.provider;
+        if (json.modelUsed) botMsg.modelUsed = json.modelUsed;
+        setMessages((prev) => prev.map((m) => (m.id === botMsg.id ? { ...botMsg } : m)));
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n\n');
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split("\n");
+        sseBuffer = lines.pop() ?? "";
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.replace('data: ', '');
-            if (data === '[DONE]') break;
-            try {
-              const json = JSON.parse(data);
-              if (json.text) {
-                botMsg.text += json.text;
-              }
-              if (json.groundingSources && Array.isArray(json.groundingSources)) {
-                botMsg.groundingSources = [
-                  ...(botMsg.groundingSources || []),
-                  ...json.groundingSources
-                ];
-              }
-              if (json.provider) botMsg.provider = json.provider;
-              if (json.modelUsed) botMsg.modelUsed = json.modelUsed;
-              setMessages((prev) => prev.map(m => m.id === botMsg.id ? {...botMsg} : m));
-
-              if (json.error) {
-                throw new Error(json.error);
-              }
-            } catch (e: any) {
-              if (e.message && !e.message.includes("Unexpected token")) {
-                console.error("Error parsing stream data:", e);
-              }
-            }
-          }
+          processLine(line);
+        }
+        if (streamError) {
+          throw new Error(streamError);
         }
       }
+
+      if (sseBuffer.trim()) {
+        processLine(sseBuffer);
+        if (streamError) {
+          throw new Error(streamError);
+        }
+      }
+
+      if (!botMsg.text.trim()) {
+        throw new Error("لم يصل رد نصي من نموذج الذكاء الاصطناعي. يرجى إعادة المحاولة.");
+      }
     } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: "err_" + Date.now(),
-        role: "assistant",
-        text: `عذراً، حدث خطأ أثناء البث: ${err.message || "تعذر الحصول على إجابة. يرجى المحاولة لاحقاً."}`,
-        timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      const errorText = `عذراً، حدث خطأ أثناء المحادثة: ${err.message || "تعذر الحصول على إجابة. يرجى المحاولة لاحقاً."}`;
+      if (botPlaceholderAdded) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === botMsgId
+              ? { ...m, id: "err_" + Date.now(), text: m.text ? `${m.text}\n\n${errorText}` : errorText }
+              : m
+          )
+        );
+      } else {
+        const errorMsg: ChatMessage = {
+          id: "err_" + Date.now(),
+          role: "assistant",
+          text: errorText,
+          timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleClearHistory = () => {
-    if (window.confirm("هل تريد مسح سجل المحادثة والبدء من جديد؟")) {
-      setMessages([
-        {
-          id: "init_" + Date.now(),
-          role: "assistant",
-          text: `تم بدء محادثة جديدة! أنا جاهز لمساعدتك دكتور ${userName} بالدور المحدد (${ROLE_DEFINITIONS[chatbotRole].name}). كيف أستطيع خدمتك؟`,
-          timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
-        }
-      ]);
-    }
+    setMessages([
+      {
+        id: "init_" + Date.now(),
+        role: "assistant",
+        text: `تم بدء محادثة جديدة! أنا جاهز لمساعدتك دكتور ${userName} بالدور المحدد (${ROLE_DEFINITIONS[chatbotRole].name}). كيف أستطيع خدمتك؟`,
+        timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
+      }
+    ]);
   };
 
   const startVoiceRecording = async () => {
@@ -333,8 +389,18 @@ export function GeminiChatModal({
               const data = await res.json();
               if (data.success && data.text) {
                 setInput((prev) => (prev ? `${prev} ${data.text}` : data.text));
+              } else if (data?.error) {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: "err_voice_" + Date.now(),
+                    role: "assistant",
+                    text: `تعذر تفريغ التسجيل الصوتي: ${data.error}`,
+                    timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
+                  }
+                ]);
               }
-            } catch (err) {
+            } catch (err: any) {
               console.warn("Voice transcribe failed", err);
             } finally {
               setIsTranscribingVoice(false);
@@ -351,6 +417,15 @@ export function GeminiChatModal({
     } catch (e: any) {
       console.warn("Could not start audio recording", e);
       setIsVoiceRecording(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: "err_mic_" + Date.now(),
+          role: "assistant",
+          text: "تعذر الوصول إلى الميكروفون. يرجى منح إذن الميكروفون للمتصفح أو التطبيق.",
+          timestamp: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })
+        }
+      ]);
     }
   };
 
@@ -448,10 +523,10 @@ export function GeminiChatModal({
                 ? "bg-white text-teal-800 shadow-xs border border-teal-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="مهام عامة باستخدام gemini-3.8-flash"
+            title="مهام عامة باستخدام gemini-4-hydrogen"
           >
             <Bot className="h-3.5 w-3.5 text-teal-600" />
-            <span>عام (3.8 Flash)</span>
+            <span>عام (4 Hydrogen)</span>
           </button>
 
           <button
@@ -487,7 +562,7 @@ export function GeminiChatModal({
                 ? "bg-white text-sky-800 shadow-xs border border-sky-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="بحث جوجل الحي باستخدام gemini-3.8-flash مع googleSearch"
+            title="بحث جوجل الحي باستخدام gemini-4-hydrogen مع googleSearch"
           >
             <Globe className="h-3.5 w-3.5 text-sky-600" />
             <span>بحث (Google Search)</span>
@@ -500,12 +575,58 @@ export function GeminiChatModal({
                 ? "bg-white text-emerald-800 shadow-xs border border-emerald-500/30"
                 : "text-slate-600 hover:bg-slate-200/60"
             }`}
-            title="خرائط ومواقع الصيدليات والمستشفيات باستخدام gemini-3.8-flash مع googleMaps"
+            title="خرائط ومواقع الصيدليات والمستشفيات باستخدام gemini-4-hydrogen مع googleMaps"
           >
             <MapPin className="h-3.5 w-3.5 text-emerald-600" />
             <span>خرائط (Google Maps)</span>
           </button>
         </div>
+
+        {/* AI Provider Selector Bar (if multiple providers configured) */}
+        {providerInfo?.openrouter?.configured && (
+          <div className="bg-slate-50 border-b border-slate-200 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-3xs">
+            <div className="flex items-center gap-1.5 font-bold text-slate-600">
+              <Cpu className="h-3.5 w-3.5 text-teal-600" />
+              <span>المزود:</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setAiProvider("auto")}
+                  className={`px-2 py-0.5 rounded-lg font-bold transition-colors ${aiProvider === "auto" ? "bg-teal-600 text-white" : "bg-white border border-slate-200 text-slate-600"}`}
+                >
+                  تلقائي
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiProvider("gemini")}
+                  className={`px-2 py-0.5 rounded-lg font-bold transition-colors ${aiProvider === "gemini" ? "bg-teal-600 text-white" : "bg-white border border-slate-200 text-slate-600"}`}
+                >
+                  Gemini
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiProvider("openrouter")}
+                  className={`px-2 py-0.5 rounded-lg font-bold transition-colors ${aiProvider === "openrouter" ? "bg-indigo-600 text-white" : "bg-white border border-slate-200 text-slate-600"}`}
+                >
+                  OpenRouter
+                </button>
+              </div>
+            </div>
+            {aiProvider === "openrouter" && (
+              <select
+                value={openRouterModel}
+                onChange={(e) => setOpenRouterModel(e.target.value)}
+                className="bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-3xs font-bold text-slate-800"
+              >
+                {providerInfo.openrouter.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
 
         {/* Location selector banner if Maps mode is active */}
         {chatMode === "maps" && (
@@ -620,7 +741,7 @@ export function GeminiChatModal({
                   <span>{m.timestamp}</span>
                   {m.provider && (
                     <span className="bg-emerald-200 text-black px-1.5 py-0.2 rounded font-bold">
-                      Gemini
+                      {m.provider === "openrouter" ? "OpenRouter" : "Gemini"}
                     </span>
                   )}
                   {m.modelUsed && <span className="bg-emerald-100 text-black px-1.5 py-0.2 rounded font-mono font-bold">{m.modelUsed}</span>}
@@ -637,15 +758,17 @@ export function GeminiChatModal({
               <div className="bg-white border-2 border-emerald-200 rounded-2xl px-4 py-3 shadow-2xs flex items-center gap-2 font-bold text-black">
                 <span>جاري معالجة السؤال والتحليل السريري الذكي...</span>
                 <span className="text-2xs font-mono text-emerald-800">
-                  {chatMode === "complex"
-                    ? "(gemini-4-argon)"
+                  {aiProvider === "openrouter"
+                    ? `(${openRouterModel})`
+                    : chatMode === "complex"
+                    ? "(gemini-4-argon / 4-hydrogen)"
                     : chatMode === "fast"
                     ? "(gemini-3.1-flash-lite)"
                     : chatMode === "search"
-                    ? "(gemini-3.8-flash + Google Search)"
+                    ? "(gemini-4-hydrogen + Google Search)"
                     : chatMode === "maps"
-                    ? "(gemini-3.8-flash + Google Maps)"
-                    : "(gemini-3.8-flash)"}
+                    ? "(gemini-4-hydrogen + Google Maps)"
+                    : "(gemini-4-hydrogen)"}
                 </span>
               </div>
             </div>

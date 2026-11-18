@@ -153,7 +153,7 @@ app.post("/api/categorize-product", verifyToken, async (req, res) => {
     If it doesn't fit exactly, choose the closest one.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: "gemini-4-hydrogen",
       contents: prompt,
     });
     
@@ -3477,18 +3477,18 @@ async function robustGenerateContent(
   config: any = {},
   allowSearchFallback = true
 ): Promise<{ response: any; modelUsed: string; fallbackSearchUsed?: boolean }> {
-  const fallbackModels = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
-  const candidateModels = Array.from(new Set([preferredModel || "gemini-3.8-flash", ...fallbackModels]));
+  const fallbackModels = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+  const candidateModels = Array.from(new Set([preferredModel || "gemini-4-hydrogen", ...fallbackModels]));
 
   // If search or maps tools requested, attempt first with tools
   if (config.tools && config.tools.length > 0) {
     try {
       const res = await ai.models.generateContent({
-        model: preferredModel || "gemini-3.8-flash",
+        model: preferredModel || "gemini-4-hydrogen",
         contents,
         config
       });
-      return { response: res, modelUsed: preferredModel || "gemini-3.8-flash" };
+      return { response: res, modelUsed: preferredModel || "gemini-4-hydrogen" };
     } catch (err: any) {
       console.warn("Grounding tool (Search/Maps) failed or quota exhausted, falling back to standard text generation:", err?.status || err?.message);
       if (allowSearchFallback) {
@@ -3667,7 +3667,7 @@ app.post("/api/visits/analyze", async (req, res) => {
 
     const { response } = await robustGenerateContent(
       ai,
-      "gemini-3.8-flash",
+      "gemini-4-hydrogen",
       prompt,
       {
         responseMimeType: "application/json",
@@ -3772,7 +3772,7 @@ app.post("/api/drugs/scientific-search", async (req, res) => {
 
     const { response } = await robustGenerateContent(
       ai,
-      "gemini-3.8-flash",
+      "gemini-4-hydrogen",
       prompt,
       {
         responseMimeType: "application/json",
@@ -3913,7 +3913,7 @@ CRITICAL REQUIREMENTS:
 
     const { response } = await robustGenerateContent(
       ai,
-      "gemini-3.8-flash",
+      "gemini-4-hydrogen",
       [{ role: "user", parts: [{ text: promptText }] }],
       {
         responseMimeType: "application/json",
@@ -4025,7 +4025,7 @@ app.get("/api/ai/providers", (req, res) => {
   res.json({
     gemini: {
       configured: Boolean(geminiKey && geminiKey.trim()),
-      defaultModel: "gemini-3.8-flash"
+      defaultModel: "gemini-4-hydrogen"
     },
     openrouter: {
       configured: Boolean(openRouterKey && openRouterKey.trim()),
@@ -4071,8 +4071,23 @@ app.post("/api/ai/openrouter/chat", async (req, res) => {
   }
 });
 
+function formatGeminiChatError(err: any): string {
+  const msg = String(err?.message || err || "");
+  const status = err?.status || (msg.includes("429") ? 429 : msg.includes("403") ? 403 : msg.includes("404") ? 404 : 500);
+  if (status === 403 || msg.includes("PERMISSION_DENIED") || msg.includes("API_KEY_INVALID")) {
+    return "تعذر المصادقة مع مفتاح Gemini API (خطأ 403/400). يرجى التحقق من مفتاح API في إعدادات المشروع (Settings > Secrets).";
+  }
+  if (status === 429 || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("Quota exceeded")) {
+    return "تم تجاوز حد الاستخدام المجاني المؤقت لنموذج الذكاء الاصطناعي. يرجى المحاولة بعد لحظات أو التبديل إلى الوضع العام/السريع أو OpenRouter.";
+  }
+  if (status === 404 || msg.includes("NOT_FOUND")) {
+    return "النموذج المطلوب غير متوفر حالياً. يرجى المحاولة بالوضع العام أو السريع.";
+  }
+  return msg || "حدث عطل مؤقت أثناء الاتصال بخدمة الذكاء الاصطناعي.";
+}
+
 app.post("/api/chat", async (req, res) => {
-  const { messages, mode = "standard", provider = "auto", openRouterModel, systemInstruction } = req.body || {};
+  const { messages, mode = "standard", provider = "auto", openRouterModel, systemInstruction, location } = req.body || {};
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة" });
   }
@@ -4082,152 +4097,255 @@ app.post("/api/chat", async (req, res) => {
 تواصل بلغة عربية فصحى، واضحة، علمية ومتقنة.
 قدم إجابات منظمة، موثوقة، ومباشرة تخدم المندوبين، الأطباء، والصيادلة.`;
 
-  // 1. Explicit OpenRouter Request
-  if (provider === "openrouter") {
+  const effectiveSystemInstruction = systemInstruction || defaultSysInstruction;
+  const geminiKey = process.env.GEMINI_API_KEY?.trim() || "";
+  const openRouterKey = process.env.OPENROUTER_API_KEY?.trim() || "";
+
+  const writeSseHeaders = () => {
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      if (typeof (res as any).flushHeaders === "function") {
+        (res as any).flushHeaders();
+      }
+    }
+  };
+
+  // 1. Explicit OpenRouter Request OR Gemini key missing while OpenRouter configured
+  if (provider === "openrouter" || (!geminiKey && openRouterKey && provider !== "gemini")) {
     try {
       const { reply, modelUsed } = await callOpenRouterChat({
         messages,
         model: openRouterModel || "deepseek/deepseek-chat",
-        systemInstruction: systemInstruction || defaultSysInstruction
+        systemInstruction: effectiveSystemInstruction
       });
 
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
+      writeSseHeaders();
       res.write(`data: ${JSON.stringify({ text: reply, provider: "openrouter", modelUsed })}\n\n`);
-      res.write('data: [DONE]\n\n');
+      res.write("data: [DONE]\n\n");
       return res.end();
     } catch (err: any) {
-      if (process.env.GEMINI_API_KEY) {
-        console.warn("OpenRouter direct attempt failed, trying Gemini fallback:", err.message);
+      if (provider === "openrouter" && geminiKey) {
+        console.warn("OpenRouter direct attempt failed, falling back to Gemini:", err.message);
       } else {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.write(`data: ${JSON.stringify({ error: "حدث خطأ أثناء الاتصال بـ OpenRouter: " + (err.message || "عطل في الخدمة") })}\n\n`);
+        writeSseHeaders();
+        res.write(`data: ${JSON.stringify({ error: "فشل الاتصال بنماذج OpenRouter: " + (err.message || "عطل في الخدمة") })}\n\n`);
+        res.write("data: [DONE]\n\n");
         return res.end();
       }
     }
   }
 
-  // 2. If Gemini is not set, but OpenRouter is configured, route to OpenRouter automatically
-  if (!process.env.GEMINI_API_KEY && process.env.OPENROUTER_API_KEY) {
+  if (!geminiKey) {
+    writeSseHeaders();
+    res.write(`data: ${JSON.stringify({ error: "مفتاح GEMINI_API_KEY غير مضبوط على الخادم. يرجى التحقق من Settings > Secrets." })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    return res.end();
+  }
+
+  // 2. Sanitize & merge consecutive same-role messages so Gemini always receives valid alternating turns
+  const validMessages = messages.filter((m: any) => m && typeof m.text === "string" && m.text.trim().length > 0);
+  let startIndex = 0;
+  while (startIndex < validMessages.length && validMessages[startIndex].role !== "user") {
+    startIndex++;
+  }
+  const messagesToSend = startIndex < validMessages.length ? validMessages.slice(startIndex) : validMessages;
+
+  const formattedContents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+  for (const m of messagesToSend) {
+    const role: "user" | "model" = m.role === "user" ? "user" : "model";
+    const text = m.text.trim();
+    if (!text) continue;
+    const prev = formattedContents[formattedContents.length - 1];
+    if (prev && prev.role === role) {
+      prev.parts[0].text += `\n\n${text}`;
+    } else {
+      formattedContents.push({ role, parts: [{ text }] });
+    }
+  }
+
+  if (formattedContents.length === 0) {
+    formattedContents.push({
+      role: "user",
+      parts: [{ text: messages[messages.length - 1]?.text || "مرحباً" }]
+    });
+  } else if (formattedContents[formattedContents.length - 1].role !== "user") {
+    formattedContents.push({ role: "user", parts: [{ text: "أكمل الإجابة" }] });
+  }
+
+  // 3. Build ordered Gemini model + tool fallback plans
+  type ChatPlan = { model: string; tools?: any[]; toolConfig?: any };
+  const plans: ChatPlan[] = [];
+
+  if (mode === "complex" || mode === "thinking") {
+    plans.push(
+      { model: "gemini-4-argon" },
+      { model: "gemini-4-hydrogen" },
+      { model: "gemini-3.1-flash-lite" }
+    );
+  } else if (mode === "fast") {
+    plans.push(
+      { model: "gemini-3.1-flash-lite" },
+      { model: "gemini-4-hydrogen" }
+    );
+  } else if (mode === "search") {
+    plans.push(
+      { model: "gemini-4-hydrogen", tools: [{ googleSearch: {} }] },
+      { model: "gemini-3.1-flash-lite", tools: [{ googleSearch: {} }] },
+      { model: "gemini-4-hydrogen" },
+      { model: "gemini-3.1-flash-lite" }
+    );
+  } else if (mode === "maps") {
+    const toolConfig =
+      location && location.latitude && location.longitude
+        ? {
+            retrievalConfig: {
+              latLng: {
+                latitude: Number(location.latitude),
+                longitude: Number(location.longitude)
+              }
+            }
+          }
+        : undefined;
+    plans.push(
+      { model: "gemini-4-hydrogen", tools: [{ googleMaps: {} }], toolConfig },
+      { model: "gemini-3.1-flash-lite", tools: [{ googleMaps: {} }], toolConfig },
+      { model: "gemini-4-hydrogen" },
+      { model: "gemini-3.1-flash-lite" }
+    );
+  } else {
+    plans.push(
+      { model: "gemini-4-hydrogen" },
+      { model: "gemini-3.1-flash-lite" }
+    );
+  }
+
+  writeSseHeaders();
+
+  const aiClient = new GoogleGenAI({
+    apiKey: geminiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build"
+      }
+    }
+  });
+
+  let lastError: any = null;
+  let hasSentChunk = false;
+
+  for (const plan of plans) {
+    try {
+      const config: any = {
+        systemInstruction: effectiveSystemInstruction
+      };
+      if (plan.tools) config.tools = plan.tools;
+      if (plan.toolConfig) config.toolConfig = plan.toolConfig;
+
+      const stream = await aiClient.models.generateContentStream({
+        model: plan.model,
+        contents: formattedContents,
+        config
+      });
+
+      for await (const chunk of stream) {
+        if (!hasSentChunk) {
+          hasSentChunk = true;
+          res.write(`data: ${JSON.stringify({ provider: "gemini", modelUsed: plan.model })}\n\n`);
+        }
+        if (chunk.text) {
+          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+        }
+        const groundingMeta = (chunk.candidates?.[0] as any)?.groundingMetadata;
+        if (groundingMeta?.groundingChunks && Array.isArray(groundingMeta.groundingChunks)) {
+          res.write(`data: ${JSON.stringify({ groundingSources: groundingMeta.groundingChunks })}\n\n`);
+        }
+      }
+
+      if (hasSentChunk) {
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
+    } catch (err: any) {
+      console.warn(`Gemini chat plan (${plan.model}${plan.tools ? "+tools" : ""}) failed:`, err?.status || err?.message);
+      lastError = err;
+      if (hasSentChunk) {
+        break;
+      }
+    }
+  }
+
+  // 4. Automatic OpenRouter fallback if Gemini failed before streaming & provider is auto
+  if (!hasSentChunk && provider !== "gemini" && openRouterKey) {
     try {
       const { reply, modelUsed } = await callOpenRouterChat({
         messages,
         model: openRouterModel || "deepseek/deepseek-chat",
-        systemInstruction: systemInstruction || defaultSysInstruction
+        systemInstruction: effectiveSystemInstruction
       });
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
       res.write(`data: ${JSON.stringify({ text: reply, provider: "openrouter", modelUsed })}\n\n`);
-      res.write('data: [DONE]\n\n');
+      res.write("data: [DONE]\n\n");
       return res.end();
-    } catch (err: any) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.write(`data: ${JSON.stringify({ error: "فشل الاتصال بنماذج OpenRouter: " + (err.message || "عطل في الخدمة") })}\n\n`);
-      return res.end();
+    } catch (orErr: any) {
+      console.warn("OpenRouter fallback after Gemini failure also failed:", orErr?.message);
     }
   }
 
-  // 3. Main Gemini Flow
-  try {
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
+  if (!hasSentChunk) {
+    res.write(`data: ${JSON.stringify({ error: formatGeminiChatError(lastError) })}\n\n`);
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
+});
 
-    const config: any = {
-      systemInstruction: systemInstruction || defaultSysInstruction
-    };
+// --- GEMINI AUDIO TRANSCRIPTION API ---
+app.post("/api/ai/transcribe-audio", async (req, res) => {
+  const { audioBase64, mimeType = "audio/webm" } = req.body || {};
+  if (!audioBase64 || typeof audioBase64 !== "string") {
+    return res.status(400).json({ success: false, error: "بيانات الصوت مطلوبة للتفريغ" });
+  }
 
-    let preferredModel = "gemini-3.8-flash";
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!geminiKey) {
+    return res.status(500).json({ success: false, error: "مفتاح GEMINI_API_KEY غير مضبوط على الخادم" });
+  }
 
-    if (mode === "complex" || mode === "thinking") {
-      // Use gemini-4-argon for particularly complex tasks
-      preferredModel = "gemini-4-argon";
-    } else if (mode === "fast") {
-      // Use gemini-3.1-flash-lite for tasks that should happen fast
-      preferredModel = "gemini-3.1-flash-lite";
-    } else if (mode === "search") {
-      // Search Grounding using gemini-3.8-flash with googleSearch tool
-      preferredModel = "gemini-3.8-flash";
-      config.tools = [{ googleSearch: {} }];
-    } else if (mode === "maps") {
-      // Maps Grounding using gemini-3.8-flash with googleMaps tool
-      preferredModel = "gemini-3.8-flash";
-      config.tools = [{ googleMaps: {} }];
-      if (req.body.location && req.body.location.latitude && req.body.location.longitude) {
-        config.toolConfig = {
-          retrievalConfig: {
-            latLng: {
-              latitude: Number(req.body.location.latitude),
-              longitude: Number(req.body.location.longitude)
-            }
-          }
-        };
-      }
-    } else {
-      // Use gemini-3.1-flash-lite for general tasks to prioritize speed
-      preferredModel = "gemini-3.1-flash-lite";
+  const aiClient = new GoogleGenAI({
+    apiKey: geminiKey,
+    httpOptions: { headers: { "User-Agent": "aistudio-build" } }
+  });
+
+  const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, "");
+  const audioPart = {
+    inlineData: {
+      mimeType: mimeType.split(";")[0] || "audio/webm",
+      data: cleanBase64
     }
+  };
+  const promptPart = {
+    text: "قم بتفريغ الكلام المسموع في هذا التسجيل الصوتي بدقة إلى نص مكتوب فقط دون أي مقدمات أو تعليقات."
+  };
 
-    // Sanitize conversation history:
-    const validMessages = messages.filter((m: any) => m && typeof m.text === "string" && m.text.trim().length > 0);
-
-    let startIndex = 0;
-    while (startIndex < validMessages.length && validMessages[startIndex].role !== "user") {
-      startIndex++;
-    }
-
-    const messagesToSend = startIndex < validMessages.length ? validMessages.slice(startIndex) : validMessages;
-
-    const formattedContents = messagesToSend.map((m: any) => ({
-      role: m.role === "user" ? "user" : "model",
-      parts: [{ text: m.text }]
-    }));
-
-    if (formattedContents.length === 0) {
-      formattedContents.push({
-        role: "user",
-        parts: [{ text: messages[messages.length - 1]?.text || "مرحباً" }]
+  for (const model of ["gemini-3.5-transcribe", "gemini-4-hydrogen", "gemini-3.1-flash-lite"]) {
+    try {
+      const response = await aiClient.models.generateContent({
+        model,
+        contents: { parts: [audioPart, promptPart] }
       });
-    }
-
-    // streaming flow
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    const stream = await ai.models.generateContentStream({
-      model: preferredModel,
-      contents: formattedContents,
-      config: config
-    });
-
-    for await (const chunk of stream) {
-      if (chunk.text) {
-        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+      const text = response.text?.trim() || "";
+      if (text) {
+        return res.json({ success: true, text, modelUsed: model });
       }
-      const groundingMeta = (chunk.candidates?.[0] as any)?.groundingMetadata;
-      if (groundingMeta?.groundingChunks && Array.isArray(groundingMeta.groundingChunks)) {
-        res.write(`data: ${JSON.stringify({ groundingSources: groundingMeta.groundingChunks })}\n\n`);
-      }
+    } catch (err: any) {
+      console.warn(`Audio transcription with ${model} failed:`, err?.status || err?.message);
     }
-    res.write('data: [DONE]\n\n');
-    res.end();
-  } catch (err: any) {
-    console.error("Gemini Chat API Error:", err);
-    res.write(`data: ${JSON.stringify({ error: err.message || "عطل في الخدمة" })}\n\n`);
-    res.end();
   }
+
+  return res.status(500).json({
+    success: false,
+    error: "تعذر تفريغ التسجيل الصوتي حالياً. يرجى المحاولة مرة أخرى."
+  });
 });
 
 app.post("/api/ai/suggest-category", async (req, res) => {
@@ -4241,7 +4359,7 @@ app.post("/api/ai/suggest-category", async (req, res) => {
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: "gemini-4-hydrogen",
       contents: `Suggest a single, short drug category for a medicine named "${name}" with description "${description}". Return only the category name in Arabic.`,
     });
     res.json({ category: response.text?.trim() });
@@ -4267,7 +4385,7 @@ app.post("/api/gemini/generate", async (req, res) => {
 
     const { response, modelUsed } = await robustGenerateContent(
       ai,
-      "gemini-3.8-flash",
+      "gemini-4-hydrogen",
       userPrompt,
       systemInstruction ? { systemInstruction } : {},
       true
@@ -4288,7 +4406,7 @@ app.post("/api/gemini/generate", async (req, res) => {
   }
 });
 
-// Streaming Gemini API Endpoint (Server-Sent Events) with gemini-3.8-flash
+// Streaming Gemini API Endpoint (Server-Sent Events) with gemini-4-hydrogen
 app.post("/api/gemini/stream", async (req, res) => {
   const { prompt, contents, systemInstruction } = req.body || {};
   const userPrompt = prompt || (typeof contents === "string" ? contents : contents?.parts?.[0]?.text) || "مرحباً";
@@ -4311,7 +4429,7 @@ app.post("/api/gemini/stream", async (req, res) => {
     });
 
     const responseStream = await ai.models.generateContentStream({
-      model: "gemini-3.8-flash",
+      model: "gemini-4-hydrogen",
       contents: userPrompt,
       config: systemInstruction ? { systemInstruction } : undefined,
     });

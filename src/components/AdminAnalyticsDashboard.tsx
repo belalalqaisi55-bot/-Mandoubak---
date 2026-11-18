@@ -1090,6 +1090,13 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
           </AnimatePresence>
         </div>
       </div>
+
+      <GeminiChatModal
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        userRole="rep"
+        userName="د/ بلال القيسي"
+      />
     </div>
   );
 };
