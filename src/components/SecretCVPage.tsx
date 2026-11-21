@@ -2,7 +2,7 @@ import React from 'react';
 import { ExternalLink, Rocket, Phone, MessageSquare, Download, ArrowRight, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
 export const SecretCVPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const cvImagePath = "/assets/aistudio/IMG-20261031-WA5791_7e098974.jpg";
+  const cvPdfPath = "/assets/aistudio/_______________-__._____________73012dc9.pdf";
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-950 to-teal-950 text-slate-100 p-3 sm:p-6 md:p-10 font-sans" dir="rtl">
@@ -41,8 +41,8 @@ export const SecretCVPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               <span>واتساب 776600049</span>
             </a>
             <a
-              href={cvImagePath}
-              download="CV_Dr_Belal_Alqaisi.jpg"
+              href={cvPdfPath}
+              download="CV_Dr_Belal_Alqaisi.pdf"
               className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-teal-700 to-emerald-700 hover:from-teal-600 hover:to-emerald-600 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl border border-white/15 transition-all shadow-md active:scale-95"
             >
               <Download className="h-3.5 w-3.5 text-white" />

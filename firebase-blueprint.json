@@ -7,6 +7,7 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 256 },
         "name": { "type": "string", "maxLength": 128 },
         "role": { "type": "string", "enum": ["pharmacy", "doctor", "rep"] },
         "entityName": { "type": "string", "maxLength": 128 },
@@ -17,9 +18,10 @@
         "confirmationCode": { "type": "string", "maxLength": 32 },
         "fcmToken": { "type": "string", "maxLength": 512 },
         "fcmUpdatedAt": { "type": "string", "maxLength": 64 },
+        "permissions": { "type": "object", "description": "Granular feature permissions managed by the representative" },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "phone", "name", "role"]
+      "required": ["id", "name", "role"]
     },
     "Product": {
       "title": "Product",
@@ -30,14 +32,16 @@
         "name": { "type": "string", "maxLength": 128 },
         "scientificName": { "type": "string", "maxLength": 128 },
         "category": { "type": "string", "maxLength": 64 },
-        "price": { "type": "number" },
-        "bonus": { "type": "string", "maxLength": 64 },
-        "description": { "type": "string", "maxLength": 1000 },
-        "imageUrl": { "type": "string", "maxLength": 512 },
+        "price": { "type": "string", "maxLength": 64 },
+        "bonus": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "imageUrl": { "type": "string", "maxLength": 2048 },
+        "stock": { "type": "number" },
+        "lowStockThreshold": { "type": "number" },
         "isAvailable": { "type": "boolean" },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "name", "price"]
+      "required": ["id", "name"]
     },
     "StockReport": {
       "title": "StockReport",
@@ -45,16 +49,17 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128 },
-        "userName": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
         "productId": { "type": "string", "maxLength": 128 },
         "productName": { "type": "string", "maxLength": 128 },
-        "quantity": { "type": "number" },
-        "notes": { "type": "string", "maxLength": 500 },
-        "createdAt": { "type": "string", "maxLength": 64 }
+        "remainingQty": { "type": "number" },
+        "repNotes": { "type": "string", "maxLength": 1000 },
+        "reportedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "userId", "productId", "quantity"]
+      "required": ["id", "productId", "remainingQty"]
     },
     "Order": {
       "title": "Order",
@@ -62,20 +67,21 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128 },
-        "userName": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
-        "items": { "type": "string", "maxLength": 2000 },
+        "items": { "type": "array" },
         "total": { "type": "number" },
         "status": { "type": "string", "enum": ["pending", "approved", "processing", "completed", "cancelled"] },
-        "notes": { "type": "string", "maxLength": 500 },
+        "notes": { "type": "string", "maxLength": 1000 },
         "createdAt": { "type": "string", "maxLength": 64 },
         "respondedAt": { "type": "string", "maxLength": 64 },
         "approvedAt": { "type": "string", "maxLength": 64 },
         "completedAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "userId", "items", "status"]
+      "required": ["id", "status"]
     },
     "Visit": {
       "title": "Visit",
@@ -83,11 +89,12 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
         "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
         "clientType": { "type": "string", "enum": ["pharmacy", "doctor"] },
         "notes": { "type": "string", "maxLength": 1000 },
-        "date": { "type": "string", "maxLength": 64 },
+        "visitDate": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "clientName", "entityName"]
@@ -100,6 +107,8 @@
         "id": { "type": "string", "maxLength": 128 },
         "title": { "type": "string", "maxLength": 128 },
         "message": { "type": "string", "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["broadcast", "target"] },
+        "targetClientId": { "type": "string", "maxLength": 128 },
         "targetUserId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
@@ -137,16 +146,17 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128 },
-        "userName": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
-        "userPhone": { "type": "string", "maxLength": 32 },
+        "clientPhone": { "type": "string", "maxLength": 32 },
         "subject": { "type": "string", "maxLength": 256 },
-        "message": { "type": "string", "maxLength": 3000 },
-        "status": { "type": "string", "enum": ["pending", "reviewed", "resolved"] },
+        "content": { "type": "string", "maxLength": 3000 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "reviewed", "resolved", "closed"] },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "userId", "message"]
+      "required": ["id", "subject", "content"]
     },
     "Settings": {
       "title": "Settings",

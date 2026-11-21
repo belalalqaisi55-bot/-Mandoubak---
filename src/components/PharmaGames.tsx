@@ -1626,12 +1626,12 @@ export const PharmaGames: React.FC<PharmaGamesProps> = ({ onBackToApp, repAvatar
                       className="rounded-xl border border-teal-200 bg-teal-50/70 p-4 flex items-start gap-3"
                     >
                       <img
-                        src={repAvatar || drBelalProfileImg || "/app-logo.jpg"}
+                        src={repAvatar || drBelalProfileImg || "/dr-belal.jpg"}
                         alt="د/ بلال القيسي"
                         className="h-10 w-10 rounded-full object-cover border-2 border-teal-500 shadow-sm shrink-0 ring-1 ring-teal-500/30"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).src = "/app-logo.jpg";
+                          (e.currentTarget as HTMLImageElement).src = "/dr-belal.jpg";
                         }}
                       />
                       <div className="space-y-0.5">

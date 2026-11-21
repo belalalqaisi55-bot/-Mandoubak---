@@ -1,5 +1,5 @@
 // Mandoubak Med PWA Service Worker
-const CACHE_NAME = 'mandoubak-med-pwa-v4';
+const CACHE_NAME = 'mandoubak-med-pwa-v5';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',

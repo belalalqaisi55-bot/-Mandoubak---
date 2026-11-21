@@ -1,0 +1,32 @@
+# Dependencies and local build outputs
+node_modules
+dist
+.vite
+.vercel
+
+# Android & Capacitor native projects and release artifacts
+android
+ios
+releases
+*.apk
+*.aab
+*.keystore
+*.jks
+keystore.properties
+build-apk.sh
+
+# Git, GitHub workflows, local scripts, and editor/agent metadata
+.git
+.github
+.gitignore
+.aistudio
+scripts
+
+# Environment and sensitive local files
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

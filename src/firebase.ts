@@ -385,7 +385,9 @@ export async function testConnection() {
 }
 
 // Automatically test Firestore connection on boot as mandated by Firebase skill
-// testConnection();
+if (typeof window !== "undefined") {
+  void testConnection();
+}
 export interface FirestoreProbeResult {
   configured: boolean;
   connected: boolean;

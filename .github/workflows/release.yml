@@ -1,0 +1,268 @@
+name: Build, Sign & Deploy Mandoubak Med (Android + Web)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'رقم الإصدار (مثال: 1.0.4) - اتركه فارغاً لاستخدام القيمة الحالية'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release-android:
+    name: Build & Release Android (APK + AAB)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36 packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies and verify TypeScript
+        run: |
+          npm ci || npm install
+          npm run lint
+
+      - name: Decode Keystore and configure signing properties
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.MANDOUBAK_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.MANDOUBAK_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.MANDOUBAK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.MANDOUBAK_KEY_PASSWORD }}
+          GOOGLE_SERVICES_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 || secrets.MANDOUBAK_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          missing=()
+          [ -z "$KEYSTORE_B64" ] && missing+=("ANDROID_KEYSTORE_BASE64")
+          [ -z "$STORE_PASSWORD" ] && missing+=("ANDROID_KEYSTORE_PASSWORD")
+          [ -z "$KEY_ALIAS" ] && missing+=("ANDROID_KEY_ALIAS")
+          [ -z "$KEY_PASSWORD" ] && missing+=("ANDROID_KEY_PASSWORD")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::تأكد من إضافة أسرار التوقيع في GitHub Secrets: ${missing[*]}"
+            exit 1
+          fi
+
+          echo "$KEYSTORE_B64" | base64 -d > android/mandoubak-release.keystore
+          printf "storeFile=mandoubak-release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n" \
+            "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/keystore.properties
+
+          if [ -n "$GOOGLE_SERVICES_B64" ]; then
+            echo "$GOOGLE_SERVICES_B64" | base64 -d > android/app/google-services.json
+          fi
+
+      - name: Update versionName and versionCode
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          APP_GRADLE="android/app/build.gradle"
+          STRINGS_XML="android/app/src/main/res/values/strings.xml"
+
+          CURRENT_CODE=$(grep -E 'versionCode[[:space:]]+[0-9]+' "$APP_GRADLE" | head -n 1 | awk '{print $2}')
+          CURRENT_NAME=$(grep -E 'versionName[[:space:]]+"[^"]+"' "$APP_GRADLE" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          APP_ID=$(grep -E 'applicationId[[:space:]]+"[^"]+"' "$APP_GRADLE" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          APP_ID="${APP_ID:-com.mandoubak.app}"
+
+          if [ "$REF_TYPE" = "tag" ]; then
+            RAW_TAG="${REF_NAME#v}"
+            if [[ "$RAW_TAG" == *"-c"* ]]; then
+              VERSION_NAME="${RAW_TAG%%-c*}"
+              VERSION_CODE="${RAW_TAG##*-c}"
+            else
+              VERSION_NAME="$RAW_TAG"
+              VERSION_CODE=$((CURRENT_CODE + RUN_NUMBER))
+            fi
+            RELEASE_TAG="$REF_NAME"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION_NAME="${INPUT_VERSION#v}"
+            VERSION_CODE=$((CURRENT_CODE + RUN_NUMBER))
+            RELEASE_TAG="v${VERSION_NAME}-c${VERSION_CODE}"
+          else
+            VERSION_NAME="$CURRENT_NAME"
+            VERSION_CODE=$((CURRENT_CODE + RUN_NUMBER))
+            RELEASE_TAG="v${VERSION_NAME}-c${VERSION_CODE}"
+          fi
+
+          sed -i -E "s/(versionCode[[:space:]]+)[0-9]+/\1${VERSION_CODE}/" "$APP_GRADLE"
+          sed -i -E "s/(versionName[[:space:]]+\")[^\"]+(\")/\1${VERSION_NAME}\2/" "$APP_GRADLE"
+
+          if [ -f "$STRINGS_XML" ] && grep -q 'name="app_version_name"' "$STRINGS_XML"; then
+            sed -i -E "s|(<string name=\"app_version_name\">)[^<]*(</string>)|\1${VERSION_NAME}\2|" "$STRINGS_XML"
+          fi
+
+          echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=${VERSION_CODE}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "APP_ID=${APP_ID}" >> "$GITHUB_ENV"
+
+      - name: Build web assets and sync Capacitor Android
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: Build signed APK and AAB
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean assembleRelease bundleRelease --no-daemon
+
+      - name: Package artifacts, RELEASE_NOTES.md, and SHA256SUMS.txt
+        run: |
+          OUT_DIR="releases/mandoubak-med-${RELEASE_TAG}"
+          mkdir -p "$OUT_DIR"
+
+          APK_NAME="mandoubak-med-${RELEASE_TAG}.apk"
+          AAB_NAME="mandoubak-med-${RELEASE_TAG}.aab"
+          NOTES_FILE="${OUT_DIR}/RELEASE_NOTES.md"
+
+          cp "android/app/build/outputs/apk/release/app-release.apk" "${OUT_DIR}/${APK_NAME}"
+          cp "android/app/build/outputs/bundle/release/app-release.aab" "${OUT_DIR}/${AAB_NAME}"
+
+          PREV_TAG=$(git tag --sort=-creatordate | grep -vxF "$GITHUB_REF_NAME" | head -n 1 || true)
+          COMMITS_LIST=""
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS_LIST=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" || true)
+          fi
+          if [ -z "$COMMITS_LIST" ]; then
+            COMMITS_LIST=$(git log -n 15 --pretty=format:"- %s (%h)" || true)
+          fi
+          if [ -z "$COMMITS_LIST" ]; then
+            COMMITS_LIST="- تحديثات وتحسينات عامة على الأداء والاستقرار."
+          fi
+
+          BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          {
+            printf "# ملاحظات إصدار تطبيق مندوبك الطبي (Mandoubak Med)\n\n"
+            printf -- "- **رقم النسخة (versionName):** %s\n" "$VERSION_NAME"
+            printf -- "- **رقم البناء (versionCode):** %s\n" "$VERSION_CODE"
+            printf -- "- **معرّف الحزمة (Application ID):** %s\n" "$APP_ID"
+            printf -- "- **تاريخ البناء:** %s\n\n" "$BUILD_DATE"
+            printf "## أبرز التغييرات والتحسينات\n%s\n\n" "$COMMITS_LIST"
+            printf "## ملفات الحزم المرفقة\n"
+            printf -- "- **حزمة التثبيت (APK):** \`%s\`\n" "$APK_NAME"
+            printf -- "- **حزمة المتجر (AAB):** \`%s\`\n" "$AAB_NAME"
+          } > "$NOTES_FILE"
+
+          cd "$OUT_DIR"
+          sha256sum "$APK_NAME" "$AAB_NAME" "RELEASE_NOTES.md" > SHA256SUMS.txt
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mandoubak-med-${{ env.RELEASE_TAG }}
+          path: releases/mandoubak-med-${{ env.RELEASE_TAG }}/*
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "مندوبك الطبي - Mandoubak Med (${{ env.RELEASE_TAG }})"
+          body_path: releases/mandoubak-med-${{ env.RELEASE_TAG }}/RELEASE_NOTES.md
+          files: |
+            releases/mandoubak-med-${{ env.RELEASE_TAG }}/*.apk
+            releases/mandoubak-med-${{ env.RELEASE_TAG }}/*.aab
+            releases/mandoubak-med-${{ env.RELEASE_TAG }}/RELEASE_NOTES.md
+            releases/mandoubak-med-${{ env.RELEASE_TAG }}/SHA256SUMS.txt
+
+      - name: Cleanup sensitive signing files
+        if: always()
+        run: |
+          rm -f android/mandoubak-release.keystore
+          rm -f android/keystore.properties
+
+  deploy-web:
+    name: Deploy Web (Vercel & Google Cloud Run)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies, lint, and build web app
+        run: |
+          npm ci || npm install
+          npm run lint
+          npm run build
+
+      - name: Deploy to Vercel Production
+        if: ${{ secrets.VERCEL_TOKEN != '' && secrets.VERCEL_ORG_ID != '' && secrets.VERCEL_PROJECT_ID != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+          npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
+          npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      - name: Authenticate to Google Cloud
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Google Cloud Run
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ secrets.GCP_REGION || 'europe-west1' }}
+          GCP_SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME || 'mandoubak-med' }}
+        run: |
+          gcloud run deploy "$GCP_SERVICE_NAME" \
+            --source . \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --port 8080 \
+            --set-env-vars NODE_ENV=production \
+            --allow-unauthenticated

@@ -1,17 +1,17 @@
 {
   "id": "/",
-  "name": "مندوبك الطبي | Mandoubak Med",
+  "name": "مندوبك الطبي - Mandoubak Med",
   "short_name": "مندوبك الطبي",
-  "description": "منظومة المندوب الطبي وإدارة طلبيات الأدوية والمخزون الصيدلاني للدكتور بلال القيسي",
+  "description": "تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi).",
+  "lang": "ar",
+  "dir": "rtl",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "portrait",
-  "background_color": "#f8fafc",
+  "orientation": "portrait-primary",
+  "background_color": "#F8F7F4",
   "theme_color": "#0f766e",
-  "lang": "ar",
-  "dir": "rtl",
   "prefer_related_applications": false,
   "launch_handler": {
     "client_mode": "focus-existing"
@@ -25,13 +25,19 @@
       "purpose": "any"
     },
     {
+      "src": "/icons/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
       "src": "/icons/pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/pwa-maskable-512x512.png",
+      "src": "/icons/pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

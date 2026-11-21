@@ -153,6 +153,9 @@ function buildFailureHint(status: number | null, responsePayload: unknown, error
   if (status === 404) {
     return `فشل ارسال الطلب (404 Not Found): ${payloadMsg || "المسار أو العنصر غير موجود"}`;
   }
+  if (status === 429) {
+    return `تم تجاوز حد الطلبات المؤقت (429 Rate Limit): سيتم التهدئة تلقائياً لتخفيف الضغط على الخادم`;
+  }
   if (status >= 500) {
     return `فشل ارسال الطلب (${status} Server Error): ${payloadMsg || "خطأ داخلي في الخادم"}`;
   }
@@ -200,13 +203,14 @@ export async function logApiResponse(params: {
   response: Response;
   durationMs: number;
   requestPayload?: unknown;
+  levelOverride?: ApiLogLevel;
 }): Promise<ApiRequestLogEntry> {
-  const { url, method, response, durationMs, requestPayload } = params;
+  const { url, method, response, durationMs, requestPayload, levelOverride } = params;
   const responsePayload = !response.ok ? await extractResponsePayload(response) : undefined;
   const failureHint = buildFailureHint(response.status, responsePayload);
 
   return logApiRequest({
-    level: response.ok ? ApiLogLevel.INFO : ApiLogLevel.ERROR,
+    level: levelOverride ?? (response.ok ? ApiLogLevel.INFO : ApiLogLevel.ERROR),
     method: method.toUpperCase(),
     url,
     status: response.status,
@@ -225,8 +229,9 @@ export function logApiNetworkError(params: {
   error: unknown;
   durationMs: number;
   requestPayload?: unknown;
+  levelOverride?: ApiLogLevel;
 }): ApiRequestLogEntry {
-  const { url, method, error, durationMs, requestPayload } = params;
+  const { url, method, error, durationMs, requestPayload, levelOverride } = params;
   const errorName = error instanceof Error ? error.name : "";
   const errorMessage = error instanceof Error ? error.message : String(error);
   const isAborted =
@@ -236,7 +241,7 @@ export function logApiNetworkError(params: {
   const failureHint = buildFailureHint(null, undefined, errorMessage);
 
   return logApiRequest({
-    level: isAborted ? ApiLogLevel.WARN : ApiLogLevel.ERROR,
+    level: levelOverride ?? (isAborted ? ApiLogLevel.WARN : ApiLogLevel.ERROR),
     method: method.toUpperCase(),
     url,
     status: null,

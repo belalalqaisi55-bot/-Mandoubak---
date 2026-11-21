@@ -51,6 +51,14 @@ export interface KeepNote {
   createdAt?: string;
 }
 
+export interface UserPermissions {
+  canAccessStockReports: boolean;
+  canReceiveTargetedNotifications: boolean;
+  canExportReports: boolean;
+  canViewVisits: boolean;
+  canViewAgreements: boolean;
+}
+
 export interface User {
   id: string;
   phone?: string;
@@ -70,6 +78,7 @@ export interface User {
   fcmTokens?: string[];
   fcmUpdatedAt?: string;
   createdAt?: string;
+  permissions?: UserPermissions;
   // Added optional fields often used in partial objects
   userId?: string; 
   orcidId?: string;
@@ -100,6 +109,8 @@ export interface Product {
   barcode?: string;
   activeIngredient?: string;
   dosageForm?: string;
+  stock?: number;
+  lowStockThreshold?: number;
   createdAt?: string;
 }
 

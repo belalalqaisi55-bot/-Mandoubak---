@@ -1,114 +1,256 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
-    function isSignedIn() { return request.auth != null; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
-    function incoming() { return request.resource.data; }
-    function existing() { return resource.data; }
-    
-    // Auth helpers
-    function isSuperAdminUser() {
-      return isSignedIn() && (
-        (request.auth.token.email != null && request.auth.token.email.lower() == 'belalalqaisi55@gmail.com') ||
-        (request.auth.token.keys().hasAny(['phone_number']) && request.auth.token.phone_number == '+967776600049')
-      );
-    }
-    function isAdmin() {
-      return isSuperAdminUser() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
-    }
-    function isRep() {
-      return isSuperAdminUser() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'rep');
-    }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-
-    // Validation helpers
-    function isValidUser(data) {
-        return data.id is string && data.id.size() <= 128 &&
-               data.phone is string && data.phone.size() <= 32 &&
-               data.name is string && data.name.size() <= 128 &&
-               data.role in ['pharmacy', 'doctor', 'rep'];
-    }
-    function isValidOrder(data) {
-        return data.id is string && data .id.size() <= 128 &&
-               data.status in ['pending', 'approved', 'completed', 'cancelled', 'processing'];
-    }
-
-    // Default deny
+    // Default deny safety net
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // 1. Users
+    // Core helper primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Tiered identity helpers (verified email/phone bootstrap + Firestore role lookup)
+    function isSuperAdminUser() {
+      return isSignedIn() && (
+        (request.auth.token.email != null &&
+          request.auth.token.email_verified == true &&
+          request.auth.token.email.lower() == 'belalalqaisi55@gmail.com') ||
+        (request.auth.token.keys().hasAny(['phone_number']) &&
+          request.auth.token.phone_number == '+967776600049')
+      );
+    }
+
+    function isAdmin() {
+      return isSuperAdminUser() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isRep() {
+      return isSuperAdminUser() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'rep'
+      );
+    }
+
+    function isPrivileged() {
+      return isAdmin() || isRep();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isDocOwner(data) {
+      return isSignedIn() && (
+        (data.keys().hasAny(['userId']) && data.userId == request.auth.uid) ||
+        (data.keys().hasAny(['clientId']) && data.clientId == request.auth.uid)
+      );
+    }
+
+    // Schema validation helpers (Validation Blueprints)
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'role']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 128 &&
+        data.role in ['pharmacy', 'doctor', 'rep', 'admin'] &&
+        (!data.keys().hasAny(['phone']) || (data.phone is string && data.phone.size() <= 32)) &&
+        (!data.keys().hasAny(['email']) || (data.email is string && data.email.size() <= 256)) &&
+        (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
+        (!data.keys().hasAny(['location']) || (data.location is string && data.location.size() <= 256)) &&
+        (!data.keys().hasAny(['status']) || data.status in ['approved', 'pending_approval', 'suspended', 'rejected']) &&
+        (!data.keys().hasAny(['isApproved']) || data.isApproved is bool) &&
+        (!data.keys().hasAny(['fcmToken']) || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
+        (!data.keys().hasAny(['fcmTokens']) || (data.fcmTokens is list && data.fcmTokens.size() <= 20 && (data.fcmTokens.size() == 0 || data.fcmTokens[0] is string))) &&
+        (!data.keys().hasAny(['permissions']) || data.permissions is map);
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'name']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 256 &&
+        (!data.keys().hasAny(['category']) || (data.category is string && data.category.size() <= 128)) &&
+        (!data.keys().hasAny(['description']) || (data.description is string && data.description.size() <= 2000)) &&
+        (!data.keys().hasAny(['bonus']) || (data.bonus is string && data.bonus.size() <= 128)) &&
+        (!data.keys().hasAny(['imageUrl']) || (data.imageUrl is string && data.imageUrl.size() <= 2048)) &&
+        (!data.keys().hasAny(['stock']) || (data.stock is number && data.stock >= 0)) &&
+        (!data.keys().hasAny(['lowStockThreshold']) || (data.lowStockThreshold is number && data.lowStockThreshold >= 0));
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['id', 'status']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.status in ['pending', 'approved', 'processing', 'completed', 'cancelled'] &&
+        (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['clientName']) || (data.clientName is string && data.clientName.size() <= 128)) &&
+        (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
+        (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 1000)) &&
+        (!data.keys().hasAny(['items']) || (data.items is list && data.items.size() > 0 && data.items.size() <= 100 && data.items[0] is map));
+    }
+
+    function isValidStockReport(data) {
+      return data.keys().hasAll(['id', 'productId', 'remainingQty']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
+        data.remainingQty is number && data.remainingQty >= 0 &&
+        (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['repNotes']) || (data.repNotes is string && data.repNotes.size() <= 1000));
+    }
+
+    function isValidComplaint(data) {
+      return data.keys().hasAll(['id', 'subject', 'content']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.subject is string && data.subject.size() <= 256 &&
+        data.content is string && data.content.size() > 0 && data.content.size() <= 3000 &&
+        (!data.keys().hasAny(['status']) || data.status in ['pending', 'in_progress', 'reviewed', 'resolved', 'closed']);
+    }
+
+    function isValidKeepNote(data) {
+      return data.keys().hasAll(['id', 'title']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() <= 256 &&
+        (!data.keys().hasAny(['content']) || (data.content is string && data.content.size() <= 10000)) &&
+        (!data.keys().hasAny(['labels']) || (data.labels is list && data.labels.size() <= 20 && (data.labels.size() == 0 || data.labels[0] is string)));
+    }
+
+    // 1. Users - Strict PII isolation & anti-privilege-escalation
     match /users/{userId} {
-      allow list: if isSignedIn() && (isAdmin() || isRep() || isSuperAdminUser());
-      allow get: if isSignedIn();
-      allow create: if isSignedIn(); 
-      allow update: if isSignedIn() && (isOwner(userId) || isAdmin() || isRep() || isSuperAdminUser());
-      allow delete: if isAdmin() || isRep() || isSuperAdminUser();
+      allow list: if isPrivileged();
+      allow get: if isValidId(userId) && (isOwner(userId) || isPrivileged());
+      allow create: if isValidId(userId) && isSignedIn() && isValidUser(incoming()) && (
+        isPrivileged() || (
+          isOwner(userId) &&
+          incoming().id == request.auth.uid &&
+          incoming().role in ['pharmacy', 'doctor'] &&
+          !incoming().keys().hasAny(['permissions'])
+        )
+      );
+      allow update: if isValidId(userId) && isSignedIn() && isValidUser(incoming()) && (
+        isPrivileged() || (
+          isOwner(userId) &&
+          incoming().id == existing().id &&
+          incoming().role == existing().role &&
+          !incoming().diff(existing()).affectedKeys().hasAny(['role', 'isApproved', 'status', 'id', 'permissions'])
+        )
+      );
+      allow delete: if isValidId(userId) && isPrivileged();
     }
 
-    // 2. Products - Public read, Admin write
+    // 2. Products - Public catalog read, Rep/Admin write
     match /products/{productId} {
-      allow read, list: if true;
-      allow write: if isAdmin();
+      allow list: if true;
+      allow get: if isValidId(productId);
+      allow create, update: if isValidId(productId) && isPrivileged() && isValidProduct(incoming());
+      allow delete: if isValidId(productId) && isPrivileged();
     }
 
-    // 3. Settings - Public read, Admin write
+    // 3. Settings - Public branding/category read, Rep/Admin write
     match /settings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow list: if true;
+      allow get: if isValidId(settingId);
+      allow write: if isValidId(settingId) && isPrivileged();
     }
 
-    // 4. Notifications - Public read, Admin write
+    // 4. Notifications - Signed-in read, Rep/Admin write
     match /notifications/{notificationId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow list: if isSignedIn();
+      allow get: if isValidId(notificationId) && isSignedIn();
+      allow write: if isValidId(notificationId) && isPrivileged();
     }
 
-    // 5. Orders - Own read, Admin/Rep read all
+    // 5. Orders - Owner read/create pending, Rep/Admin full management
     match /orders/{orderId} {
-      allow list: if isAdmin() || isRep() || (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid));
-      allow get: if isSignedIn() && (isOwner(resource.data.userId) || (resource.data.keys().hasAny(['clientId']) && isOwner(resource.data.clientId)) || isAdmin() || isRep());
-      allow create: if isSignedIn();
-      allow update: if isAdmin() || isRep();
-      allow delete: if isAdmin() || isRep();
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
+      allow get: if isValidId(orderId) && (isPrivileged() || isDocOwner(existing()));
+      allow create: if isValidId(orderId) && isSignedIn() && isValidOrder(incoming()) && (
+        isPrivileged() || (isDocOwner(incoming()) && incoming().status == 'pending')
+      );
+      allow update: if isValidId(orderId) && isSignedIn() && isValidOrder(incoming()) && isPrivileged();
+      allow delete: if isValidId(orderId) && isPrivileged();
     }
 
-    // 6. StockReports - Own read, Admin/Rep read all
+    // 6. StockReports - Owner read/create, Rep/Admin full management
     match /stockReports/{reportId} {
-      allow list: if isAdmin() || isRep();
-      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
-      allow create: if isSignedIn() && isOwner(incoming().userId);
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
+      allow get: if isValidId(reportId) && (isPrivileged() || isDocOwner(existing()));
+      allow create: if isValidId(reportId) && isSignedIn() && isValidStockReport(incoming()) && (
+        isPrivileged() || isDocOwner(incoming())
+      );
+      allow update: if isValidId(reportId) && isSignedIn() && isValidStockReport(incoming()) && isPrivileged();
+      allow delete: if isValidId(reportId) && isPrivileged();
     }
 
-    // 7. Visits - Own read, Admin/Rep read all
+    // 7. Visits - Owner read, Rep/Admin write
     match /visits/{visitId} {
-      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
-      allow write: if isAdmin() || isRep();
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
+      allow get: if isValidId(visitId) && (isPrivileged() || isDocOwner(existing()));
+      allow write: if isValidId(visitId) && isPrivileged();
     }
 
-    // 8. Agreements - Own read, Admin/Rep read all
+    // 8. Agreements - Owner read, Rep/Admin write
     match /agreements/{agreementId} {
-      allow read: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
-      allow write: if isAdmin() || isRep();
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
+      allow get: if isValidId(agreementId) && (isPrivileged() || isDocOwner(existing()));
+      allow write: if isValidId(agreementId) && isPrivileged();
     }
 
-    // 9. Complaints - Own read, Admin/Rep read all
+    // 9. Complaints - Owner read/create, Rep/Admin update/delete
     match /complaints/{complaintId} {
-      allow list: if isAdmin() || isRep() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow get: if isSignedIn() && (isOwner(resource.data.userId) || isAdmin() || isRep());
-      allow create: if isSignedIn() && isOwner(incoming().userId);
-      allow update: if isAdmin();
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
+      allow get: if isValidId(complaintId) && (isPrivileged() || isDocOwner(existing()));
+      allow create: if isValidId(complaintId) && isSignedIn() && isValidComplaint(incoming()) && (
+        isPrivileged() || isDocOwner(incoming())
+      );
+      allow update: if isValidId(complaintId) && isSignedIn() && isValidComplaint(incoming()) && isPrivileged();
+      allow delete: if isValidId(complaintId) && isPrivileged();
     }
 
-    // 10. Admin Recycle Bin and Notes
+    // 10. Admin Recycle Bin
     match /trash_archive/{itemId} {
-      allow read, write: if isAdmin();
+      allow list: if isPrivileged();
+      allow get, write: if isValidId(itemId) && isPrivileged();
     }
 
+    // 11. Keep Notes
     match /keep_notes/{noteId} {
-      allow read, write: if isSignedIn() && (isOwner(resource.data.userId) || isOwner(incoming().userId));
+      allow list: if isPrivileged() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow get: if isValidId(noteId) && (isPrivileged() || isDocOwner(existing()));
+      allow create: if isValidId(noteId) && isSignedIn() && isValidKeepNote(incoming()) && (
+        isPrivileged() || isDocOwner(incoming())
+      );
+      allow update: if isValidId(noteId) && isSignedIn() && isValidKeepNote(incoming()) && (
+        isPrivileged() || isDocOwner(existing())
+      );
+      allow delete: if isValidId(noteId) && (isPrivileged() || isDocOwner(existing()));
     }
   }
 }

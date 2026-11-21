@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    cleartext: true,
+    cleartext: false,
     allowNavigation: [
       '*.run.app',
       'remix-remix-mandoubak-med-139332771047.europe-west2.run.app',
@@ -16,6 +16,23 @@ const config: CapacitorConfig = {
       'openrouter.ai',
       'generativelanguage.googleapis.com'
     ]
+  },
+  android: {
+    allowMixedContent: false,
+    captureInput: true,
+    webContentsDebuggingEnabled: false
+  },
+  plugins: {
+    SplashScreen: {
+      launchShowDuration: 1500,
+      launchAutoHide: true,
+      backgroundColor: '#0f766e',
+      showSpinner: false
+    },
+    StatusBar: {
+      style: 'DARK',
+      backgroundColor: '#0f766e'
+    }
   }
 };
 

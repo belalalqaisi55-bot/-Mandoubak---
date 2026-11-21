@@ -21,6 +21,7 @@ export function useConnectionStatus() {
     // Latency tracking
     let isMounted = true;
     const updateLatency = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const conn = (navigator as any).connection;
       if (conn && typeof conn.rtt === "number" && conn.rtt > 0) {
         if (isMounted) setLatency(conn.rtt);
@@ -39,13 +40,14 @@ export function useConnectionStatus() {
       }
     };
 
-    updateLatency();
+    const initialTimer = setTimeout(updateLatency, 300);
     const conn = (navigator as any).connection;
     if (conn) conn.addEventListener("change", updateLatency);
-    const interval = setInterval(updateLatency, 30000);
+    const interval = setInterval(updateLatency, 60000);
 
     return () => {
       isMounted = false;
+      clearTimeout(initialTimer);
       cleanup();
       clearInterval(interval);
       if (conn) conn.removeEventListener("change", updateLatency);

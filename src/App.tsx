@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { authenticatedFetch as fetch } from "./utils/authenticatedFetch";
-import { Product, StockReport, Order, OrderItem, User, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
+import { Product, StockReport, Order, OrderItem, User, UserPermissions, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
 import { DEFAULT_CLIENTS } from "./data/defaultClients";
 import { PharmaGames } from "./components/PharmaGames";
@@ -28,6 +28,7 @@ import { QRScannerModal } from "./components/QRScannerModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { DownloadApkModal } from "./components/DownloadApkModal";
 import { fetchOnboardingFlow, OnboardingFlowType } from "./services/remoteConfigService";
+import { initNativePushNotifications } from "./services/pushNotificationService";
 import { ExcelDataPreview } from "./components/ExcelDataPreview";
 import { PrintOrderModal } from "./components/PrintOrderModal";
 import { BioscienceSkillsExplorer } from "./components/BioscienceSkillsExplorer";
@@ -44,6 +45,13 @@ import {
   CATEGORY_PALETTE,
   getCategoryColor,
 } from "./data/predefinedCategories";
+import { StockWarningBadge } from "./components/StockWarningBadge";
+import {
+  loadClientLowStockThreshold,
+  saveClientLowStockThreshold,
+  getLatestStockReportsByProduct,
+  evaluateProductStockWarning,
+} from "./utils/stockAlerts";
 import { updateUserProfile } from "./services/userProfileService";
 import {
   saveOfflineOrder,
@@ -278,7 +286,12 @@ export default function App() {
   // Dr. Belal Profile Avatar state
   const [drProfileAvatar, setDrProfileAvatar] = useState<string>(() => {
     try {
-      return localStorage.getItem("mandoubak_dr_avatar") || drBelalProfileImg;
+      const saved = localStorage.getItem("mandoubak_dr_avatar");
+      if (!saved || saved === "/app-logo.png" || saved === "/app-logo.jpg") {
+        if (saved) localStorage.removeItem("mandoubak_dr_avatar");
+        return drBelalProfileImg;
+      }
+      return saved;
     } catch {
       return drBelalProfileImg;
     }
@@ -386,17 +399,38 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<any>(null);
 
   useEffect(() => {
-    const idToken = localStorage.getItem("mandoubak_id_token");
-    const currentFbUser = auth?.currentUser;
-    if (!idToken && (!currentFbUser || currentFbUser.isAnonymous)) {
-      setGoogleUser(null);
-      return;
-    }
+    let cancelled = false;
+    const verifySession = async () => {
+      try {
+        if (auth && typeof auth.authStateReady === "function") {
+          await auth.authStateReady();
+        }
+        const currentFbUser = auth?.currentUser;
+        if (!currentFbUser || currentFbUser.isAnonymous) {
+          localStorage.removeItem("mandoubak_id_token");
+          if (!cancelled) setGoogleUser(null);
+          return;
+        }
 
-    fetch('/api/me')
-      .then(res => (res.ok ? res.json() : { user: null }))
-      .then(data => setGoogleUser(data?.user || null))
-      .catch(() => setGoogleUser(null));
+        const freshToken = await currentFbUser.getIdToken();
+        if (freshToken) {
+          localStorage.setItem("mandoubak_id_token", freshToken);
+        }
+        const res = await fetch('/api/me', { silentNetworkLog: true });
+        if (!res.ok) {
+          if (!cancelled) setGoogleUser(null);
+          return;
+        }
+        const data = await res.json();
+        if (!cancelled) setGoogleUser(data?.user || null);
+      } catch {
+        if (!cancelled) setGoogleUser(null);
+      }
+    };
+    verifySession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // User Confirmation & Access Control States
@@ -448,6 +482,11 @@ export default function App() {
   useEffect(() => {
     if (!isFirebaseConfigured) return;
     const unsubscribe = subscribeToAuthState(async (firebaseUser) => {
+      if (!firebaseUser) {
+        localStorage.removeItem("mandoubak_id_token");
+        setGoogleUser(null);
+        return;
+      }
       if (firebaseUser) {
         if (!firebaseUser.isAnonymous) {
           try {
@@ -943,6 +982,19 @@ export default function App() {
   const [quickRestockItem, setQuickRestockItem] = useState<StockReport | null>(null);
   const [quickRestockQty, setQuickRestockQty] = useState("");
 
+  // Client-side configurable low stock threshold for Product Card warning badges
+  const [lowStockThreshold, setLowStockThreshold] = useState<number>(() => loadClientLowStockThreshold());
+  const [showOnlyLowStockCatalog, setShowOnlyLowStockCatalog] = useState(false);
+
+  useEffect(() => {
+    saveClientLowStockThreshold(lowStockThreshold);
+  }, [lowStockThreshold]);
+
+  const latestStockReportsByProduct = useMemo(
+    () => getLatestStockReportsByProduct(stockReports),
+    [stockReports]
+  );
+
   // Catalog manager input (for representative)
   const [newProductForm, setNewProductForm] = useState({
     name: "",
@@ -952,10 +1004,31 @@ export default function App() {
     price: "",
     bonus: "",
     unit: "علبة",
+    stock: "",
+    lowStockThreshold: "",
   });
 
   // Product categories management
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [aiClassifyingCatalog, setAiClassifyingCatalog] = useState(false);
+  const [aiApplyingCatalog, setAiApplyingCatalog] = useState(false);
+  const [aiSingleSuggestingId, setAiSingleSuggestingId] = useState<string | null>(null);
+  const [aiShowOnlyChanges, setAiShowOnlyChanges] = useState(true);
+  const [aiApplyDetectedIngredient, setAiApplyDetectedIngredient] = useState(true);
+  const [aiClassificationScope, setAiClassificationScope] = useState<"general" | "all" | null>(null);
+  const [aiCatalogSuggestions, setAiCatalogSuggestions] = useState<
+    Array<{
+      id: string;
+      productName: string;
+      currentCategory: string;
+      suggestedCategory: string;
+      detectedActiveIngredient: string;
+      currentActiveIngredient?: string;
+      confidence: string;
+      reason: string;
+      selected: boolean;
+    }>
+  >([]);
   const [availableCategories, setAvailableCategories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("mandoubak_product_categories");
@@ -1208,15 +1281,24 @@ export default function App() {
     };
   }, []);
 
+  const orcidSyncDoneRef = useRef<boolean>(false);
+  const fcmRegisterInFlightRef = useRef<Promise<void> | null>(null);
+  const lastRegisteredFcmRef = useRef<{ key: string; at: number } | null>(null);
+  const userDataFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const lastUserDataFetchMetaRef = useRef<{ userId: string; at: number }>({ userId: "", at: 0 });
+  const settingsFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const lastSettingsFetchAtRef = useRef<number>(0);
+
   // Handle pending product addition if coming from CV page
   useEffect(() => {
-    if (user && user.id === "u_rep" && !user.orcidId) {
+    if (user && user.id === "u_rep" && !user.orcidId && !orcidSyncDoneRef.current) {
+      orcidSyncDoneRef.current = true;
       updateUserProfile({
         userId: user.id,
         orcidId: "https://orcid.org/0009-0006-1638-1313"
       });
     }
-  }, [user]);
+  }, [user?.id, user?.orcidId]);
 
   useEffect(() => {
     if (isCVPageVisible) {
@@ -1236,28 +1318,34 @@ export default function App() {
   // Fetch initial data & subscribe to real-time settings / avatar sync
   useEffect(() => {
     fetchProducts();
-    fetchAllRegisteredUsers();
+    fetchAllRegisteredUsers({ silent: true });
     fetchAppSettings();
+    let initialUserSyncTimer: ReturnType<typeof setTimeout> | null = null;
     if (user) {
-      fetchUserSpecificData(true);
+      // Stagger initial user data sync slightly to avoid bursting the upstream proxy rate limit on mount
+      initialUserSyncTimer = setTimeout(() => {
+        fetchUserSpecificData(true);
+      }, 350);
     }
 
     // Real-time synchronization of Dr. Belal's profile avatar across all open devices and links
     let unsubscribeSettings: (() => void) | null = null;
     let unsubscribeOrders: (() => void) | null = null;
     let unsubscribeStockReports: (() => void) | null = null;
+    let unsubscribeUsers: (() => void) | null = null;
+    let unsubscribeSelfUser: (() => void) | null = null;
 
     if (isFirebaseConfigured && db) {
       try {
         unsubscribeSettings = onSnapshot(doc(db, "settings", "app_config"), (snap) => {
           if (snap.exists()) {
             const snapData = snap.data() as AppSettings;
-            if (snapData && snapData.drProfileAvatar) {
+            if (snapData && snapData.drProfileAvatar && snapData.drProfileAvatar !== "/app-logo.png" && snapData.drProfileAvatar !== "/app-logo.jpg") {
               setDrProfileAvatar(snapData.drProfileAvatar);
               try {
                 localStorage.setItem("mandoubak_dr_avatar", snapData.drProfileAvatar);
               } catch (e) {}
-            } else if (snapData && snapData.drProfileAvatar === "") {
+            } else if (snapData && (snapData.drProfileAvatar === "" || snapData.drProfileAvatar === "/app-logo.png" || snapData.drProfileAvatar === "/app-logo.jpg")) {
               setDrProfileAvatar(drBelalProfileImg);
               try {
                 localStorage.removeItem("mandoubak_dr_avatar");
@@ -1334,15 +1422,115 @@ export default function App() {
           }
         );
 
+        // Real-time synchronization of new doctor/pharmacy registrations for Representative
+        if (user?.role === "rep" || user?.role === "admin") {
+          unsubscribeUsers = onSnapshot(
+            collection(db, "users"),
+            (snap) => {
+              if (!snap.empty) {
+                const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
+                const deletedKeys = getDeletedClientKeys();
+                const fsUsers = snap.docs
+                  .map((d) => ({ id: d.id, ...d.data() } as User))
+                  .filter((u) => {
+                    if (!u || defaultClientIds.has(u.id)) return false;
+                    if (u.role !== "rep" && u.id !== "u_rep") {
+                      if (deletedKeys.has(u.id) || (u.phone && deletedKeys.has(u.phone))) {
+                        return false;
+                      }
+                    }
+                    return true;
+                  });
+                setRegisteredUsers((prev) => {
+                  const mergedMap = new Map<string, User>();
+                  prev.forEach((u) => {
+                    if (u?.id) mergedMap.set(u.id, u);
+                  });
+                  fsUsers.forEach((u) => {
+                    if (u?.id) mergedMap.set(u.id, { ...(mergedMap.get(u.id) || {}), ...u });
+                  });
+                  const mergedList = Array.from(mergedMap.values());
+                  try {
+                    localStorage.setItem("mandoubak_local_clients", JSON.stringify(mergedList));
+                  } catch (e) {}
+                  return mergedList;
+                });
+              }
+            },
+            (err) => {
+              console.warn("Users realtime sync notice:", err.message);
+            }
+          );
+        } else if (user?.id) {
+          unsubscribeSelfUser = onSnapshot(
+            doc(db, "users", user.id),
+            (snap) => {
+              if (snap.exists()) {
+                const remoteData = snap.data() as Partial<User>;
+                setUser((prev) => {
+                  if (!prev || prev.id !== snap.id) return prev;
+                  if (JSON.stringify(prev.permissions || null) === JSON.stringify(remoteData.permissions || null)) {
+                    return prev;
+                  }
+                  const merged = { ...prev, permissions: remoteData.permissions };
+                  try {
+                    localStorage.setItem("mandoubak_user", JSON.stringify(merged));
+                  } catch (e) {}
+                  return merged;
+                });
+              }
+            },
+            (err) => {
+              console.warn("Self user permissions sync notice:", err.message);
+            }
+          );
+        }
+
       } catch (e) {}
     }
 
+    // Periodic background refresh for rep so registrations and notifications always stay in sync cleanly
+    let repRefreshInterval: ReturnType<typeof setInterval> | null = null;
+    let isCancelled = false;
+    let consecutivePollMisses = 0;
+    let lastPollAttemptAt = 0;
+    const pollBaseMs = isFirebaseConfigured && db ? 60000 : 45000;
+    if (user?.role === "rep" || user?.role === "admin") {
+      repRefreshInterval = setInterval(() => {
+        if (isCancelled) return;
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+        if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+
+        // Back off cleanly when backend is temporarily unavailable instead of piling up overlapping requests
+        const minGapMs = consecutivePollMisses > 0 ? Math.min(120000, pollBaseMs * (consecutivePollMisses + 1)) : pollBaseMs - 2000;
+        const now = Date.now();
+        if (now - lastPollAttemptAt < minGapMs) return;
+        lastPollAttemptAt = now;
+
+        void Promise.all([
+          fetchAllRegisteredUsers({ silent: true }),
+          fetchNotificationsWithFallback({ silent: true }),
+        ]).then(([, notifsOk]) => {
+          if (notifsOk) {
+            consecutivePollMisses = 0;
+          } else {
+            consecutivePollMisses = Math.min(3, consecutivePollMisses + 1);
+          }
+        });
+      }, pollBaseMs);
+    }
+
     return () => {
+      isCancelled = true;
+      if (initialUserSyncTimer) clearTimeout(initialUserSyncTimer);
       if (unsubscribeSettings) unsubscribeSettings();
       if (unsubscribeOrders) unsubscribeOrders();
       if (unsubscribeStockReports) unsubscribeStockReports();
+      if (unsubscribeUsers) unsubscribeUsers();
+      if (unsubscribeSelfUser) unsubscribeSelfUser();
+      if (repRefreshInterval) clearInterval(repRefreshInterval);
     };
-  }, [user]);
+  }, [user?.id, user?.role]);
 
   // Fetch Firebase Remote Config for A/B Testing Onboarding Flow
   useEffect(() => {
@@ -1464,49 +1652,153 @@ export default function App() {
 
   // Auto-polling for real-time background notifications & data updates (smart visibility aware)
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
+    const syncIntervalMs = isFirebaseConfigured && db ? 90000 : 60000;
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
         return; // Don't burn CPU/battery when phone is locked or tab is in background
       }
       fetchUserSpecificData(true);
-    }, 45000); // Efficient 45s interval
+    }, syncIntervalMs);
     return () => clearInterval(interval);
-  }, [user]);
+  }, [user?.id]);
+
+  const persistFcmToken = async (targetUser: User, token: string) => {
+    if (!token) return;
+    try {
+      localStorage.setItem("mandoubak_fcm_token", token);
+    } catch {
+      // Ignore storage errors
+    }
+    setFcmToken(token);
+
+    const registrationKey = `${targetUser.id}:${token}`;
+    const now = Date.now();
+    let alreadyRegisteredInSession = false;
+    if (
+      lastRegisteredFcmRef.current &&
+      lastRegisteredFcmRef.current.key === registrationKey &&
+      now - lastRegisteredFcmRef.current.at < 10 * 60 * 1000
+    ) {
+      alreadyRegisteredInSession = true;
+    } else {
+      try {
+        const cachedSessionKey = sessionStorage.getItem("mandoubak_fcm_registered_key");
+        const cachedSessionAt = Number(sessionStorage.getItem("mandoubak_fcm_registered_at") || "0");
+        if (cachedSessionKey === registrationKey && now - cachedSessionAt < 10 * 60 * 1000) {
+          alreadyRegisteredInSession = true;
+          lastRegisteredFcmRef.current = { key: registrationKey, at: cachedSessionAt };
+        }
+      } catch {}
+    }
+
+    if (alreadyRegisteredInSession) {
+      return;
+    }
+
+    lastRegisteredFcmRef.current = { key: registrationKey, at: now };
+    try {
+      sessionStorage.setItem("mandoubak_fcm_registered_key", registrationKey);
+      sessionStorage.setItem("mandoubak_fcm_registered_at", String(now));
+    } catch {}
+
+    const nowIso = new Date().toISOString();
+    const res = await fetch("/api/fcm/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: targetUser.id, token }),
+      silentNetworkLog: true,
+    }).catch((err) => {
+      console.warn("FCM server register notice:", err);
+      return null;
+    });
+
+    // If rate limited, allow future retry after cooldown instead of marking permanently done
+    if (res && res.status === 429) {
+      lastRegisteredFcmRef.current = null;
+      try {
+        sessionStorage.removeItem("mandoubak_fcm_registered_key");
+      } catch {}
+    }
+
+    await syncToFirebase("users", "set", targetUser.id, {
+      ...targetUser,
+      fcmToken: token,
+      fcmUpdatedAt: nowIso,
+    }).catch((err) => console.warn("FCM Firestore sync notice:", err));
+  };
 
   const registerDeviceFcmToken = async (targetUser: User) => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (window.Notification.permission !== "granted") return;
-    try {
-      const token = await requestFcmToken();
-      if (!token) return;
-      try {
-        localStorage.setItem("mandoubak_fcm_token", token);
-      } catch {
-        // Ignore storage errors
-      }
-      setFcmToken(token);
-      const nowIso = new Date().toISOString();
-      await fetch("/api/fcm/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: targetUser.id, token }),
-      }).catch((err) => console.warn("FCM server register notice:", err));
-
-      await syncToFirebase("users", "set", targetUser.id, {
-        ...targetUser,
-        fcmToken: token,
-        fcmUpdatedAt: nowIso,
-      }).catch((err) => console.warn("FCM Firestore sync notice:", err));
-    } catch (err) {
-      console.warn("registerDeviceFcmToken notice:", err);
+    if (fcmRegisterInFlightRef.current) {
+      return fcmRegisterInFlightRef.current;
     }
+
+    const runRegister = async () => {
+      try {
+        const token = await requestFcmToken();
+        if (!token) return;
+        await persistFcmToken(targetUser, token);
+      } catch (err) {
+        console.warn("registerDeviceFcmToken notice:", err);
+      }
+    };
+
+    const task = runRegister().finally(() => {
+      if (fcmRegisterInFlightRef.current === task) {
+        fcmRegisterInFlightRef.current = null;
+      }
+    });
+    fcmRegisterInFlightRef.current = task;
+    return task;
   };
 
   useEffect(() => {
     if (!user || pushPermission !== "granted") return;
-    registerDeviceFcmToken(user);
+    const timer = setTimeout(() => {
+      registerDeviceFcmToken(user);
+    }, 250);
+    return () => clearTimeout(timer);
   }, [user?.id, pushPermission]);
+
+  useEffect(() => {
+    if (!user) return;
+    let disposed = false;
+    let cleanupNativePush: (() => Promise<void>) | null = null;
+
+    initNativePushNotifications(
+      (nativeToken) => {
+        if (!disposed) {
+          void persistFcmToken(user, nativeToken);
+        }
+      },
+      (notification) => {
+        if (disposed) return;
+        const title = notification?.title || "إشعار فوري من مندوبك";
+        const body = notification?.body || "";
+        showSuccess(body ? `${title}: ${body}` : title);
+        fetchUserSpecificData(true);
+      }
+    )
+      .then((cleanup) => {
+        if (disposed && cleanup) {
+          void cleanup();
+        } else {
+          cleanupNativePush = cleanup;
+        }
+      })
+      .catch((err) => {
+        console.warn("Native push init notice:", err);
+      });
+
+    return () => {
+      disposed = true;
+      if (cleanupNativePush) {
+        void cleanupNativePush();
+      }
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user) return;
@@ -1635,6 +1927,22 @@ export default function App() {
   };
 
   const fetchUserSpecificData = async (isBackground = false, showToast = false) => {
+    if (userDataFetchInFlightRef.current) {
+      return userDataFetchInFlightRef.current;
+    }
+    const nowMs = Date.now();
+    const currentUserId = user?.id || "";
+    if (
+      isBackground &&
+      !showToast &&
+      lastUserDataFetchMetaRef.current.userId === currentUserId &&
+      nowMs - lastUserDataFetchMetaRef.current.at < 12000
+    ) {
+      return;
+    }
+    lastUserDataFetchMetaRef.current = { userId: currentUserId, at: nowMs };
+
+    const runUserDataSync = async () => {
     setIsSyncing(true);
     if (!isBackground) {
       setLoading(true);
@@ -1649,10 +1957,9 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const ordersUrl = user?.role === "rep" ? "/api/orders" : `/api/orders?clientId=${user?.id}`;
-          const idToken = localStorage.getItem("mandoubak_id_token");
           const rOrders = await fetch(ordersUrl, {
             signal: controller.signal,
-            headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
+            silentNetworkLog: true,
           });
           clearTimeout(timer);
           const ctOrders = rOrders.headers.get("content-type") || "";
@@ -1726,7 +2033,10 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const reportsUrl = user?.role === "rep" ? "/api/stock-reports" : `/api/stock-reports?clientId=${user?.id}`;
-          const rReports = await fetch(reportsUrl, { signal: controller.signal });
+          const rReports = await fetch(reportsUrl, {
+            signal: controller.signal,
+            silentNetworkLog: isBackground || (isFirebaseConfigured && Boolean(db)),
+          });
           clearTimeout(timer);
           const ctReports = rReports.headers.get("content-type") || "";
           if (rReports.ok && ctReports.includes("application/json")) {
@@ -1788,7 +2098,10 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const visitsUrl = user?.role === "rep" ? "/api/visits" : `/api/visits?clientId=${user?.id}`;
-          const rVisits = await fetch(visitsUrl, { signal: controller.signal });
+          const rVisits = await fetch(visitsUrl, {
+            signal: controller.signal,
+            silentNetworkLog: isBackground || (isFirebaseConfigured && Boolean(db)),
+          });
           clearTimeout(timer);
           const ctVisits = rVisits.headers.get("content-type") || "";
           if (rVisits.ok && ctVisits.includes("application/json")) {
@@ -1813,34 +2126,7 @@ export default function App() {
       };
 
       const notificationsTask = async () => {
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 10000);
-          const notifsUrl = user?.role === "rep" ? "/api/notifications" : `/api/notifications?clientId=${user?.id}`;
-          const rNotifs = await fetch(notifsUrl, { signal: controller.signal });
-          clearTimeout(timer);
-          const ctNotifs = rNotifs.headers.get("content-type") || "";
-          if (rNotifs.ok && ctNotifs.includes("application/json")) {
-            const dNotifs: Notification[] = await rNotifs.json();
-            if (Array.isArray(dNotifs)) {
-              setNotifications(dNotifs.filter(n => !n.isArchived));
-            }
-          } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
-            const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
-            setNotifications(fsNotifs.filter((n: Notification) => !n.isArchived));
-          }
-        } catch (err) {
-          if (isFirebaseConfigured && db) {
-            try {
-              const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 2500);
-              const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
-              setNotifications(fsNotifs.filter((n: Notification) => !n.isArchived));
-            } catch (fsErr) {
-              console.warn("Firestore notifications fallback err:", fsErr);
-            }
-          }
-        }
+        await fetchNotificationsWithFallback({ silent: isBackground || (isFirebaseConfigured && Boolean(db)) });
       };
 
       const agreementsTask = async () => {
@@ -1848,7 +2134,10 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const agreementsUrl = user?.role === "rep" ? "/api/agreements" : `/api/agreements?clientId=${user?.id}`;
-          const rAgreements = await fetch(agreementsUrl, { signal: controller.signal });
+          const rAgreements = await fetch(agreementsUrl, {
+            signal: controller.signal,
+            silentNetworkLog: isBackground || (isFirebaseConfigured && Boolean(db)),
+          });
           clearTimeout(timer);
           const ctAgreements = rAgreements.headers.get("content-type") || "";
           if (rAgreements.ok && ctAgreements.includes("application/json")) {
@@ -1885,7 +2174,10 @@ export default function App() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 10000);
           const complaintsUrl = user?.role === "rep" ? "/api/complaints" : `/api/complaints?clientId=${user?.id}`;
-          const rComplaints = await fetch(complaintsUrl, { signal: controller.signal });
+          const rComplaints = await fetch(complaintsUrl, {
+            signal: controller.signal,
+            silentNetworkLog: isBackground || (isFirebaseConfigured && Boolean(db)),
+          });
           clearTimeout(timer);
           const ctComplaints = rComplaints.headers.get("content-type") || "";
           if (rComplaints.ok && ctComplaints.includes("application/json")) {
@@ -1917,17 +2209,19 @@ export default function App() {
         }
       };
 
-      const usersTask = user?.role === "rep" ? fetchAllRegisteredUsers() : Promise.resolve();
+      const usersTask = user?.role === "rep" ? fetchAllRegisteredUsers({ silent: isBackground }) : Promise.resolve();
 
-      // Execute all sync tasks concurrently in parallel
+      // Execute sync tasks in two staggered batches to prevent bursting upstream API rate limits
       await Promise.allSettled([
         ordersTask(),
         stockReportsTask(),
-        visitsTask(),
         notificationsTask(),
-        agreementsTask(),
-        complaintsTask(),
         usersTask
+      ]);
+      await Promise.allSettled([
+        visitsTask(),
+        agreementsTask(),
+        complaintsTask()
       ]);
 
       setLastSyncTime(new Date());
@@ -1946,6 +2240,15 @@ export default function App() {
         setLoading(false);
       }
     }
+    };
+
+    const task = runUserDataSync().finally(() => {
+      if (userDataFetchInFlightRef.current === task) {
+        userDataFetchInFlightRef.current = null;
+      }
+    });
+    userDataFetchInFlightRef.current = task;
+    return task;
   };
 
   // --- HANDLERS FOR NEW AI VISITS & NOTIFICATIONS SYSTEMS ---
@@ -2486,40 +2789,59 @@ export default function App() {
 
   // Fetch app settings (access control rules and global profile avatar)
   const fetchAppSettings = async () => {
-    try {
-      const res = await fetch("/api/settings");
-      if (res.ok) {
-        const data = await res.json();
-        setAppSettings(data);
-        if (data && data.drProfileAvatar) {
-          setDrProfileAvatar(data.drProfileAvatar);
-          try {
-            localStorage.setItem("mandoubak_dr_avatar", data.drProfileAvatar);
-          } catch (e) {}
-        }
-      }
-    } catch (err) {
-      console.warn("Could not fetch app settings from backend, using local defaults:", err);
+    if (settingsFetchInFlightRef.current) {
+      return settingsFetchInFlightRef.current;
     }
+    const nowMs = Date.now();
+    if (nowMs - lastSettingsFetchAtRef.current < 15000) {
+      return;
+    }
+    lastSettingsFetchAtRef.current = nowMs;
 
-    if (isFirebaseConfigured && db) {
+    const runSettingsFetch = async () => {
       try {
-        const docPromise = getDoc(doc(db, "settings", "app_config"));
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2000));
-        const cfgDoc = (await Promise.race([docPromise, timeoutPromise])) as any;
-        if (cfgDoc && cfgDoc.exists && cfgDoc.exists()) {
-          const cfgData = cfgDoc.data() as AppSettings;
-          if (cfgData && cfgData.drProfileAvatar) {
-            setDrProfileAvatar(cfgData.drProfileAvatar);
+        const res = await fetch("/api/settings", { silentNetworkLog: true });
+        if (res.ok) {
+          const data = await res.json();
+          setAppSettings(data);
+          if (data && data.drProfileAvatar && data.drProfileAvatar !== "/app-logo.png" && data.drProfileAvatar !== "/app-logo.jpg") {
+            setDrProfileAvatar(data.drProfileAvatar);
             try {
-              localStorage.setItem("mandoubak_dr_avatar", cfgData.drProfileAvatar);
+              localStorage.setItem("mandoubak_dr_avatar", data.drProfileAvatar);
             } catch (e) {}
           }
         }
       } catch (err) {
-        console.warn("Firestore settings check skipped:", err);
+        console.warn("Could not fetch app settings from backend, using local defaults:", err);
       }
-    }
+
+      if (isFirebaseConfigured && db) {
+        try {
+          const docPromise = getDoc(doc(db, "settings", "app_config"));
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2000));
+          const cfgDoc = (await Promise.race([docPromise, timeoutPromise])) as any;
+          if (cfgDoc && cfgDoc.exists && cfgDoc.exists()) {
+            const cfgData = cfgDoc.data() as AppSettings;
+            if (cfgData && cfgData.drProfileAvatar && cfgData.drProfileAvatar !== "/app-logo.png" && cfgData.drProfileAvatar !== "/app-logo.jpg") {
+              setDrProfileAvatar(cfgData.drProfileAvatar);
+              try {
+                localStorage.setItem("mandoubak_dr_avatar", cfgData.drProfileAvatar);
+              } catch (e) {}
+            }
+          }
+        } catch (err) {
+          console.warn("Firestore settings check skipped:", err);
+        }
+      }
+    };
+
+    const task = runSettingsFetch().finally(() => {
+      if (settingsFetchInFlightRef.current === task) {
+        settingsFetchInFlightRef.current = null;
+      }
+    });
+    settingsFetchInFlightRef.current = task;
+    return task;
   };
 
   const handleUpdateAppSetting = async (key: keyof AppSettings, value: boolean) => {
@@ -2579,9 +2901,82 @@ export default function App() {
   };
 
   const usersFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const notifsFetchInFlightRef = useRef<Promise<boolean> | null>(null);
+
+  // Deduplicated, timeout-bounded notifications fetcher with Firestore fallback
+  const fetchNotificationsWithFallback = async (options?: { silent?: boolean }): Promise<boolean> => {
+    if (notifsFetchInFlightRef.current) {
+      return notifsFetchInFlightRef.current;
+    }
+
+    const filterVisibleNotifs = (list: Notification[]) =>
+      list.filter((n: Notification) => {
+        if (n.isArchived) return false;
+        if (user?.role === "rep" || user?.role === "admin") return true;
+        if (n.type === "broadcast") return true;
+        if (user?.permissions?.canReceiveTargetedNotifications === false) return false;
+        return n.targetClientId === user?.id;
+      });
+
+    const runNotifsFetch = async (): Promise<boolean> => {
+      let backendOk = false;
+      const isOnline = typeof navigator === "undefined" || navigator.onLine !== false;
+
+      if (isOnline) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "AbortError")), 8000);
+        try {
+          const notifsUrl =
+            user?.role === "rep" || user?.role === "admin"
+              ? "/api/notifications"
+              : `/api/notifications?clientId=${encodeURIComponent(user?.id || "")}`;
+          const rNotifs = await fetch(notifsUrl, {
+            signal: controller.signal,
+            silentNetworkLog: options?.silent,
+          });
+          const ctNotifs = rNotifs.headers.get("content-type") || "";
+          if (rNotifs.ok && ctNotifs.includes("application/json")) {
+            const dNotifs: Notification[] = await rNotifs.json();
+            if (Array.isArray(dNotifs)) {
+              setNotifications(filterVisibleNotifs(dNotifs));
+              backendOk = true;
+            }
+          }
+        } catch (err) {
+          if (!options?.silent) {
+            console.warn("Backend /api/notifications unreachable, trying Firestore:", err);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      if (!backendOk && isFirebaseConfigured && db) {
+        try {
+          const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 3000);
+          const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
+          setNotifications(filterVisibleNotifs(fsNotifs));
+        } catch (fsErr) {
+          if (!options?.silent) {
+            console.warn("Firestore notifications fallback err:", fsErr);
+          }
+        }
+      }
+
+      return backendOk;
+    };
+
+    const promise = runNotifsFetch().finally(() => {
+      if (notifsFetchInFlightRef.current === promise) {
+        notifsFetchInFlightRef.current = null;
+      }
+    });
+    notifsFetchInFlightRef.current = promise;
+    return promise;
+  };
 
   // Fetch registered users (for Representative view)
-  const fetchAllRegisteredUsers = async () => {
+  const fetchAllRegisteredUsers = async (options?: { silent?: boolean }) => {
     if (usersFetchInFlightRef.current) {
       return usersFetchInFlightRef.current;
     }
@@ -2590,24 +2985,32 @@ export default function App() {
     try {
       let usersList: User[] = [];
       let backendFetched = false;
+      const isOnline = typeof navigator === "undefined" || navigator.onLine !== false;
 
-      // 1. Fetch from backend API
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "AbortError")), 10000);
-      try {
-        const r = await fetch("/api/users", { signal: controller.signal });
-        const ct = r.headers.get("content-type") || "";
-        if (r.ok && ct.includes("application/json")) {
-          const data = await r.json();
-          if (Array.isArray(data)) {
-            usersList = data;
-            backendFetched = true;
+      // 1. Fetch from backend API when online
+      if (isOnline) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(new DOMException("Request timed out", "AbortError")), 8000);
+        try {
+          const r = await fetch("/api/users", {
+            signal: controller.signal,
+            silentNetworkLog: options?.silent,
+          });
+          const ct = r.headers.get("content-type") || "";
+          if (r.ok && ct.includes("application/json")) {
+            const data = await r.json();
+            if (Array.isArray(data)) {
+              usersList = data;
+              backendFetched = true;
+            }
           }
+        } catch (err) {
+          if (!options?.silent) {
+            console.warn("Backend /api/users unreachable, trying Firestore:", err);
+          }
+        } finally {
+          clearTimeout(timer);
         }
-      } catch (err) {
-        console.warn("Backend /api/users unreachable, trying Firestore:", err);
-      } finally {
-        clearTimeout(timer);
       }
 
       // 2. Fetch from Firestore (merge only non-deleted users)
@@ -2809,6 +3212,66 @@ export default function App() {
     });
   };
 
+  const handleUpdateUserPermissions = async (
+    targetUserId: string,
+    permissions: UserPermissions
+  ): Promise<boolean> => {
+    try {
+      let apiSucceeded = false;
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(targetUserId)}/permissions`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ permissions }),
+        });
+        if (res.ok) apiSucceeded = true;
+      } catch (err) {
+        console.warn("API permissions update notice:", err);
+      }
+
+      if (isFirebaseConfigured && db && targetUserId) {
+        try {
+          await setDoc(
+            doc(db, "users", targetUserId),
+            { permissions, updatedAt: new Date().toISOString() },
+            { merge: true }
+          );
+        } catch (fsErr) {
+          handleFirestoreError(fsErr, OperationType.WRITE, `users/${targetUserId}`);
+        }
+      }
+
+      setRegisteredUsers((prev) => {
+        const next = prev.map((u) => (u.id === targetUserId ? { ...u, permissions } : u));
+        try {
+          localStorage.setItem("mandoubak_local_clients", JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+
+      if (user?.id === targetUserId) {
+        setUser((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev, permissions };
+          try {
+            localStorage.setItem("mandoubak_user", JSON.stringify(updated));
+          } catch (e) {}
+          return updated;
+        });
+      }
+
+      if (apiSucceeded || isFirebaseConfigured) {
+        showSuccess("تم تحديث أذونات العميل وحفظها بنجاح ✓");
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("Failed updating user permissions:", err);
+      showError("تعذر حفظ أذونات المستخدم، يرجى المحاولة مرة أخرى.");
+      return false;
+    }
+  };
+
   const handleSendClientWelcomeWhatsApp = (targetUser: { name: string; entityName?: string; phone?: string; confirmationCode?: string }) => {
     if (!targetUser.phone) {
       showError("لا يوجد رقم هاتف لهذا العميل");
@@ -2839,7 +3302,11 @@ export default function App() {
         const res = await fetch("/api/auth/verify-code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: cleanPhone, code: codeAttempt }),
+          body: JSON.stringify({
+            phone: cleanPhone || pendingApprovalUser.phone || "",
+            email: pendingApprovalUser.email || "",
+            code: codeAttempt
+          }),
         });
         const data = await res.json().catch(() => null);
         if (res.ok && data?.user) {
@@ -2887,13 +3354,13 @@ export default function App() {
       const pendingEmail = (pendingApprovalUser.email || "").toLowerCase().trim();
       let approvedUser: User | null = null;
 
-      // 1. Try Backend API (only if phone is meaningful)
-      if (cleanPhone && cleanPhone.length >= 6) {
+      // 1. Try Backend API (phone or email)
+      if ((cleanPhone && cleanPhone.length >= 6) || pendingEmail) {
         try {
           const res = await fetch("/api/auth/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ phone: cleanPhone }),
+            body: JSON.stringify({ phone: cleanPhone, email: pendingEmail }),
           });
           if (res.ok) {
             const data = await res.json();
@@ -3644,7 +4111,7 @@ export default function App() {
             ) || null;
         }
 
-        const loggedUser: User = isRep
+        let loggedUser: User = isRep
           ? {
               id: "u_rep",
               email: "belalalqaisi55@gmail.com",
@@ -3667,8 +4134,32 @@ export default function App() {
               location: "مسجل عبر Google Auth",
               isApproved: !appSettings.requireApprovalForNewClients,
               status: appSettings.requireApprovalForNewClients ? "pending_approval" : "approved",
+              confirmationCode: String(Math.floor(1000 + Math.random() * 9000)),
               createdAt: new Date().toISOString(),
             };
+
+        if (!isRep && !existingUser) {
+          try {
+            const regRes = await fetch("/api/auth/register", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(loggedUser),
+            });
+            const regData = await regRes.json().catch(() => null);
+            if (regData?.user) {
+              loggedUser = regData.user;
+            }
+          } catch {
+            // Continue with Firestore/local sync if offline
+          }
+          unmarkClientsDeleted([loggedUser.id, loggedUser.phone || ""]);
+          try {
+            await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+          } catch {
+            // Non-fatal if backend persisted
+          }
+          void fetchAllRegisteredUsers();
+        }
 
         if (!isRep && loggedUser.status === "suspended") {
           showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
@@ -3677,9 +4168,6 @@ export default function App() {
 
         if (!isRep && (loggedUser.isApproved === false || loggedUser.status === "pending_approval")) {
           setPendingApprovalUser(loggedUser);
-          if (!existingUser) {
-            await syncToFirebase("users", "set", loggedUser.id, loggedUser);
-          }
           showError("تم تسجيل الحساب! حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
           return;
         }
@@ -3688,7 +4176,11 @@ export default function App() {
         setPendingApprovalUser(null);
         localStorage.setItem("mandoubak_user", JSON.stringify(loggedUser));
         localStorage.setItem("mandoubak_bound_phone", isRep ? "+967776600049" : (loggedUser.phone || ""));
-        await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+        try {
+          await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+        } catch {
+          // Non-fatal
+        }
         showSuccess(isRep ? "أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️" : `أهلاً بك ${loggedUser.name}! تم تسجيل الدخول بنجاح كعميل.`);
       }
     } catch (err: any) {
@@ -3809,7 +4301,7 @@ export default function App() {
         const requiresApproval = !isRep && appSettings.requireApprovalForNewClients;
         const randomCode = String(Math.floor(1000 + Math.random() * 9000));
 
-        const newUser: User = {
+        let newUser: User = {
           id: isRep ? "u_rep" : fbUser.uid,
           email: resolvedEmail,
           phone: isRep ? "+967776600049" : (cleanRegPhone || resolvedEmail),
@@ -3823,22 +4315,33 @@ export default function App() {
           createdAt: new Date().toISOString(),
         };
 
-        try {
-          await fetch("/api/auth/register", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(newUser),
-          });
-        } catch {
-          // Silently continue with Firestore/local sync if offline
+        if (!isRep) {
+          try {
+            const regRes = await fetch("/api/auth/register", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(newUser),
+            });
+            const regData = await regRes.json().catch(() => null);
+            if (regData?.user) {
+              newUser = regData.user;
+            }
+          } catch {
+            // Silently continue with Firestore/local sync if offline
+          }
+          unmarkClientsDeleted([newUser.id, newUser.phone || ""]);
         }
 
-        await syncToFirebase("users", "set", newUser.id, newUser);
+        try {
+          await syncToFirebase("users", "set", newUser.id, newUser);
+        } catch {
+          // Non-fatal if backend already saved the registration
+        }
         if (cleanRegPhone) {
           localStorage.setItem("mandoubak_bound_phone", cleanRegPhone);
         }
         setEmailPassword("");
-        fetchAllRegisteredUsers();
+        void fetchAllRegisteredUsers();
 
         if (requiresApproval) {
           setPendingApprovalUser(newUser);
@@ -3921,25 +4424,40 @@ export default function App() {
       };
 
       let data: any = null;
+      let duplicateErrorMsg: string | null = null;
       try {
         const r = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
+        const parsed = await r.json().catch(() => null);
         if (r && r.ok) {
-          data = await r.json();
+          data = parsed;
+        } else if (r && r.status === 400 && parsed?.error) {
+          duplicateErrorMsg = parsed.error;
         }
       } catch (netErr) {
         console.warn("Backend API register unreachable, fallback to client user session", netErr);
       }
 
-      const registeredUser: User = (data && data.user) ? data.user : payload;
+      if (duplicateErrorMsg && !data?.user) {
+        showError(duplicateErrorMsg);
+        setLoading(false);
+        return;
+      }
 
-      await syncToFirebase("users", "set", registeredUser.id, registeredUser);
+      const registeredUser: User = (data && data.user) ? data.user : payload;
+      unmarkClientsDeleted([registeredUser.id, registeredUser.phone || ""]);
+
+      try {
+        await syncToFirebase("users", "set", registeredUser.id, registeredUser);
+      } catch {
+        // Non-fatal if backend persisted registration
+      }
       localStorage.setItem("mandoubak_bound_phone", finalPhone);
 
-      fetchAllRegisteredUsers();
+      void fetchAllRegisteredUsers();
 
       // Check if requires approval
       if (registeredUser.isApproved === false || registeredUser.status === "pending_approval") {
@@ -3960,12 +4478,6 @@ export default function App() {
           user: registeredUser,
           waUrl
         });
-
-        try {
-          window.open(waUrl, "_blank");
-        } catch (err) {
-          console.warn("Popup blocked, fallback modal shown:", err);
-        }
       } else {
         setUser(registeredUser);
         setPendingApprovalUser(null);
@@ -4000,10 +4512,13 @@ export default function App() {
     const reportsToSubmit: any[] = [];
     const orderItemsToSubmit: any[] = [];
 
+    const allowStockReporting =
+      user.role === "rep" || user.role === "admin" || user.permissions?.canAccessStockReports !== false;
+
     products.forEach((prod) => {
       // 1. Stock report check
       const remainingVal = remainingInputs[prod.id];
-      if (remainingVal !== undefined && remainingVal.trim() !== "") {
+      if (allowStockReporting && remainingVal !== undefined && remainingVal.trim() !== "") {
         reportsToSubmit.push({
           productId: prod.id,
           productName: prod.name,
@@ -4420,38 +4935,241 @@ export default function App() {
     showSuccess("تم استعادة قائمة التصنيفات الدوائية المعيارية وألوانها الافتراضية بنجاح 🔄");
   };
 
-  // Add Product (For Rep/Admin) - with predefined category support
+  // Add Product (For Rep/Admin) - Gemini AI single-item & batch catalog categorization
   const handleCategorizeProduct = async () => {
-    if (!newProductForm.activeIngredient.trim()) {
-      showError("يرجى إدخال المادة الفعالة أولاً");
+    if (!newProductForm.name.trim() && !newProductForm.activeIngredient.trim()) {
+      showError("يرجى إدخال اسم الصنف الدوائي أو المادة الفعالة أولاً");
       return;
     }
     setLoading(true);
     try {
-      const response = await fetch("/api/categorize-product", {
+      const response = await fetch("/api/ai/suggest-category", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productName: newProductForm.name,
-          activeIngredient: newProductForm.activeIngredient,
-          description: newProductForm.description,
+          productName: newProductForm.name.trim(),
+          activeIngredient: newProductForm.activeIngredient.trim(),
+          description: newProductForm.description.trim(),
+          availableCategories,
         }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "فشل اقتراح التصنيف");
+      }
       if (data.category) {
-        const cat = data.category.trim();
+        const cat = String(data.category).trim();
         if (cat && !availableCategories.includes(cat)) {
           saveProductCategories([...availableCategories, cat]);
         }
-        setNewProductForm((prev) => ({ ...prev, category: cat }));
-        showSuccess(`تم اقتراح التصنيف: ${cat} 🤖`);
+        setNewProductForm((prev) => ({
+          ...prev,
+          category: cat,
+          activeIngredient:
+            !prev.activeIngredient.trim() && data.detectedActiveIngredient
+              ? String(data.detectedActiveIngredient).trim()
+              : prev.activeIngredient,
+        }));
+        showSuccess(
+          `تم التصنيف تلقائياً عبر Gemini AI: ${cat}${data.reason ? ` (${data.reason})` : ""}`
+        );
       } else {
-        showError("فشل اقتراح التصنيف");
+        showError("تعذر تحديد تصنيف مناسب للصنف");
       }
-    } catch (e) {
-      showError("حدث خطأ أثناء الاتصال بالذكاء الاصطناعي");
+    } catch (e: any) {
+      showError(e?.message || "حدث خطأ أثناء الاتصال بخدمة Gemini AI");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleBatchClassifyCatalog = async (scope: "general" | "all") => {
+    const targetProducts =
+      scope === "general"
+        ? products.filter((p) => !p.category || p.category.trim() === "" || p.category.trim() === "عام")
+        : products;
+
+    if (targetProducts.length === 0) {
+      showError(
+        scope === "general"
+          ? "لا توجد أصناف مصنفة كـ (عام) حالياً — جميع الأصناف موزعة على فئاتها."
+          : "لا توجد أصناف في الكتالوج لتحليلها."
+      );
+      return;
+    }
+
+    setAiClassificationScope(scope);
+    setAiClassifyingCatalog(true);
+    try {
+      const response = await fetch("/api/ai/classify-catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          products: targetProducts.map((p) => ({
+            id: p.id,
+            name: p.name,
+            activeIngredient: p.activeIngredient || "",
+            description: p.description || "",
+            currentCategory: p.category || "عام",
+          })),
+          availableCategories,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data.classifications)) {
+        throw new Error(data.error || "تعذر تحليل أصناف الكتالوج عبر Gemini AI");
+      }
+
+      const productMap = new Map(targetProducts.map((p) => [p.id, p]));
+      const mapped = data.classifications.map((item: any) => {
+        const src = productMap.get(item.id);
+        const currentCat = (src?.category || "عام").trim();
+        const suggestedCat = String(item.suggestedCategory || currentCat).trim();
+        const hasChange = suggestedCat !== currentCat;
+        const fillsIngredient =
+          !src?.activeIngredient?.trim() && Boolean(String(item.detectedActiveIngredient || "").trim());
+        return {
+          id: item.id,
+          productName: src?.name || item.id,
+          currentCategory: currentCat,
+          suggestedCategory: suggestedCat,
+          detectedActiveIngredient: String(item.detectedActiveIngredient || "").trim(),
+          currentActiveIngredient: src?.activeIngredient || "",
+          confidence: String(item.confidence || "متوسطة").trim(),
+          reason: String(item.reason || "").trim(),
+          selected: hasChange || fillsIngredient,
+        };
+      });
+
+      const anyChanges = mapped.some((m: any) => m.suggestedCategory !== m.currentCategory);
+      setAiShowOnlyChanges(anyChanges);
+      setAiCatalogSuggestions(mapped);
+      const changedCount = mapped.filter((m: any) => m.suggestedCategory !== m.currentCategory).length;
+      showSuccess(
+        changedCount > 0
+          ? `حلّل Gemini AI ${mapped.length} صنفاً واقترح تحديث تصنيف ${changedCount} صنفاً.`
+          : `حلّل Gemini AI ${mapped.length} صنفاً ووجد أن تصنيفاتها الحالية مطابقة.`
+      );
+    } catch (e: any) {
+      showError(e?.message || "حدث خطأ أثناء تحليل الكتالوج عبر Gemini AI");
+    } finally {
+      setAiClassifyingCatalog(false);
+    }
+  };
+
+  const handleApplyBatchCatalogCategories = async () => {
+    const selectedItems = aiCatalogSuggestions.filter((item) => item.selected);
+    if (selectedItems.length === 0) {
+      showError("يرجى تحديد صنف واحد على الأقل لاعتماد تصنيفه");
+      return;
+    }
+
+    setAiApplyingCatalog(true);
+    try {
+      const selectedMap = new Map(selectedItems.map((i) => [i.id, i]));
+      const updatedList: Product[] = [];
+      const payloadUpdates: Array<{ id: string; category: string; activeIngredient?: string }> = [];
+
+      const nextProducts = products.map((prod) => {
+        const patch = selectedMap.get(prod.id);
+        if (!patch) return prod;
+        const nextIngredient =
+          aiApplyDetectedIngredient &&
+          !prod.activeIngredient?.trim() &&
+          patch.detectedActiveIngredient.trim()
+            ? patch.detectedActiveIngredient.trim()
+            : prod.activeIngredient;
+        const updated: Product = {
+          ...prod,
+          category: patch.suggestedCategory,
+          ...(nextIngredient ? { activeIngredient: nextIngredient } : {}),
+        };
+        updatedList.push(updated);
+        payloadUpdates.push({
+          id: prod.id,
+          category: patch.suggestedCategory,
+          ...(nextIngredient ? { activeIngredient: nextIngredient } : {}),
+        });
+        return updated;
+      });
+
+      setProducts(nextProducts);
+
+      for (const updatedProd of updatedList) {
+        await syncToFirebase("products", "set", updatedProd.id, updatedProd);
+      }
+
+      try {
+        await fetch("/api/products/batch-categories", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: payloadUpdates }),
+        });
+      } catch (netErr) {
+        console.warn("Backend batch category update error:", netErr);
+      }
+
+      setAiCatalogSuggestions([]);
+      setAiClassificationScope(null);
+      showSuccess(`تم تحديث وحفظ تصنيف ${updatedList.length} صنفاً بنجاح في الكتالوج`);
+    } catch (e: any) {
+      showError(e?.message || "حدث خطأ أثناء تطبيق التصنيفات");
+    } finally {
+      setAiApplyingCatalog(false);
+    }
+  };
+
+  const handleClassifySingleCatalogProduct = async (prod: Product) => {
+    setAiSingleSuggestingId(prod.id);
+    try {
+      const response = await fetch("/api/ai/suggest-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: prod.name,
+          activeIngredient: prod.activeIngredient || "",
+          description: prod.description || "",
+          availableCategories,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.category) {
+        throw new Error(data.error || "تعذر تحديد التصنيف للصنف");
+      }
+
+      const nextCategory = String(data.category).trim();
+      const nextIngredient =
+        !prod.activeIngredient?.trim() && data.detectedActiveIngredient
+          ? String(data.detectedActiveIngredient).trim()
+          : prod.activeIngredient;
+
+      const updatedProd: Product = {
+        ...prod,
+        category: nextCategory,
+        ...(nextIngredient ? { activeIngredient: nextIngredient } : {}),
+      };
+
+      setProducts((prev) => prev.map((p) => (p.id === prod.id ? updatedProd : p)));
+      await syncToFirebase("products", "set", prod.id, updatedProd);
+
+      try {
+        await fetch(`/api/products/${prod.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category: nextCategory,
+            ...(nextIngredient ? { activeIngredient: nextIngredient } : {}),
+          }),
+        });
+      } catch (netErr) {
+        console.warn("Backend single product AI category update error:", netErr);
+      }
+
+      showSuccess(`تم تصنيف "${prod.name}" إلى (${nextCategory}) عبر Gemini AI`);
+    } catch (e: any) {
+      showError(e?.message || "تعذر تصنيف الصنف عبر Gemini AI");
+    } finally {
+      setAiSingleSuggestingId(null);
     }
   };
 
@@ -4471,6 +5189,9 @@ export default function App() {
 
     setLoading(true);
     try {
+      const parsedStock = newProductForm.stock.trim() !== "" ? Number(newProductForm.stock) : undefined;
+      const parsedThreshold = newProductForm.lowStockThreshold.trim() !== "" ? Number(newProductForm.lowStockThreshold) : undefined;
+
       const prodPayload: Product = {
         id: "p_" + Date.now(),
         name: newProductForm.name.trim(),
@@ -4480,6 +5201,8 @@ export default function App() {
         price: newProductForm.price.trim(),
         bonus: newProductForm.bonus.trim() ? formatBonusDisplay(newProductForm.bonus.trim()) : "",
         unit: newProductForm.unit.trim() || "علبة",
+        ...(parsedStock !== undefined && !isNaN(parsedStock) && parsedStock >= 0 ? { stock: parsedStock } : {}),
+        ...(parsedThreshold !== undefined && !isNaN(parsedThreshold) && parsedThreshold >= 1 ? { lowStockThreshold: parsedThreshold } : {}),
       };
 
       // Immediate state update
@@ -4507,6 +5230,8 @@ export default function App() {
         price: "",
         bonus: "",
         unit: "علبة",
+        stock: "",
+        lowStockThreshold: "",
       });
       fetchProducts();
     } catch (e) {
@@ -5010,13 +5735,24 @@ export default function App() {
           location: u.location || "",
           role: u.role || "pharmacy",
           phone: u.phone,
+          email: u.email,
           isApproved: u.isApproved !== undefined ? u.isApproved : (u.status === "approved" || !u.status),
           status: u.status || (u.isApproved === false ? "pending_approval" : "approved"),
           confirmationCode: u.confirmationCode,
+          permissions: u.permissions,
           createdAt: u.createdAt,
         };
       });
   }, [registeredUsers]);
+
+  const pendingClientsCount = useMemo(
+    () => uniqueClients.filter((c) => c.isApproved === false || c.status === "pending_approval").length,
+    [uniqueClients]
+  );
+  const pendingDoctorsCount = useMemo(
+    () => uniqueClients.filter((c) => c.role === "doctor" && (c.isApproved === false || c.status === "pending_approval")).length,
+    [uniqueClients]
+  );
 
   const renderDeviceNotificationBanner = () => {
     return (
@@ -5316,7 +6052,15 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 antialiased selection:bg-teal-500 selection:text-white" dir="rtl">
+    <div className="min-h-screen relative bg-slate-50 font-sans text-slate-800 antialiased selection:bg-teal-500 selection:text-white" dir="rtl">
+      {/* Official Portrait App Background Wallpaper */}
+      <div
+        aria-hidden="true"
+        className="no-print fixed inset-0 z-0 pointer-events-none select-none bg-[url('/dr-belal.jpg')] bg-cover bg-center bg-no-repeat"
+      >
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-50/72 via-slate-50/80 to-teal-50/76 backdrop-blur-[1px]" />
+      </div>
+
       {/* Dynamic Toast / Feedback overlay */}
       <AnimatePresence>
         {successMsg && (
@@ -5349,17 +6093,19 @@ export default function App() {
       </AnimatePresence>
 
       {isCVPageVisible ? (
-        <SecretCVPage onBack={() => setIsCVPageVisible(false)} />
+        <div className="relative z-10">
+          <SecretCVPage onBack={() => setIsCVPageVisible(false)} />
+        </div>
       ) : !user ? (
         /* GUEST / UNAUTHENTICATED LOGIN SCREEN */
-        <div className="min-h-screen bg-slate-50 flex flex-col justify-between" dir="rtl">
+        <div className="relative z-10 min-h-screen bg-transparent flex flex-col justify-between" dir="rtl">
           {/* Main Header */}
           <header className="sticky top-0 z-40 border-b border-teal-500/20 bg-gradient-to-r from-white/95 via-teal-50/50 to-white/95 backdrop-blur-md shadow-xs ring-1 ring-teal-500/10">
             <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <div className="relative shrink-0">
                   <img
-                    src={"/app-logo.png"}
+                    src={drProfileAvatar}
                     alt="شعار التطبيق"
                     className="h-11 w-11 rounded-xl object-cover shadow-md border-2 border-teal-500/40"
                     referrerPolicy="no-referrer"
@@ -5413,7 +6159,7 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white/92 backdrop-blur-md shadow-xl"
             >
               <div className="bg-gradient-to-b from-teal-500/10 to-transparent p-4 sm:p-5 text-center">
 
@@ -5940,13 +6686,16 @@ export default function App() {
 
                       <div>
                         <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                          رقم الهاتف المعتمد
+                          رقم الهاتف المعتمد *
                         </label>
                         <input
-                          type="text"
+                          type="tel"
+                          placeholder="مثال: 770000000"
                           value={phone}
-                          disabled
-                          className="w-full rounded-xl border border-slate-100 bg-slate-100 px-3 py-3 text-center font-mono text-slate-500"
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center font-mono text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none"
+                          id="input-reg-phone"
+                          required
                         />
                       </div>
                     </div>
@@ -5988,15 +6737,15 @@ export default function App() {
             </motion.div>
           </main>
 
-          <footer className="border-t border-slate-200 bg-white py-2 text-center text-3xs text-slate-400 shrink-0">
+          <footer className="border-t border-slate-200 bg-white/90 backdrop-blur-xs py-2 text-center text-3xs text-slate-400 shrink-0">
             <p>© {new Date().getFullYear()} تطبيق مندوبك الطبي (د/ بلال القيسي). جميع الحقوق محفوظة.</p>
           </footer>
         </div>
       ) : (
         /* AUTHENTICATED APP SHELL WITH SIDEBAR NAVIGATION */
-        <div className="min-h-screen bg-slate-100/80 font-sans antialiased text-slate-800 flex flex-col lg:flex-row dir-rtl">
+        <div className="relative z-10 min-h-screen bg-transparent font-sans antialiased text-slate-800 flex flex-col lg:flex-row dir-rtl">
           {/* DESKTOP STICKY SIDEBAR (RIGHT SIDE) */}
-          <aside className={`hidden lg:flex flex-col border-l border-slate-200/90 bg-white sticky top-0 h-screen transition-all duration-300 z-30 shadow-xs shrink-0 ${
+          <aside className={`hidden lg:flex flex-col border-l border-slate-200/90 bg-white/94 backdrop-blur-md sticky top-0 h-screen transition-all duration-300 z-30 shadow-xs shrink-0 ${
             isSidebarCollapsed ? "w-16" : "w-64"
           }`}>
             {/* Sidebar Header & Brand */}
@@ -6004,7 +6753,7 @@ export default function App() {
               <div className="flex items-center gap-2 overflow-hidden">
                 <div className="relative shrink-0">
                   <img
-                    src={"/app-logo.png"}
+                    src={drProfileAvatar}
                     alt="شعار التطبيق"
                     className="h-8 w-8 rounded-lg object-cover shadow-xs border border-teal-500/40"
                     referrerPolicy="no-referrer"
@@ -6042,7 +6791,7 @@ export default function App() {
                       title="اضغط لعرض صورة د/ بلال القيسي بالكامل"
                     >
                       <img
-                        src={"/app-logo.png"}
+                        src={drProfileAvatar}
                         alt="د/ بلال القيسي"
                         className="h-10 w-10 rounded-full object-cover border-2 border-teal-500 shadow-sm group-hover:scale-105 transition-transform ring-2 ring-teal-500/20"
                         referrerPolicy="no-referrer"
@@ -6214,6 +6963,8 @@ export default function App() {
                       icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
                       label="العملاء المسجلون"
                       active={repTab === "clients"}
+                      badge={pendingClientsCount > 0 ? pendingClientsCount : undefined}
+                      badgeColor="bg-amber-500 text-slate-950 font-black"
                       onClick={() => setRepTab("clients")}
                       collapsed={isSidebarCollapsed}
                       id="sidebar-rep-clients"
@@ -6379,14 +7130,16 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       id="sidebar-pharmacy-history"
                     />
-                    <SidebarNavItem
-                      icon={<ClipboardList className="h-4.5 w-4.5 text-cyan-600" />}
-                      label="كشوفات الجرد"
-                      active={activeTab === "reports"}
-                      onClick={() => setActiveTab("reports")}
-                      collapsed={isSidebarCollapsed}
-                      id="sidebar-pharmacy-reports"
-                    />
+                    {user?.permissions?.canAccessStockReports !== false && (
+                      <SidebarNavItem
+                        icon={<ClipboardList className="h-4.5 w-4.5 text-cyan-600" />}
+                        label="كشوفات الجرد"
+                        active={activeTab === "reports"}
+                        onClick={() => setActiveTab("reports")}
+                        collapsed={isSidebarCollapsed}
+                        id="sidebar-pharmacy-reports"
+                      />
+                    )}
                   </div>
 
                   <div className="space-y-1">
@@ -6395,14 +7148,16 @@ export default function App() {
                         الخدمات والتواصل
                       </div>
                     )}
-                    <SidebarNavItem
-                      icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
-                      label="سجل الزيارات الميدانية"
-                      active={activeTab === "visits"}
-                      onClick={() => setActiveTab("visits")}
-                      collapsed={isSidebarCollapsed}
-                      id="sidebar-pharmacy-visits"
-                    />
+                    {user?.permissions?.canViewVisits !== false && (
+                      <SidebarNavItem
+                        icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
+                        label="سجل الزيارات الميدانية"
+                        active={activeTab === "visits"}
+                        onClick={() => setActiveTab("visits")}
+                        collapsed={isSidebarCollapsed}
+                        id="sidebar-pharmacy-visits"
+                      />
+                    )}
                     <SidebarNavItem
                       icon={<MapPin className="h-4.5 w-4.5 text-teal-600" />}
                       label="خريطة التغطية (Google Maps) 🗺️"
@@ -6412,17 +7167,19 @@ export default function App() {
                       highlight
                       id="sidebar-pharmacy-maps"
                     />
-                    <SidebarNavItem
-                      icon={<FileCheck2 className="h-4.5 w-4.5 text-teal-600" />}
-                      label="الاتفاقيات والبونص 🎁"
-                      active={activeTab === "agreements"}
-                      badge={agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length > 0 ? agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length : undefined}
-                      badgeColor="bg-amber-500 text-slate-950 font-black"
-                      onClick={() => setActiveTab("agreements")}
-                      collapsed={isSidebarCollapsed}
-                      highlight
-                      id="sidebar-pharmacy-agreements"
-                    />
+                    {user?.permissions?.canViewAgreements !== false && (
+                      <SidebarNavItem
+                        icon={<FileCheck2 className="h-4.5 w-4.5 text-teal-600" />}
+                        label="الاتفاقيات والبونص 🎁"
+                        active={activeTab === "agreements"}
+                        badge={agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length > 0 ? agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length : undefined}
+                        badgeColor="bg-amber-500 text-slate-950 font-black"
+                        onClick={() => setActiveTab("agreements")}
+                        collapsed={isSidebarCollapsed}
+                        highlight
+                        id="sidebar-pharmacy-agreements"
+                      />
+                    )}
                     <SidebarNavItem
                       icon={<MessageSquare className="h-4.5 w-4.5 text-emerald-600" />}
                       label="مراسلات Google Chat 💬"
@@ -6434,16 +7191,23 @@ export default function App() {
                       highlight
                       id="sidebar-pharmacy-complaints"
                     />
-                    <SidebarNavItem
-                      icon={<Bell className="h-4.5 w-4.5 text-amber-500" />}
-                      label="الإشعارات والتعاميم"
-                      active={activeTab === "notifications"}
-                      badge={notifications.length > 0 ? notifications.length : undefined}
-                      badgeColor="bg-amber-500 text-slate-950 font-black"
-                      onClick={() => setActiveTab("notifications")}
-                      collapsed={isSidebarCollapsed}
-                      id="sidebar-pharmacy-notifications"
-                    />
+                    {(() => {
+                      const visibleNotifCount = notifications.filter(
+                        (n) => n.type === "broadcast" || user?.permissions?.canReceiveTargetedNotifications !== false
+                      ).length;
+                      return (
+                        <SidebarNavItem
+                          icon={<Bell className="h-4.5 w-4.5 text-amber-500" />}
+                          label="الإشعارات والتعاميم"
+                          active={activeTab === "notifications"}
+                          badge={visibleNotifCount > 0 ? visibleNotifCount : undefined}
+                          badgeColor="bg-amber-500 text-slate-950 font-black"
+                          onClick={() => setActiveTab("notifications")}
+                          collapsed={isSidebarCollapsed}
+                          id="sidebar-pharmacy-notifications"
+                        />
+                      );
+                    })()}
                     <SidebarNavItem
                       icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
                       label="البحث العلمي الطبي"
@@ -6653,7 +7417,7 @@ export default function App() {
                   title="عرض هوية وبطاقة د/ بلال القيسي"
                 >
                   <img
-                    src={"/app-logo.png"}
+                    src={drProfileAvatar}
                     alt="د/ بلال القيسي - مندوبك الطبي"
                     className="h-9 w-9 rounded-full object-cover border-2 border-teal-600 shadow-xs group-hover:scale-105 transition-transform ring-1 ring-teal-500/30"
                     referrerPolicy="no-referrer"
@@ -6746,7 +7510,7 @@ export default function App() {
                   <div className="p-4 border-b border-slate-100 flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                       <img
-                        src={"/app-logo.png"}
+                        src={drProfileAvatar}
                         alt="شعار"
                         className="h-9 w-9 rounded-xl object-cover border border-teal-500/40 shadow-xs"
                         referrerPolicy="no-referrer"
@@ -6775,7 +7539,7 @@ export default function App() {
                       title="اضغط لعرض صورة وهوية د/ بلال القيسي بالكامل"
                     >
                       <img
-                        src={"/app-logo.png"}
+                        src={drProfileAvatar}
                         alt="د/ بلال القيسي"
                         className="h-12 w-12 rounded-full object-cover border-2 border-teal-500 shadow-md group-hover:scale-105 transition-transform ring-2 ring-teal-500/20"
                         referrerPolicy="no-referrer"
@@ -6846,6 +7610,8 @@ export default function App() {
                             icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
                             label="العملاء المسجلون"
                             active={repTab === "clients"}
+                            badge={pendingClientsCount > 0 ? pendingClientsCount : undefined}
+                            badgeColor="bg-amber-500 text-slate-950 font-black"
                             onClick={() => { setRepTab("clients"); setIsMobileSidebarOpen(false); }}
                           />
                           <SidebarNavItem
@@ -6953,22 +7719,26 @@ export default function App() {
                             badgeColor="bg-teal-100 text-teal-800"
                             onClick={() => { setActiveTab("history"); setIsMobileSidebarOpen(false); }}
                           />
-                          <SidebarNavItem
-                            icon={<ClipboardList className="h-4.5 w-4.5 text-cyan-600" />}
-                            label="كشوفات الجرد"
-                            active={activeTab === "reports"}
-                            onClick={() => { setActiveTab("reports"); setIsMobileSidebarOpen(false); }}
-                          />
+                          {user?.permissions?.canAccessStockReports !== false && (
+                            <SidebarNavItem
+                              icon={<ClipboardList className="h-4.5 w-4.5 text-cyan-600" />}
+                              label="كشوفات الجرد"
+                              active={activeTab === "reports"}
+                              onClick={() => { setActiveTab("reports"); setIsMobileSidebarOpen(false); }}
+                            />
+                          )}
                         </div>
 
                         <div className="space-y-1">
                           <div className="px-3 text-4xs font-black uppercase text-slate-400">الخدمات والتواصل</div>
-                          <SidebarNavItem
-                            icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
-                            label="سجل الزيارات الميدانية"
-                            active={activeTab === "visits"}
-                            onClick={() => { setActiveTab("visits"); setIsMobileSidebarOpen(false); }}
-                          />
+                          {user?.permissions?.canViewVisits !== false && (
+                            <SidebarNavItem
+                              icon={<Users className="h-4.5 w-4.5 text-emerald-600" />}
+                              label="سجل الزيارات الميدانية"
+                              active={activeTab === "visits"}
+                              onClick={() => { setActiveTab("visits"); setIsMobileSidebarOpen(false); }}
+                            />
+                          )}
                           <SidebarNavItem
                             icon={<MapPin className="h-4.5 w-4.5 text-teal-600" />}
                             label="خريطة التغطية (Google Maps) 🗺️"
@@ -6976,15 +7746,17 @@ export default function App() {
                             onClick={() => { setActiveTab("maps"); setIsMobileSidebarOpen(false); }}
                             highlight
                           />
-                          <SidebarNavItem
-                            icon={<FileCheck2 className="h-4.5 w-4.5 text-teal-600" />}
-                            label="الاتفاقيات والبونص 🎁"
-                            active={activeTab === "agreements"}
-                            badge={agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length > 0 ? agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length : undefined}
-                            badgeColor="bg-amber-500 text-slate-950 font-black"
-                            onClick={() => { setActiveTab("agreements"); setIsMobileSidebarOpen(false); }}
-                            highlight
-                          />
+                          {user?.permissions?.canViewAgreements !== false && (
+                            <SidebarNavItem
+                              icon={<FileCheck2 className="h-4.5 w-4.5 text-teal-600" />}
+                              label="الاتفاقيات والبونص 🎁"
+                              active={activeTab === "agreements"}
+                              badge={agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length > 0 ? agreements.filter(a => (a.clientId === user?.id || a.clientPhone === user?.phone) && a.status === "pending").length : undefined}
+                              badgeColor="bg-amber-500 text-slate-950 font-black"
+                              onClick={() => { setActiveTab("agreements"); setIsMobileSidebarOpen(false); }}
+                              highlight
+                            />
+                          )}
                           <SidebarNavItem
                             icon={<MessageSquareHeart className="h-4.5 w-4.5 text-rose-600" />}
                             label="صندوق الشكاوى والاقتراحات 📬"
@@ -6994,14 +7766,21 @@ export default function App() {
                             onClick={() => { setActiveTab("complaints"); setIsMobileSidebarOpen(false); }}
                             highlight
                           />
-                          <SidebarNavItem
-                            icon={<Bell className="h-4.5 w-4.5 text-amber-500" />}
-                            label="الإشعارات والتعاميم"
-                            active={activeTab === "notifications"}
-                            badge={notifications.length > 0 ? notifications.length : undefined}
-                            badgeColor="bg-amber-500 text-slate-950 font-black"
-                            onClick={() => { setActiveTab("notifications"); setIsMobileSidebarOpen(false); }}
-                          />
+                          {(() => {
+                            const visibleNotifCount = notifications.filter(
+                              (n) => n.type === "broadcast" || user?.permissions?.canReceiveTargetedNotifications !== false
+                            ).length;
+                            return (
+                              <SidebarNavItem
+                                icon={<Bell className="h-4.5 w-4.5 text-amber-500" />}
+                                label="الإشعارات والتعاميم"
+                                active={activeTab === "notifications"}
+                                badge={visibleNotifCount > 0 ? visibleNotifCount : undefined}
+                                badgeColor="bg-amber-500 text-slate-950 font-black"
+                                onClick={() => { setActiveTab("notifications"); setIsMobileSidebarOpen(false); }}
+                              />
+                            );
+                          })()}
                           <SidebarNavItem
                             icon={<BookOpen className="h-4.5 w-4.5 text-blue-600" />}
                             label="البحث العلمي الطبي"
@@ -7177,7 +7956,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setRepTab("clients")}
-                    className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all ${
+                    className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all relative ${
                       repTab === "clients"
                         ? "text-teal-700 font-black bg-teal-50/90 shadow-2xs"
                         : "text-slate-500 hover:text-slate-900"
@@ -7185,6 +7964,11 @@ export default function App() {
                   >
                     <Users className={`h-5 w-5 ${repTab === "clients" ? "scale-110 text-teal-700" : ""}`} />
                     <span className="text-[10px] font-bold mt-0.5">العملاء</span>
+                    {pendingClientsCount > 0 && (
+                      <span className="absolute top-0.5 right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-black text-slate-950 shadow-xs animate-pulse">
+                        {pendingClientsCount}
+                      </span>
+                    )}
                   </button>
 
                   <button
@@ -7237,18 +8021,20 @@ export default function App() {
                     <span className="text-[10px] font-bold mt-0.5">طلبياتي</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("reports")}
-                    className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all ${
-                      activeTab === "reports"
-                        ? "text-teal-700 font-black bg-teal-50/90 shadow-2xs"
-                        : "text-slate-500 hover:text-slate-900"
-                    }`}
-                  >
-                    <BarChart2 className={`h-5 w-5 ${activeTab === "reports" ? "scale-110 text-teal-700" : ""}`} />
-                    <span className="text-[10px] font-bold mt-0.5">جرد المخزون</span>
-                  </button>
+                  {user?.permissions?.canAccessStockReports !== false && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("reports")}
+                      className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all ${
+                        activeTab === "reports"
+                          ? "text-teal-700 font-black bg-teal-50/90 shadow-2xs"
+                          : "text-slate-500 hover:text-slate-900"
+                      }`}
+                    >
+                      <BarChart2 className={`h-5 w-5 ${activeTab === "reports" ? "scale-110 text-teal-700" : ""}`} />
+                      <span className="text-[10px] font-bold mt-0.5">جرد المخزون</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -7370,6 +8156,37 @@ export default function App() {
           /* CLIENT ROLE: MEDICAL REPRESENTATIVE (ADMIN / SALES DELEGATE) */
           /* ============================================================== */
           <div className="space-y-3 sm:space-y-4">
+            {/* Prominent Alert Banner for Pending Doctor/Pharmacy Registration Requests */}
+            {pendingClientsCount > 0 && (
+              <div className="rounded-xl border border-amber-300 bg-gradient-to-l from-amber-50 via-white to-amber-50/70 p-3 sm:p-3.5 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
+                    <Clock className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-amber-950">
+                      يوجد {pendingClientsCount} طلب تسجيل جديد بانتظار اعتمادك!
+                      {pendingDoctorsCount > 0 ? ` (منها ${pendingDoctorsCount} طبيب / عيادة 🩺)` : ""}
+                    </h4>
+                    <p className="text-3xs text-amber-800">
+                      راجع بيانات الأطباء والصيدليات الجديدة وقم باعتمادها أو إرسال رمز التأكيد عبر الواتساب.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepTab("clients");
+                    setClientRoleFilter("pending");
+                  }}
+                  className="shrink-0 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 text-xs font-black shadow-xs transition-all cursor-pointer"
+                  id="btn-banner-pending-clients"
+                >
+                  مراجعة طلبات التسجيل ({pendingClientsCount}) ←
+                </button>
+              </div>
+            )}
+
             {/* Sales Representative Top Stats Cards - Luxury Modern Grid */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 sm:gap-3">
               <div className="glass-card glass-card-hover rounded-xl p-3 sm:p-3.5 border border-slate-200/90 relative overflow-hidden">
@@ -8411,11 +9228,11 @@ export default function App() {
                               type="button"
                               onClick={handleCategorizeProduct}
                               disabled={loading}
-                              className="inline-flex items-center gap-1 text-3xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg px-2 py-0.5 transition-colors cursor-pointer"
-                              title="اقتراح التصنيف باستخدام الذكاء الاصطناعي"
+                              className="inline-flex items-center gap-1 text-3xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg px-2 py-0.5 transition-colors cursor-pointer disabled:opacity-50"
+                              title="تحليل اسم الصنف واقتراح التصنيف تلقائياً عبر Gemini AI"
                             >
                               <Sparkles className="h-3 w-3 text-indigo-600" />
-                              <span>{loading ? "جاري الاقتراح..." : "اقتراح AI"}</span>
+                              <span>{loading ? "جاري التحليل..." : "تصنيف AI"}</span>
                             </button>
                             <button
                               type="button"
@@ -8541,15 +9358,39 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="sm:col-span-3">
-                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">وصف مختصر للصنف ومؤشر الاستخدام</label>
-                        <input
-                          type="text"
-                          placeholder="مثال: خافض حرارة ومسكن فعال يحتوي على باراسيتامول..."
-                          value={newProductForm.description}
-                          onChange={(e) => setNewProductForm({ ...newProductForm, description: e.target.value })}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
-                        />
+                      <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="sm:col-span-1">
+                          <label className="block text-xs font-semibold text-slate-600 mb-1.5">الرصيد المتاح بالمخزون (اختياري)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="مثال: 25"
+                            value={newProductForm.stock}
+                            onChange={(e) => setNewProductForm({ ...newProductForm, stock: e.target.value })}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
+                          />
+                        </div>
+                        <div className="sm:col-span-1">
+                          <label className="block text-xs font-semibold text-slate-600 mb-1.5">حد التنبيه الخاص بالصنف (افتراضي: {lowStockThreshold})</label>
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder={`افتراضي: ${lowStockThreshold}`}
+                            value={newProductForm.lowStockThreshold}
+                            onChange={(e) => setNewProductForm({ ...newProductForm, lowStockThreshold: e.target.value })}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
+                          />
+                        </div>
+                        <div className="sm:col-span-1">
+                          <label className="block text-xs font-semibold text-slate-600 mb-1.5">وصف مختصر للصنف ومؤشر الاستخدام</label>
+                          <input
+                            type="text"
+                            placeholder="مثال: خافض حرارة ومسكن فعال..."
+                            value={newProductForm.description}
+                            onChange={(e) => setNewProductForm({ ...newProductForm, description: e.target.value })}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs font-medium focus:border-teal-500 focus:outline-none"
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -8561,133 +9402,484 @@ export default function App() {
                     </button>
                   </form>
 
-                  {/* List of current products with option to delete */}
-                  <div className="space-y-3 w-full">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-black text-slate-900">أصناف الكتالوج الحالية في التطبيق ({products.length})</h4>
-                    </div>
+                  {/* Gemini AI Catalog Auto-Classification Bar & Review Panel */}
+                  {(() => {
+                    const generalCount = products.filter(
+                      (p) => !p.category || p.category.trim() === "" || p.category.trim() === "عام"
+                    ).length;
+                    const changedSuggestionsCount = aiCatalogSuggestions.filter(
+                      (s) => s.suggestedCategory !== s.currentCategory
+                    ).length;
+                    const displayedSuggestions = aiShowOnlyChanges
+                      ? aiCatalogSuggestions.filter(
+                          (s) => s.suggestedCategory !== s.currentCategory || (!s.currentActiveIngredient && s.detectedActiveIngredient)
+                        )
+                      : aiCatalogSuggestions;
+                    const selectedCount = aiCatalogSuggestions.filter((s) => s.selected).length;
 
-                    {/* Mobile View: Full Width Product Cards */}
-                    <div className="grid grid-cols-1 gap-3 md:hidden w-full">
-                      {products.map((prod, idx) => (
-                        <div
-                          key={`adm-mob-prod-${prod.id || 'p'}-${idx}`}
-                          className="p-3.5 rounded-2xl border border-slate-200 bg-white shadow-2xs space-y-2.5 w-full"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="font-black text-slate-950 text-sm">{prod.name}</div>
-                              <span
-                                className="inline-flex items-center gap-1 mt-0.5 text-3xs font-bold px-2 py-0.5 rounded-full border shadow-3xs"
-                                style={{
-                                  backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
-                                  borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
-                                  color: getCategoryColor(prod.category, categoryColors),
-                                }}
-                              >
-                                <span
-                                  className="w-1.5 h-1.5 rounded-full"
-                                  style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
-                                />
-                                {prod.category}
-                              </span>
+                    return (
+                      <div className="rounded-2xl border border-indigo-200 bg-gradient-to-l from-indigo-50/70 via-white to-teal-50/50 p-3.5 sm:p-4 shadow-2xs space-y-3">
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <div className="h-7 w-7 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                                <Wand2 className="h-4 w-4" />
+                              </div>
+                              <h4 className="text-sm font-black text-slate-900">
+                                تصنيف أصناف الكتالوج تلقائياً عبر Gemini AI
+                              </h4>
                             </div>
-                            <div className="text-left shrink-0">
-                              <div className="font-mono font-black text-teal-700 text-sm">{prod.price}</div>
-                              <div className="text-3xs text-slate-400">للـ {prod.unit}</div>
-                            </div>
+                            <p className="text-2xs text-slate-600 pr-9">
+                              تحليل أسماء الأدوية والمستحضرات في القائمة وتوزيعها تلقائياً على الفئات المتاحة ({availableCategories.length} فئة) لتقليل الإدخال اليدوي.
+                            </p>
                           </div>
 
-                          {prod.description && (
-                            <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100 leading-relaxed">
-                              {prod.description}
-                            </p>
-                          )}
-
-                          <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                            {prod.bonus ? (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 px-2.5 py-0.5 text-2xs font-black text-amber-900">
-                                🎁 البونص {formatBonusDisplay(prod.bonus)}
+                          <div className="flex flex-wrap items-center gap-2 pr-9 md:pr-0">
+                            <button
+                              type="button"
+                              disabled={aiClassifyingCatalog || aiApplyingCatalog || generalCount === 0}
+                              onClick={() => handleBatchClassifyCatalog("general")}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Sparkles className={`h-3.5 w-3.5 ${aiClassifyingCatalog && aiClassificationScope === "general" ? "animate-spin" : ""}`} />
+                              <span>
+                                {aiClassifyingCatalog && aiClassificationScope === "general"
+                                  ? "جاري تحليل الأصناف..."
+                                  : `تصنيف الأصناف العامة (${generalCount})`}
                               </span>
-                            ) : (
-                              <span className="text-3xs text-slate-400">بدون بونص</span>
-                            )}
+                            </button>
 
                             <button
-                              onClick={() => handleDeleteProduct(prod.id, prod.name)}
-                              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 active:scale-95 transition-all"
-                              title="حذف الصنف"
+                              type="button"
+                              disabled={aiClassifyingCatalog || aiApplyingCatalog || products.length === 0}
+                              onClick={() => handleBatchClassifyCatalog("all")}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-800 border border-indigo-200 px-3 py-2 text-xs font-bold shadow-2xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              <span>حذف الصنف</span>
+                              <Tags className="h-3.5 w-3.5 text-indigo-600" />
+                              <span>
+                                {aiClassifyingCatalog && aiClassificationScope === "all"
+                                  ? "جاري تحليل الكتالوج..."
+                                  : `تحليل كل الكتالوج (${products.length})`}
+                              </span>
                             </button>
                           </div>
                         </div>
-                      ))}
-                    </div>
 
-                    {/* Desktop View: Full Responsive Table */}
-                    <div className="hidden md:block overflow-x-auto rounded-2xl border border-slate-200 w-full bg-white shadow-2xs">
-                      <table className="w-full text-right text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                            <th className="p-3">اسم الصنف</th>
-                            <th className="p-3">الفئة</th>
-                            <th className="p-3 text-center">السعر والوحدة</th>
-                            <th className="p-3 text-center">البونص 🎁</th>
-                            <th className="p-3">الوصف</th>
-                            <th className="p-3 text-center">إجراءات</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {products.map((prod, idx) => (
-                            <tr key={`adm-prod-${prod.id || 'p'}-${idx}`} className="hover:bg-slate-50 transition-colors">
-                              <td className="p-3">
-                                <div className="font-bold text-slate-900">{prod.name}</div>
-                                <div className="text-xs text-teal-700 font-medium mt-0.5">{prod.description}</div>
-                              </td>
-                              <td className="p-3 text-slate-600">
-                                <span
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-3xs font-bold border shadow-3xs"
-                                  style={{
-                                    backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
-                                    borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
-                                    color: getCategoryColor(prod.category, categoryColors),
-                                  }}
-                                >
-                                  <span
-                                    className="w-2 h-2 rounded-full"
-                                    style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
-                                  />
-                                  {prod.category}
+                        {aiCatalogSuggestions.length > 0 && (
+                          <div className="rounded-xl border border-indigo-200/80 bg-white p-3 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="font-black text-slate-900">
+                                  نتائج التحليل ({aiCatalogSuggestions.length} صنف)
                                 </span>
-                              </td>
-                              <td className="p-3 text-center font-mono text-teal-700 font-bold">{prod.price} / {prod.unit}</td>
-                              <td className="p-3 text-center">
+                                <span className="text-3xs text-indigo-700 font-bold">
+                                  • تغييرات مقترحة: {changedSuggestionsCount}
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <label className="inline-flex items-center gap-1.5 text-3xs font-bold text-slate-700 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={aiApplyDetectedIngredient}
+                                    onChange={(e) => setAiApplyDetectedIngredient(e.target.checked)}
+                                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                  />
+                                  <span>تعبئة المادة الفعالة الفارغة تلقائياً</span>
+                                </label>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setAiShowOnlyChanges((prev) => !prev)}
+                                  className="rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 text-3xs font-bold text-slate-700 cursor-pointer"
+                                >
+                                  {aiShowOnlyChanges ? "عرض كل النتائج" : "عرض التغييرات فقط"}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const allSelected = displayedSuggestions.every((d) => d.selected);
+                                    const displayedIds = new Set(displayedSuggestions.map((d) => d.id));
+                                    setAiCatalogSuggestions((prev) =>
+                                      prev.map((s) =>
+                                        displayedIds.has(s.id) ? { ...s, selected: !allSelected } : s
+                                      )
+                                    );
+                                  }}
+                                  className="rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 text-3xs font-bold text-slate-700 cursor-pointer"
+                                >
+                                  {displayedSuggestions.length > 0 && displayedSuggestions.every((d) => d.selected)
+                                    ? "إلغاء تحديد الكل"
+                                    : "تحديد الكل"}
+                                </button>
+                              </div>
+                            </div>
+
+                            {displayedSuggestions.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-slate-500">
+                                جميع الأصناف المحلّلة مطابقة لتصنيفاتها الحالية. يمكنك الضغط على "عرض كل النتائج" لمراجعتها.
+                              </div>
+                            ) : (
+                              <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+                                {displayedSuggestions.map((item) => {
+                                  const isChanged = item.suggestedCategory !== item.currentCategory;
+                                  return (
+                                    <div
+                                      key={`ai-cat-${item.id}`}
+                                      className={`p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs ${
+                                        item.selected ? "bg-indigo-50/35" : "bg-white opacity-75"
+                                      }`}
+                                    >
+                                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={item.selected}
+                                          onChange={(e) =>
+                                            setAiCatalogSuggestions((prev) =>
+                                              prev.map((s) =>
+                                                s.id === item.id ? { ...s, selected: e.target.checked } : s
+                                              )
+                                            )
+                                          }
+                                          className="mt-1 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 cursor-pointer"
+                                        />
+                                        <div className="min-w-0 flex-1 space-y-0.5">
+                                          <div className="font-bold text-slate-900 truncate">{item.productName}</div>
+                                          <div className="text-3xs text-slate-500 flex flex-wrap items-center gap-1.5">
+                                            <span>الحالي: <strong className="text-slate-700">{item.currentCategory}</strong></span>
+                                            <span>·</span>
+                                            <span>الثقة: <strong className="text-indigo-700">{item.confidence}</strong></span>
+                                            {item.detectedActiveIngredient && (
+                                              <>
+                                                <span>·</span>
+                                                <span className="text-teal-700 font-medium">
+                                                  المادة العلمية: {item.detectedActiveIngredient}
+                                                </span>
+                                              </>
+                                            )}
+                                          </div>
+                                          {item.reason && (
+                                            <div className="text-3xs text-slate-500">{item.reason}</div>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-2 shrink-0 pr-6 sm:pr-0">
+                                        <select
+                                          value={item.suggestedCategory}
+                                          onChange={(e) =>
+                                            setAiCatalogSuggestions((prev) =>
+                                              prev.map((s) =>
+                                                s.id === item.id
+                                                  ? { ...s, suggestedCategory: e.target.value, selected: true }
+                                                  : s
+                                              )
+                                            )
+                                          }
+                                          style={{
+                                            borderRightColor: getCategoryColor(item.suggestedCategory, categoryColors),
+                                            borderRightWidth: "4px",
+                                          }}
+                                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-2xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer"
+                                        >
+                                          {availableCategories.map((cat) => (
+                                            <option key={cat} value={cat}>
+                                              {cat}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        {isChanged && (
+                                          <span className="text-3xs font-bold text-emerald-700">تحديث</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAiCatalogSuggestions([]);
+                                  setAiClassificationScope(null);
+                                }}
+                                disabled={aiApplyingCatalog}
+                                className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-1.5 text-xs font-bold text-slate-600 cursor-pointer"
+                              >
+                                إغلاق
+                              </button>
+                              <button
+                                type="button"
+                                disabled={aiApplyingCatalog || selectedCount === 0}
+                                onClick={handleApplyBatchCatalogCategories}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white px-4 py-1.5 text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                <span>
+                                  {aiApplyingCatalog
+                                    ? "جاري حفظ التصنيفات..."
+                                    : `اعتماد وتطبيق المختار (${selectedCount})`}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* List of current products with option to delete & immediate low-stock warning badges */}
+                  {(() => {
+                    const catalogWithStock = products.map((prod) => ({
+                      prod,
+                      stockWarning: evaluateProductStockWarning(prod, {
+                        remainingInput: remainingInputs[prod.id],
+                        latestReportsMap: latestStockReportsByProduct,
+                        defaultThreshold: lowStockThreshold,
+                        combineSourcesForRep: true,
+                      }),
+                    }));
+                    const lowStockCatalogCount = catalogWithStock.filter((item) => item.stockWarning.isBelowThreshold).length;
+                    const visibleCatalogItems = showOnlyLowStockCatalog
+                      ? catalogWithStock.filter((item) => item.stockWarning.isBelowThreshold)
+                      : catalogWithStock;
+
+                    return (
+                      <div className="space-y-3 w-full">
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-2xs">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-black text-slate-900">
+                              أصناف الكتالوج الحالية في التطبيق ({products.length})
+                            </h4>
+                            {lowStockCatalogCount > 0 && (
+                              <span
+                                data-testid="catalog-low-stock-alert-summary"
+                                className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2.5 py-0.5 text-3xs font-black text-rose-900"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5 text-rose-600 animate-pulse" />
+                                <span>تنبيه المندوب: {lowStockCatalogCount} صنف دون الحد</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-3xs font-bold text-slate-700">
+                              <span>حد تنبيه المخزون (&lt;):</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="999"
+                                value={lowStockThreshold}
+                                onChange={(e) => setLowStockThreshold(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                className="w-12 rounded-lg border border-slate-300 bg-white px-1.5 py-0.5 text-center font-mono text-xs font-black text-rose-700 focus:border-teal-500 focus:outline-none"
+                                aria-label="حد تنبيه نقص المخزون"
+                              />
+                            </label>
+
+                            {lowStockCatalogCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setShowOnlyLowStockCatalog((prev) => !prev)}
+                                className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1 text-3xs font-black transition-all cursor-pointer ${
+                                  showOnlyLowStockCatalog
+                                    ? "bg-rose-600 text-white border-rose-700 shadow-xs"
+                                    : "bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100"
+                                }`}
+                              >
+                                <AlertTriangle className="h-3 w-3" />
+                                <span>
+                                  {showOnlyLowStockCatalog
+                                    ? "عرض كل الأصناف"
+                                    : `تصفية المنخفض (${lowStockCatalogCount})`}
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Mobile View: Full Width Product Cards */}
+                        <div className="grid grid-cols-1 gap-3 md:hidden w-full">
+                          {visibleCatalogItems.map(({ prod, stockWarning }, idx) => (
+                            <div
+                              key={`adm-mob-prod-${prod.id || 'p'}-${idx}`}
+                              className={`p-3.5 rounded-2xl border bg-white shadow-2xs space-y-2.5 w-full transition-colors ${
+                                stockWarning.severity === "critical"
+                                  ? "border-rose-400 bg-rose-50/20"
+                                  : stockWarning.severity === "warning"
+                                  ? "border-amber-400 bg-amber-50/20"
+                                  : "border-slate-200"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-black text-slate-950 text-sm">{prod.name}</div>
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    <span
+                                      className="inline-flex items-center gap-1 text-3xs font-bold px-2 py-0.5 rounded-full border shadow-3xs"
+                                      style={{
+                                        backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
+                                        borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
+                                        color: getCategoryColor(prod.category, categoryColors),
+                                      }}
+                                    >
+                                      <span
+                                        className="w-1.5 h-1.5 rounded-full"
+                                        style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
+                                      />
+                                      {prod.category}
+                                    </span>
+                                    <StockWarningBadge evaluation={stockWarning} productId={prod.id} />
+                                  </div>
+                                </div>
+                                <div className="text-left shrink-0">
+                                  <div className="font-mono font-black text-teal-700 text-sm">{prod.price}</div>
+                                  <div className="text-3xs text-slate-400">للـ {prod.unit}</div>
+                                </div>
+                              </div>
+
+                              {stockWarning.isBelowThreshold && stockWarning.lowestReportEntity && (
+                                <div className="text-3xs font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl px-2.5 py-1.5 flex items-center gap-1.5">
+                                  <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                                  <span>
+                                    تنبيه فوري: رصيد منخفض في {stockWarning.lowestReportEntity}
+                                    {stockWarning.affectedEntitiesCount > 1
+                                      ? ` (+${stockWarning.affectedEntitiesCount - 1} منشآت أخرى)`
+                                      : ""}
+                                  </span>
+                                </div>
+                              )}
+
+                              {prod.description && (
+                                <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100 leading-relaxed">
+                                  {prod.description}
+                                </p>
+                              )}
+
+                              <div className="flex items-center justify-between pt-1 border-t border-slate-100">
                                 {prod.bonus ? (
-                                  <span className="inline-block rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 text-2xs font-black text-amber-900">
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 px-2.5 py-0.5 text-2xs font-black text-amber-900">
                                     🎁 البونص {formatBonusDisplay(prod.bonus)}
                                   </span>
                                 ) : (
-                                  <span className="text-slate-300">-</span>
+                                  <span className="text-3xs text-slate-400">بدون بونص</span>
                                 )}
-                              </td>
-                              <td className="p-3 text-slate-500 max-w-xs truncate">{prod.description}</td>
-                              <td className="p-3 text-center">
-                                <button
-                                  onClick={() => handleDeleteProduct(prod.id, prod.name)}
-                                  className="rounded-lg p-2 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors"
-                                  title="حذف الصنف"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </td>
-                            </tr>
+
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleClassifySingleCatalogProduct(prod)}
+                                    disabled={aiSingleSuggestingId === prod.id}
+                                    className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                                    title="تحليل وتصنيف الصنف تلقائياً عبر Gemini AI"
+                                  >
+                                    <Sparkles className={`h-3.5 w-3.5 ${aiSingleSuggestingId === prod.id ? "animate-spin" : ""}`} />
+                                    <span>{aiSingleSuggestingId === prod.id ? "جاري..." : "تصنيف AI"}</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleDeleteProduct(prod.id, prod.name)}
+                                    className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 active:scale-95 transition-all"
+                                    title="حذف الصنف"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <span>حذف الصنف</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
                           ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                        </div>
+
+                        {/* Desktop View: Full Responsive Table */}
+                        <div className="hidden md:block overflow-x-auto rounded-2xl border border-slate-200 w-full bg-white shadow-2xs">
+                          <table className="w-full text-right text-xs border-collapse">
+                            <thead>
+                              <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                                <th className="p-3">اسم الصنف وحالة المخزون</th>
+                                <th className="p-3">الفئة</th>
+                                <th className="p-3 text-center">السعر والوحدة</th>
+                                <th className="p-3 text-center">البونص 🎁</th>
+                                <th className="p-3">الوصف</th>
+                                <th className="p-3 text-center">إجراءات</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {visibleCatalogItems.map(({ prod, stockWarning }, idx) => (
+                                <tr
+                                  key={`adm-prod-${prod.id || 'p'}-${idx}`}
+                                  className={`transition-colors ${
+                                    stockWarning.severity === "critical"
+                                      ? "bg-rose-50/40 hover:bg-rose-50/70"
+                                      : stockWarning.severity === "warning"
+                                      ? "bg-amber-50/35 hover:bg-amber-50/60"
+                                      : "hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <td className="p-3">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="font-bold text-slate-900">{prod.name}</span>
+                                      <StockWarningBadge evaluation={stockWarning} productId={prod.id} compact />
+                                    </div>
+                                    <div className="text-xs text-teal-700 font-medium mt-0.5">{prod.description}</div>
+                                  </td>
+                                  <td className="p-3 text-slate-600">
+                                    <span
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-3xs font-bold border shadow-3xs"
+                                      style={{
+                                        backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
+                                        borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
+                                        color: getCategoryColor(prod.category, categoryColors),
+                                      }}
+                                    >
+                                      <span
+                                        className="w-2 h-2 rounded-full"
+                                        style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
+                                      />
+                                      {prod.category}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center font-mono text-teal-700 font-bold">{prod.price} / {prod.unit}</td>
+                                  <td className="p-3 text-center">
+                                    {prod.bonus ? (
+                                      <span className="inline-block rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 text-2xs font-black text-amber-900">
+                                        🎁 البونص {formatBonusDisplay(prod.bonus)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">-</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-slate-500 max-w-xs truncate">{prod.description}</td>
+                                  <td className="p-3 text-center">
+                                    <div className="inline-flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleClassifySingleCatalogProduct(prod)}
+                                        disabled={aiSingleSuggestingId === prod.id}
+                                        className="rounded-lg p-2 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-800 transition-colors cursor-pointer disabled:opacity-50"
+                                        title="تصنيف تلقائي عبر Gemini AI"
+                                      >
+                                        <Sparkles className={`h-4 w-4 ${aiSingleSuggestingId === prod.id ? "animate-spin" : ""}`} />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteProduct(prod.id, prod.name)}
+                                        className="rounded-lg p-2 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+                                        title="حذف الصنف"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -8702,7 +9894,8 @@ export default function App() {
                     client.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
                     client.entityName.toLowerCase().includes(clientSearch.toLowerCase()) ||
                     (client.location || "").toLowerCase().includes(clientSearch.toLowerCase()) ||
-                    (client.phone || "").toLowerCase().includes(clientSearch.toLowerCase());
+                    (client.phone || "").toLowerCase().includes(clientSearch.toLowerCase()) ||
+                    (client.email || "").toLowerCase().includes(clientSearch.toLowerCase());
                   
                   let matchesRole = true;
                   if (clientRoleFilter === "pharmacy") matchesRole = client.role === "pharmacy";
@@ -9284,6 +10477,13 @@ export default function App() {
                                     </p>
                                   )}
 
+                                  {client.email && (
+                                    <p className="text-2xs text-slate-500 flex items-center gap-1.5 font-mono">
+                                      <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                      <span className="dir-ltr truncate">{client.email}</span>
+                                    </p>
+                                  )}
+
                                   {client.confirmationCode && (
                                     <div className="flex items-center gap-2 pt-1">
                                       <span className="text-3xs text-slate-500 font-semibold">رمز التأكيد:</span>
@@ -9718,10 +10918,26 @@ export default function App() {
                               required
                             >
                               <option value="">-- اختر منشأة --</option>
-                              {uniqueClients.map((c, idx) => (
-                                <option key={`sel2-cli-${c.id || 'c'}-${idx}`} value={c.id}>{c.entityName}</option>
-                              ))}
+                              {uniqueClients.map((c, idx) => {
+                                const targetedDisabled = c.permissions?.canReceiveTargetedNotifications === false;
+                                return (
+                                  <option key={`sel2-cli-${c.id || 'c'}-${idx}`} value={c.id}>
+                                    {c.entityName}{targetedDisabled ? " (الإشعارات الموجهة معطّلة)" : ""}
+                                  </option>
+                                );
+                              })}
                             </select>
+                            {(() => {
+                              const picked = uniqueClients.find((c) => c.id === newNotifForm.targetClientId);
+                              if (picked?.permissions?.canReceiveTargetedNotifications === false) {
+                                return (
+                                  <p className="text-3xs text-amber-700 font-bold mt-1">
+                                    ملاحظة: صلاحية الإشعارات الموجهة معطّلة حالياً لهذا العميل في لوحة الأذونات بالإعدادات.
+                                  </p>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
                         )}
                       </div>
@@ -9819,7 +11035,7 @@ export default function App() {
 
               {repTab === "games" && (
                 <div className="p-6">
-                  <PharmaGames repAvatar={"/app-logo.png"} />
+                  <PharmaGames repAvatar={drProfileAvatar} />
                 </div>
               )}
 
@@ -10103,7 +11319,7 @@ export default function App() {
                           title="اضغط لعرض صورة وهوية د/ بلال القيسي بالكامل"
                         >
                           <img
-                            src={"/app-logo.png"}
+                            src={drProfileAvatar}
                             alt="د/ بلال القيسي"
                             className="h-16 w-16 sm:h-20 sm:w-20 rounded-full object-cover border-3 border-amber-400 shadow-xl shrink-0 ring-4 ring-amber-400/30 group-hover:scale-105 transition-transform"
                             referrerPolicy="no-referrer"
@@ -10510,20 +11726,55 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Micro Stats Counter Strip */}
-                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-4xs font-bold text-slate-500 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <span>📦 تم جردها: <strong className="text-teal-900 font-mono">{Object.values(remainingInputs).filter(v => v !== "").length}</strong></span>
-                      <span>🛒 أصناف بالطلبية: <strong className="text-indigo-900 font-mono">{Object.values(orderInputs).filter(v => Number(v) > 0).length}</strong></span>
-                      <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                        <span>💾</span>
-                        <span>حفظ تلقائي مفعل (Auto-save)</span>
-                      </span>
-                    </div>
-                    <span className="text-amber-800 font-semibold hidden xs:inline">
-                      💡 احتساب البونص وتخفيض السعر الصافي تلقائياً مع كل كمية
-                    </span>
-                  </div>
+                  {/* Micro Stats Counter Strip & Client-Side Low-Stock Threshold */}
+                  {(() => {
+                    const isRepUser = user?.role === "admin";
+                    const lowStockCardsCount = filteredProducts.filter((p) =>
+                      evaluateProductStockWarning(p, {
+                        remainingInput: remainingInputs[p.id],
+                        latestReportsMap: latestStockReportsByProduct,
+                        defaultThreshold: lowStockThreshold,
+                        combineSourcesForRep: isRepUser,
+                      }).isBelowThreshold
+                    ).length;
+
+                    return (
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-4xs font-bold text-slate-500 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>📦 تم جردها: <strong className="text-teal-900 font-mono">{Object.values(remainingInputs).filter(v => v !== "").length}</strong></span>
+                          <span>🛒 أصناف بالطلبية: <strong className="text-indigo-900 font-mono">{Object.values(orderInputs).filter(v => Number(v) > 0).length}</strong></span>
+                          {lowStockCardsCount > 0 && (
+                            <span
+                              data-testid="product-cards-low-stock-counter"
+                              className="inline-flex items-center gap-1 text-rose-900 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300 font-black"
+                            >
+                              <AlertTriangle className="h-3 w-3 text-rose-600 animate-pulse" />
+                              <span>تحت الحد ({lowStockCardsCount})</span>
+                            </span>
+                          )}
+                          <label className="inline-flex items-center gap-1 text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                            <span>حد التنبيه (&lt;):</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="999"
+                              value={lowStockThreshold}
+                              onChange={(e) => setLowStockThreshold(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                              className="w-9 rounded border border-slate-300 bg-white px-1 text-center font-mono font-black text-rose-700 focus:border-teal-500 focus:outline-none"
+                              aria-label="حد تنبيه نقص المخزون على البطاقات"
+                            />
+                          </label>
+                          <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            <span>💾</span>
+                            <span>حفظ تلقائي مفعل (Auto-save)</span>
+                          </span>
+                        </div>
+                        <span className="text-amber-800 font-semibold hidden xs:inline">
+                          💡 احتساب البونص وتخفيض السعر الصافي تلقائياً مع كل كمية
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* VIEW 1: ULTRA-COMPACT CARDS VIEW (Multi-Column Grid for Phones & Desktops) */}
@@ -10542,7 +11793,13 @@ export default function App() {
                         {filteredProducts.map((prod, index) => {
                           const remainingVal = remainingInputs[prod.id] || "";
                           const orderVal = orderInputs[prod.id] || "";
-                          const isLowStock = remainingVal !== "" && Number(remainingVal) <= 5;
+                          const stockWarning = evaluateProductStockWarning(prod, {
+                            remainingInput: remainingVal,
+                            latestReportsMap: latestStockReportsByProduct,
+                            defaultThreshold: lowStockThreshold,
+                            combineSourcesForRep: user?.role === "admin",
+                          });
+                          const isLowStock = stockWarning.isBelowThreshold;
                           const hasOrder = orderVal !== "" && Number(orderVal) > 0;
                           const orderQty = Number(orderVal) || 0;
                           const netCalc = calculateNetPrice(prod.price, prod.bonus);
@@ -10552,10 +11809,12 @@ export default function App() {
                             <div
                               key={`compact-card-${prod.id || 'p'}-${index}`}
                               className={`rounded-xl border transition-all bg-white p-2 sm:p-2.5 shadow-2xs flex flex-col justify-between space-y-1.5 hover:shadow-xs relative overflow-hidden ${
-                                hasOrder
-                                  ? "border-indigo-400 ring-1 ring-indigo-200 bg-indigo-50/15"
+                                stockWarning.severity === "critical"
+                                  ? "border-rose-400 ring-1 ring-rose-200 bg-rose-50/15"
                                   : isLowStock
-                                  ? "border-rose-300 bg-rose-50/10"
+                                  ? "border-amber-400 ring-1 ring-amber-200 bg-amber-50/15"
+                                  : hasOrder
+                                  ? "border-indigo-400 ring-1 ring-indigo-200 bg-indigo-50/15"
                                   : "border-slate-200 hover:border-teal-300"
                               }`}
                             >
@@ -10587,6 +11846,15 @@ export default function App() {
                                   {prod.name}
                                 </h4>
 
+                                {isLowStock && (
+                                  <StockWarningBadge
+                                    evaluation={stockWarning}
+                                    productId={prod.id}
+                                    compact
+                                    className="w-full justify-center"
+                                  />
+                                )}
+
                                 <div className="flex items-center justify-between text-3xs pt-0.5 border-t border-slate-100">
                                   <span className="font-mono font-black text-teal-700">
                                     {prod.price}
@@ -10612,37 +11880,41 @@ export default function App() {
                                   <span className="text-4xs font-bold text-teal-950 shrink-0">
                                     الجرد 📦:
                                   </span>
-                                  <div className="flex items-center gap-0.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleUpdateRemaining(prod.id, -1)}
-                                      className="h-5 w-5 rounded bg-white hover:bg-teal-100 text-teal-900 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer border border-teal-200 shadow-2xs"
-                                    >
-                                      -
-                                    </button>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      placeholder="0"
-                                      value={remainingVal}
-                                      onChange={(e) => setRemainingInputs({
-                                        ...remainingInputs,
-                                        [prod.id]: e.target.value
-                                      })}
-                                      className={`w-7 h-5 rounded border text-center font-mono font-bold text-3xs focus:outline-none ${
-                                        isLowStock
-                                          ? "border-rose-300 bg-rose-50 text-rose-800"
-                                          : "border-slate-200 bg-white text-slate-900"
-                                      }`}
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => handleUpdateRemaining(prod.id, 1)}
-                                      className="h-5 w-5 rounded bg-teal-700 hover:bg-teal-800 text-white font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer shadow-2xs"
-                                    >
-                                      +
-                                    </button>
-                                  </div>
+                                  {user?.role !== "rep" && user?.role !== "admin" && user?.permissions?.canAccessStockReports === false ? (
+                                    <span className="text-4xs font-bold text-slate-400">مقيّد من المسؤول</span>
+                                  ) : (
+                                    <div className="flex items-center gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateRemaining(prod.id, -1)}
+                                        className="h-5 w-5 rounded bg-white hover:bg-teal-100 text-teal-900 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer border border-teal-200 shadow-2xs"
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        placeholder="0"
+                                        value={remainingVal}
+                                        onChange={(e) => setRemainingInputs({
+                                          ...remainingInputs,
+                                          [prod.id]: e.target.value
+                                        })}
+                                        className={`w-7 h-5 rounded border text-center font-mono font-bold text-3xs focus:outline-none ${
+                                          isLowStock
+                                            ? "border-rose-300 bg-rose-50 text-rose-800"
+                                            : "border-slate-200 bg-white text-slate-900"
+                                        }`}
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateRemaining(prod.id, 1)}
+                                        className="h-5 w-5 rounded bg-teal-700 hover:bg-teal-800 text-white font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer shadow-2xs"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
 
                                 {/* Order Stepper (الطلب) */}
@@ -10792,7 +12064,13 @@ export default function App() {
                               filteredProducts.map((prod, index) => {
                                 const remainingVal = remainingInputs[prod.id] || "";
                                 const orderVal = orderInputs[prod.id] || "";
-                                const isLowStock = remainingVal !== "" && Number(remainingVal) <= 5;
+                                const stockWarning = evaluateProductStockWarning(prod, {
+                                  remainingInput: remainingVal,
+                                  latestReportsMap: latestStockReportsByProduct,
+                                  defaultThreshold: lowStockThreshold,
+                                  combineSourcesForRep: user?.role === "admin",
+                                });
+                                const isLowStock = stockWarning.isBelowThreshold;
                                 const hasOrder = orderVal !== "" && Number(orderVal) > 0;
                                 const netCalc = calculateNetPrice(prod.price, prod.bonus);
                                 const isSelected = selectedProductIds.includes(prod.id);
@@ -10801,7 +12079,15 @@ export default function App() {
                                   <tr 
                                     key={`dense-table-row-${prod.id || 'p'}-${index}`} 
                                     className={`transition-colors hover:bg-teal-50/20 ${
-                                      isSelected ? "bg-amber-50/40" : hasOrder ? "bg-indigo-50/20" : isLowStock ? "bg-rose-50/15" : ""
+                                      isSelected
+                                        ? "bg-amber-50/40"
+                                        : stockWarning.severity === "critical"
+                                        ? "bg-rose-50/25"
+                                        : isLowStock
+                                        ? "bg-amber-50/20"
+                                        : hasOrder
+                                        ? "bg-indigo-50/20"
+                                        : ""
                                     }`}
                                   >
                                     {/* Checkbox */}
@@ -10822,20 +12108,23 @@ export default function App() {
                                         <div className="font-black text-slate-900 text-3xs sm:text-xs leading-snug break-words">
                                           {prod.name}
                                         </div>
-                                        <span
-                                          className="text-4xs font-bold px-1 rounded border shadow-3xs inline-flex items-center gap-0.5"
-                                          style={{
-                                            backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
-                                            borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
-                                            color: getCategoryColor(prod.category, categoryColors),
-                                          }}
-                                        >
+                                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
                                           <span
-                                            className="w-1 h-1 rounded-full shrink-0"
-                                            style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
-                                          />
-                                          {prod.category}
-                                        </span>
+                                            className="text-4xs font-bold px-1 rounded border shadow-3xs inline-flex items-center gap-0.5"
+                                            style={{
+                                              backgroundColor: `${getCategoryColor(prod.category, categoryColors)}15`,
+                                              borderColor: `${getCategoryColor(prod.category, categoryColors)}40`,
+                                              color: getCategoryColor(prod.category, categoryColors),
+                                            }}
+                                          >
+                                            <span
+                                              className="w-1 h-1 rounded-full shrink-0"
+                                              style={{ backgroundColor: getCategoryColor(prod.category, categoryColors) }}
+                                            />
+                                            {prod.category}
+                                          </span>
+                                          <StockWarningBadge evaluation={stockWarning} productId={prod.id} compact />
+                                        </div>
                                       </div>
                                     </div>
                                   </td>
@@ -10858,37 +12147,41 @@ export default function App() {
 
                                   {/* 3. الجرد */}
                                   <td className="p-1 sm:p-1.5 border-l border-slate-100 align-middle text-center bg-teal-50/10">
-                                    <div className="flex items-center justify-center gap-0.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleUpdateRemaining(prod.id, -1)}
-                                        className="h-5 w-4 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer"
-                                      >
-                                        -
-                                      </button>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        placeholder="0"
-                                        value={remainingVal}
-                                        onChange={(e) => setRemainingInputs({
-                                          ...remainingInputs,
-                                          [prod.id]: e.target.value
-                                        })}
-                                        className={`w-9 sm:w-11 h-6 rounded border text-center font-mono font-black text-3xs sm:text-xs focus:outline-none ${
-                                          isLowStock 
-                                            ? "border-rose-300 bg-rose-50 text-rose-800 font-extrabold"
-                                            : "border-slate-200 bg-white text-slate-900 focus:border-teal-500"
-                                        }`}
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleUpdateRemaining(prod.id, 1)}
-                                        className="h-5 w-4 rounded bg-teal-100 hover:bg-teal-200 text-teal-800 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer"
-                                      >
-                                        +
-                                      </button>
-                                    </div>
+                                    {user?.role !== "rep" && user?.role !== "admin" && user?.permissions?.canAccessStockReports === false ? (
+                                      <span className="text-4xs font-bold text-slate-400">مقيّد</span>
+                                    ) : (
+                                      <div className="flex items-center justify-center gap-0.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUpdateRemaining(prod.id, -1)}
+                                          className="h-5 w-4 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer"
+                                        >
+                                          -
+                                        </button>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          placeholder="0"
+                                          value={remainingVal}
+                                          onChange={(e) => setRemainingInputs({
+                                            ...remainingInputs,
+                                            [prod.id]: e.target.value
+                                          })}
+                                          className={`w-9 sm:w-11 h-6 rounded border text-center font-mono font-black text-3xs sm:text-xs focus:outline-none ${
+                                            isLowStock 
+                                              ? "border-rose-300 bg-rose-50 text-rose-800 font-extrabold"
+                                              : "border-slate-200 bg-white text-slate-900 focus:border-teal-500"
+                                          }`}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUpdateRemaining(prod.id, 1)}
+                                          className="h-5 w-4 rounded bg-teal-100 hover:bg-teal-200 text-teal-800 font-bold active:scale-95 text-xs flex items-center justify-center cursor-pointer"
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+                                    )}
                                   </td>
 
                                   {/* 4. الطلب */}
@@ -11369,7 +12662,7 @@ export default function App() {
                 >
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <h3 className="text-sm font-bold text-slate-900">سجل طلبياتي المرسلة للمندوب</h3>
-                    {orders.length > 0 && (
+                    {orders.length > 0 && user?.permissions?.canExportReports !== false && (
                       <button
                         onClick={handleExportOrdersCSV}
                         className="inline-flex items-center gap-2 rounded-xl bg-teal-50 border border-teal-200/80 text-teal-800 hover:bg-teal-100 px-3 py-1 text-2xs font-bold transition-all shadow-2xs"
@@ -11441,15 +12734,17 @@ export default function App() {
                       ))}
 
                       {/* Export CSV Button at Bottom */}
-                      <div className="pt-2 border-t border-slate-100 flex justify-end">
-                        <button
-                          onClick={handleExportOrdersCSV}
-                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-2 text-2xs font-bold transition-all shadow-sm active:scale-[0.98]"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          <span>تصدير سجل الطلبيات الحالية إلى ملف CSV (Excel) 📥</span>
-                        </button>
-                      </div>
+                      {user?.permissions?.canExportReports !== false && (
+                        <div className="pt-2 border-t border-slate-100 flex justify-end">
+                          <button
+                            onClick={handleExportOrdersCSV}
+                            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-2 text-2xs font-bold transition-all shadow-sm active:scale-[0.98]"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>تصدير سجل الطلبيات الحالية إلى ملف CSV (Excel) 📥</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </motion.div>
@@ -11464,59 +12759,73 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs space-y-3"
                 >
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <h3 className="text-sm font-bold text-slate-900">سجل عمليات جرد المخزون التي أبلغت عنها</h3>
-                    {stockReports.length > 0 && (
-                      <button
-                        onClick={handleExportStockReportsCSV}
-                        className="inline-flex items-center gap-2 rounded-xl bg-teal-50 border border-teal-200/80 text-teal-800 hover:bg-teal-100 px-3 py-1 text-2xs font-bold transition-all shadow-2xs"
-                      >
-                        <Download className="h-3.5 w-3.5 text-teal-600" />
-                        <span>تصدير CSV / Excel</span>
-                      </button>
-                    )}
-                  </div>
-                  {stockReports.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500">
-                      <FileSpreadsheet className="mx-auto h-10 w-10 text-slate-300 mb-2" />
-                      لا توجد عمليات جرد سابقة محفوظة في حساب منشأتك.
+                  {user?.permissions?.canAccessStockReports === false ? (
+                    <div className="p-8 text-center text-slate-500 space-y-2">
+                      <Lock className="mx-auto h-10 w-10 text-amber-500 mb-2" />
+                      <h3 className="text-sm font-black text-slate-800">الوصول إلى تقارير الجرد مقيّد</h3>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        تم تعطيل صلاحية الوصول لكشوفات وتقارير الجرد لهذا الحساب من قبل المندوب د/ بلال القيسي.
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-right text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                              <th className="p-2.5">الصنف الدوائي</th>
-                              <th className="p-2.5 text-center">الكمية المتبقية</th>
-                              <th className="p-2.5 text-left">تاريخ الإبلاغ للجرد</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {stockReports.map((report, idx) => (
-                              <tr key={`st-rep-${report.id || 'sr'}-${idx}`} className="hover:bg-slate-50">
-                                <td className="p-2.5 font-bold text-slate-900">{report.productName}</td>
-                                <td className="p-2.5 text-center font-mono font-bold text-teal-700 bg-teal-50/40 rounded">{report.remainingQty}</td>
-                                <td className="p-2.5 text-left text-slate-400 font-mono">
-                                  {new Date(report.reportedAt).toLocaleString("ar-YE")}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    <>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="text-sm font-bold text-slate-900">سجل عمليات جرد المخزون التي أبلغت عنها</h3>
+                        {stockReports.length > 0 && user?.permissions?.canExportReports !== false && (
+                          <button
+                            onClick={handleExportStockReportsCSV}
+                            className="inline-flex items-center gap-2 rounded-xl bg-teal-50 border border-teal-200/80 text-teal-800 hover:bg-teal-100 px-3 py-1 text-2xs font-bold transition-all shadow-2xs"
+                          >
+                            <Download className="h-3.5 w-3.5 text-teal-600" />
+                            <span>تصدير CSV / Excel</span>
+                          </button>
+                        )}
                       </div>
+                      {stockReports.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <FileSpreadsheet className="mx-auto h-10 w-10 text-slate-300 mb-2" />
+                          لا توجد عمليات جرد سابقة محفوظة في حساب منشأتك.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="overflow-x-auto rounded-xl border border-slate-200">
+                            <table className="w-full text-right text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                                  <th className="p-2.5">الصنف الدوائي</th>
+                                  <th className="p-2.5 text-center">الكمية المتبقية</th>
+                                  <th className="p-2.5 text-left">تاريخ الإبلاغ للجرد</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {stockReports.map((report, idx) => (
+                                  <tr key={`st-rep-${report.id || 'sr'}-${idx}`} className="hover:bg-slate-50">
+                                    <td className="p-2.5 font-bold text-slate-900">{report.productName}</td>
+                                    <td className="p-2.5 text-center font-mono font-bold text-teal-700 bg-teal-50/40 rounded">{report.remainingQty}</td>
+                                    <td className="p-2.5 text-left text-slate-400 font-mono">
+                                      {new Date(report.reportedAt).toLocaleString("ar-YE")}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
 
-                      {/* Export CSV Button at Bottom */}
-                      <div className="pt-2 border-t border-slate-100 flex justify-end">
-                        <button
-                          onClick={handleExportStockReportsCSV}
-                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-2 text-2xs font-bold transition-all shadow-sm active:scale-[0.98]"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          <span>تصدير سجل جرد المخزون إلى ملف CSV (Excel) 📥</span>
-                        </button>
-                      </div>
-                    </div>
+                          {/* Export CSV Button at Bottom */}
+                          {user?.permissions?.canExportReports !== false && (
+                            <div className="pt-2 border-t border-slate-100 flex justify-end">
+                              <button
+                                onClick={handleExportStockReportsCSV}
+                                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 text-white hover:bg-teal-700 px-3.5 py-2 text-2xs font-bold transition-all shadow-sm active:scale-[0.98]"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                <span>تصدير سجل جرد المخزون إلى ملف CSV (Excel) 📥</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                 </motion.div>
               )}
@@ -11530,77 +12839,89 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs space-y-3"
                 >
-                  <div className="flex items-center gap-2">
-                    <ClipboardList className="h-5 w-5 text-teal-600" />
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">سجل زيارات المندوب والاتفاقات المتبادلة</h3>
-                      <p className="text-3xs text-slate-500">يعرض هذا السجل التواريخ والتفاهمات التي تم التوصل إليها خلال زيارة المندوب لمنشأتك</p>
-                    </div>
-                  </div>
-
-                  {visits.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500">
-                      <ClipboardList className="mx-auto h-10 w-10 text-slate-300 mb-2" />
-                      لا توجد تقارير زيارة مسجلة لمنشأتك حالياً من قبل المندوب.
+                  {user?.permissions?.canViewVisits === false ? (
+                    <div className="p-8 text-center text-slate-500 space-y-2">
+                      <Lock className="mx-auto h-10 w-10 text-amber-500 mb-2" />
+                      <h3 className="text-sm font-black text-slate-800">الوصول إلى سجل الزيارات الميدانية مقيّد</h3>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        تم تعطيل صلاحية عرض سجل الزيارات الميدانية لهذا الحساب من قبل المندوب د/ بلال القيسي.
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {visits.map((visit, visitIdx) => (
-                        <div key={`vst-${visit.id || 'v'}-${visitIdx}`} className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-3">
-                          <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-slate-900 text-xs font-mono">تاريخ الزيارة: {visit.visitDate}</span>
-                              <span className="text-3xs text-slate-300">|</span>
-                              <span className="text-2xs text-slate-500">الزائر: المندوب الطبي ({visit.clientName})</span>
-                            </div>
-                            <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-4xs font-bold text-teal-800">
-                              <Sparkles className="h-3 w-3" />
-                              ملخص ذكي
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div>
-                              <span className="text-3xs font-bold text-slate-400 block mb-1">ملخص مخرجات الزيارة:</span>
-                              <p className="text-xs text-slate-800 leading-relaxed bg-white p-3 rounded-lg border border-slate-100 font-medium whitespace-pre-line">
-                                {visit.summary || visit.notes || "لا يوجد ملخص مكتوب."}
-                              </p>
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <span className="text-3xs font-bold text-slate-400 block mb-1">قائمة متابعة الالتزامات والمهام:</span>
-                              {!visit.tasks || visit.tasks.length === 0 ? (
-                                <div className="text-xs text-slate-400 italic">لا توجد مهام متابعة معينة لهذه الزيارة.</div>
-                              ) : (
-                                <div className="space-y-1.5">
-                                  {visit.tasks.map((task, taskIdx) => (
-                                    <div
-                                      key={`vtask-${visit.id || 'v'}-${visitIdx}-${task.id || 't'}-${taskIdx}`}
-                                      onClick={() => handleToggleTask(visit.id, task.id)}
-                                      className="flex items-start gap-2 p-1.5 bg-white rounded-lg border border-slate-100 hover:bg-slate-50 transition-all cursor-pointer"
-                                    >
-                                      <button
-                                        type="button"
-                                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors mt-0.5 ${
-                                          task.completed ? "border-teal-500 bg-teal-500 text-white" : "border-slate-300 bg-white"
-                                        }`}
-                                      >
-                                        {task.completed && <Check className="h-3 w-3 stroke-[3]" />}
-                                      </button>
-                                      <span className={`text-xs font-semibold transition-all ${
-                                        task.completed ? "text-slate-400 line-through" : "text-slate-700"
-                                      }`}>
-                                        {task.taskText}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                    <>
+                      <div className="flex items-center gap-2">
+                        <ClipboardList className="h-5 w-5 text-teal-600" />
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900">سجل زيارات المندوب والاتفاقات المتبادلة</h3>
+                          <p className="text-3xs text-slate-500">يعرض هذا السجل التواريخ والتفاهمات التي تم التوصل إليها خلال زيارة المندوب لمنشأتك</p>
                         </div>
-                      ))}
-                    </div>
+                      </div>
+
+                      {visits.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500">
+                          <ClipboardList className="mx-auto h-10 w-10 text-slate-300 mb-2" />
+                          لا توجد تقارير زيارة مسجلة لمنشأتك حالياً من قبل المندوب.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {visits.map((visit, visitIdx) => (
+                            <div key={`vst-${visit.id || 'v'}-${visitIdx}`} className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-3">
+                              <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-900 text-xs font-mono">تاريخ الزيارة: {visit.visitDate}</span>
+                                  <span className="text-3xs text-slate-300">|</span>
+                                  <span className="text-2xs text-slate-500">الزائر: المندوب الطبي ({visit.clientName})</span>
+                                </div>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-4xs font-bold text-teal-800">
+                                  <Sparkles className="h-3 w-3" />
+                                  ملخص ذكي
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                  <span className="text-3xs font-bold text-slate-400 block mb-1">ملخص مخرجات الزيارة:</span>
+                                  <p className="text-xs text-slate-800 leading-relaxed bg-white p-3 rounded-lg border border-slate-100 font-medium whitespace-pre-line">
+                                    {visit.summary || visit.notes || "لا يوجد ملخص مكتوب."}
+                                  </p>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <span className="text-3xs font-bold text-slate-400 block mb-1">قائمة متابعة الالتزامات والمهام:</span>
+                                  {!visit.tasks || visit.tasks.length === 0 ? (
+                                    <div className="text-xs text-slate-400 italic">لا توجد مهام متابعة معينة لهذه الزيارة.</div>
+                                  ) : (
+                                    <div className="space-y-1.5">
+                                      {visit.tasks.map((task, taskIdx) => (
+                                        <div
+                                          key={`vtask-${visit.id || 'v'}-${visitIdx}-${task.id || 't'}-${taskIdx}`}
+                                          onClick={() => handleToggleTask(visit.id, task.id)}
+                                          className="flex items-start gap-2 p-1.5 bg-white rounded-lg border border-slate-100 hover:bg-slate-50 transition-all cursor-pointer"
+                                        >
+                                          <button
+                                            type="button"
+                                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors mt-0.5 ${
+                                              task.completed ? "border-teal-500 bg-teal-500 text-white" : "border-slate-300 bg-white"
+                                            }`}
+                                          >
+                                            {task.completed && <Check className="h-3 w-3 stroke-[3]" />}
+                                          </button>
+                                          <span className={`text-xs font-semibold transition-all ${
+                                            task.completed ? "text-slate-400 line-through" : "text-slate-700"
+                                          }`}>
+                                            {task.taskText}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   )}
                 </motion.div>
               )}
@@ -11640,32 +12961,44 @@ export default function App() {
                     </div>
                   </div>
 
-                  {notifications.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500">
-                      <Bell className="mx-auto h-10 w-10 text-slate-300 mb-2" />
-                      لا توجد إشعارات أو تعاميم موجهة لمنشأتك حالياً.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {notifications.map((notif, idx) => (
-                        <div key={`cnotif-${notif.id || 'n'}-${idx}`} className="rounded-xl border border-slate-100 bg-slate-50 p-3 space-y-2">
-                          <div className="flex items-center justify-between flex-wrap gap-2">
-                            <span className={`rounded-full px-2.5 py-0.5 text-3xs font-bold ${
-                              notif.type === "broadcast" ? "bg-amber-100 text-amber-800" : "bg-teal-100 text-teal-800"
-                            }`}>
-                              {notif.type === "broadcast" ? "📣 تعميم عام" : "🎯 تنبيه خاص"}
-                            </span>
-                            <span className="text-3xs text-slate-400 font-mono">
-                              {new Date(notif.createdAt).toLocaleString("ar-YE")}
-                            </span>
-                          </div>
-
-                          <h4 className="font-bold text-slate-950 text-xs sm:text-sm">{notif.title}</h4>
-                          <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{notif.message}</p>
-                        </div>
-                      ))}
+                  {user?.permissions?.canReceiveTargetedNotifications === false && (
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-2xs font-bold text-amber-800">
+                      <Lock className="h-4 w-4 shrink-0 text-amber-600" />
+                      <span>التنبيهات الخاصة الموجهة معطّلة لهذا الحساب من قِبل المندوب — تظهر التعاميم العامة فقط.</span>
                     </div>
                   )}
+
+                  {(() => {
+                    const visibleNotifications = notifications.filter(
+                      (n) => n.type === "broadcast" || user?.permissions?.canReceiveTargetedNotifications !== false
+                    );
+                    return visibleNotifications.length === 0 ? (
+                      <div className="p-8 text-center text-slate-500">
+                        <Bell className="mx-auto h-10 w-10 text-slate-300 mb-2" />
+                        لا توجد إشعارات أو تعاميم موجهة لمنشأتك حالياً.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {visibleNotifications.map((notif, idx) => (
+                          <div key={`cnotif-${notif.id || 'n'}-${idx}`} className="rounded-xl border border-slate-100 bg-slate-50 p-3 space-y-2">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <span className={`rounded-full px-2.5 py-0.5 text-3xs font-bold ${
+                                notif.type === "broadcast" ? "bg-amber-100 text-amber-800" : "bg-teal-100 text-teal-800"
+                              }`}>
+                                {notif.type === "broadcast" ? "📣 تعميم عام" : "🎯 تنبيه خاص"}
+                              </span>
+                              <span className="text-3xs text-slate-400 font-mono">
+                                {new Date(notif.createdAt).toLocaleString("ar-YE")}
+                              </span>
+                            </div>
+
+                            <h4 className="font-bold text-slate-950 text-xs sm:text-sm">{notif.title}</h4>
+                            <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{notif.message}</p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </motion.div>
               )}
 
@@ -11689,14 +13022,24 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="space-y-4"
                 >
-                  <AgreementsManager
-                    agreements={agreements}
-                    clients={registeredUsers}
-                    currentUser={user}
-                    onSaveAgreement={handleSaveAgreement}
-                    onDeleteAgreement={handleDeleteAgreement}
-                    isAdmin={false}
-                  />
+                  {user?.permissions?.canViewAgreements === false ? (
+                    <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-2xs space-y-2">
+                      <Lock className="mx-auto h-10 w-10 text-amber-500 mb-2" />
+                      <h3 className="text-sm font-black text-slate-800">الوصول إلى الاتفاقيات والبونص مقيّد</h3>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        تم تعطيل صلاحية الاطلاع على الاتفاقيات والبونص لهذا الحساب من قبل المندوب د/ بلال القيسي.
+                      </p>
+                    </div>
+                  ) : (
+                    <AgreementsManager
+                      agreements={agreements}
+                      clients={registeredUsers}
+                      currentUser={user}
+                      onSaveAgreement={handleSaveAgreement}
+                      onDeleteAgreement={handleDeleteAgreement}
+                      isAdmin={false}
+                    />
+                  )}
                 </motion.div>
               )}
 
@@ -11708,7 +13051,7 @@ export default function App() {
                   exit={{ opacity: 0, y: -15 }}
                   className="flex-1 flex flex-col min-h-0 overflow-y-auto"
                 >
-                  <PharmaGames repAvatar={"/app-logo.png"} />
+                  <PharmaGames repAvatar={drProfileAvatar} />
                 </motion.div>
               )}
 
@@ -12011,7 +13354,7 @@ export default function App() {
         onClose={() => setIsPromoVideoOpen(false)}
         repName="د/ بلال القيسي"
         repPhone="+967776600049"
-        repAvatar={"/app-logo.png"}
+        repAvatar={drProfileAvatar}
         products={products.length > 0 ? products : DEFAULT_PRODUCTS}
         onOpenGames={() => {
           setActiveTab("games");
@@ -12100,7 +13443,7 @@ export default function App() {
               {/* Full HD Official Image */}
               <div className="relative bg-gradient-to-b from-slate-950 via-slate-900 to-teal-950 p-4 flex flex-col items-center justify-center overflow-hidden">
                 <img
-                  src={"/app-logo.png"}
+                  src={drProfileAvatar}
                   alt="د/ بلال القيسي - مندوبك الطبي"
                   className="w-full max-h-[420px] object-contain rounded-2xl shadow-2xl border border-teal-500/30"
                   referrerPolicy="no-referrer"
@@ -12269,6 +13612,8 @@ export default function App() {
           } catch (e) {}
           showSuccess(enabled ? "تم تفعيل القفل بالبصمة بنجاح 🔒" : "تم تعطيل القفل بالبصمة 🔓");
         }}
+        registeredUsers={registeredUsers}
+        onUpdateUserPermissions={handleUpdateUserPermissions}
         onOpenApkModal={() => setIsDownloadApkModalOpen(true)}
         onOpenGoogleChat={() => setIsGoogleChatOpen(true)}
       />

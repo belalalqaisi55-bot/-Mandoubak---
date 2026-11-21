@@ -9,7 +9,7 @@ import { getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { getMessaging as getAdminMessaging } from "firebase-admin/messaging";
-import { GoogleGenAI, Type, GenerateVideosOperation } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel, GenerateVideosOperation } from "@google/genai";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -105,14 +105,30 @@ const verifyToken = async (req: express.Request, res: express.Response, next: ex
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
-  const token = authHeader.split('Bearer ')[1];
+  const token = authHeader.split('Bearer ')[1]?.trim();
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized: Empty token' });
+  }
+  if (getApps().length === 0) {
+    return res.status(401).json({ error: 'Authentication service unavailable' });
+  }
   try {
-    const decodedToken = await getAuth().verifyIdToken(token);
+    const decodedToken = await Promise.race([
+      getAuth().verifyIdToken(token),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(Object.assign(new Error('Token verification timeout'), { code: 'auth/timeout' })), 8000)
+      ),
+    ]);
     (req as any).user = decodedToken;
     next();
-  } catch (error) {
-    console.error("Token verification error:", error);
-    res.status(403).json({ error: 'Forbidden: Invalid token' });
+  } catch (error: any) {
+    const code = error?.code || '';
+    if (code === 'auth/id-token-expired') {
+      console.warn('Token verification notice: Firebase ID token expired; client refresh required.');
+      return res.status(401).json({ error: 'Unauthorized: Token expired', code });
+    }
+    console.warn('Token verification error:', error?.message || error);
+    return res.status(401).json({ error: 'Unauthorized: Invalid token', code: code || 'auth/invalid-token' });
   }
 };
 
@@ -135,33 +151,149 @@ app.get('/auth/logout', (req, res) => {
 
 // ... (Health & Diagnostics are public)
 
-// Auto-categorize product based on active ingredient
-app.post("/api/categorize-product", verifyToken, async (req, res) => {
-  const { productName, activeIngredient, description } = req.body || {};
-  if (!activeIngredient) {
-    return res.status(400).json({ error: "Active ingredient is required" });
+const DEFAULT_CATALOG_CATEGORIES = [
+  "عام",
+  "مضادات حيوية",
+  "حقن مضاد حيوي",
+  "مسكنات وخافض حرارة",
+  "مسكنات ألم ومضادات التهاب",
+  "أدوية المعدة والحموضة",
+  "مضادات الحساسية",
+  "مضادات الفطريات",
+  "مضادات طفيليات مطهرة",
+  "أدوية القلب والضغط",
+  "أدوية السكري والغدد",
+  "فيتامينات ومكملات غذائية",
+  "أدوية السعال والجهاز التنفسي",
+  "قطرات ومراهم عيون وأذن",
+  "مستحضرات جلدية ومطهرات",
+  "أدوية الطوارئ والمحاليل",
+];
+
+function normalizeCatalogCategory(suggested: string | undefined, availableCategories: string[]): string {
+  const validCategories = availableCategories.length > 0 ? availableCategories : DEFAULT_CATALOG_CATEGORIES;
+  const raw = String(suggested || "").trim().replace(/^["'`«]+|["'`»]+$/g, "");
+  if (!raw) {
+    return validCategories.includes("عام") ? "عام" : validCategories[0];
+  }
+
+  const exact = validCategories.find((c) => c.trim() === raw);
+  if (exact) return exact;
+
+  const normalizeAr = (str: string) =>
+    str
+      .trim()
+      .toLowerCase()
+      .replace(/[أإآ]/g, "ا")
+      .replace(/ة/g, "ه")
+      .replace(/ى/g, "ي")
+      .replace(/\s+/g, " ");
+
+  const normRaw = normalizeAr(raw);
+  const normExact = validCategories.find((c) => normalizeAr(c) === normRaw);
+  if (normExact) return normExact;
+
+  const partial = validCategories.find((c) => {
+    const nc = normalizeAr(c);
+    return nc.length > 1 && (normRaw.includes(nc) || nc.includes(normRaw));
+  });
+  if (partial) return partial;
+
+  return validCategories.includes("عام") ? "عام" : validCategories[0];
+}
+
+async function classifySingleProductWithGemini(params: {
+  name?: string;
+  activeIngredient?: string;
+  description?: string;
+  availableCategories?: string[];
+}) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("مفتاح Gemini API غير مهيأ على الخادم.");
+  }
+
+  const categoriesList =
+    Array.isArray(params.availableCategories) && params.availableCategories.length > 0
+      ? Array.from(new Set(params.availableCategories.map((c) => String(c || "").trim()).filter(Boolean)))
+      : DEFAULT_CATALOG_CATEGORIES;
+
+  const prompt = `حلّل بيانات الصنف الطبي التالي واختر له التصنيف الأنسب حصراً من قائمة الفئات المتاحة في النظام:
+- اسم الصنف: ${params.name || "غير محدد"}
+- المادة الفعالة: ${params.activeIngredient || "غير محددة"}
+- الوصف / دواعي الاستخدام: ${params.description || "غير متوفر"}
+
+الفئات المتاحة في النظام (اختر واحدة منها فقط بالنص المطابق):
+${categoriesList.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}`;
+
+  const { response, modelUsed } = await robustGenerateContent(
+    ai,
+    "gemini-4-hydrogen",
+    prompt,
+    {
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      systemInstruction:
+        "أنت صيدلاني إكلينيكي خبير بتصنيف المستحضرات الدوائية والطبية في الصيدليات. يجب اختيار فئة واحدة مطابقة تماماً لقائمة الفئات المتاحة في النظام، وتحديد المادة الفعالة العلمية بدقة إن أمكن، وكتابة سبب مختصر بالعربية.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          category: {
+            type: Type.STRING,
+            description: "اسم الفئة المختارة بالنص المطابق من قائمة الفئات المتاحة.",
+          },
+          detectedActiveIngredient: {
+            type: Type.STRING,
+            description: "الاسم العلمي / المادة الفعالة المستنتجة إن أمكن (أو نص فارغ).",
+          },
+          confidence: {
+            type: Type.STRING,
+            description: "مستوى الثقة: عالية أو متوسطة أو منخفضة.",
+          },
+          reason: {
+            type: Type.STRING,
+            description: "سبب التصنيف باختصار شديد باللغة العربية.",
+          },
+        },
+        required: ["category", "confidence", "reason"],
+      },
+    },
+    false
+  );
+
+  const parsed = JSON.parse((response.text ?? "{}").trim());
+  const normalizedCategory = normalizeCatalogCategory(parsed?.category, categoriesList);
+
+  return {
+    category: normalizedCategory,
+    detectedActiveIngredient: String(parsed?.detectedActiveIngredient || "").trim(),
+    confidence: String(parsed?.confidence || "عالية").trim(),
+    reason: String(parsed?.reason || "").trim(),
+    model: modelUsed,
+  };
+}
+
+// Auto-categorize product based on name / active ingredient / description
+app.post("/api/categorize-product", async (req, res) => {
+  const { productName, name, activeIngredient, description, availableCategories } = req.body || {};
+  const itemName = String(productName || name || "").trim();
+  const ingredient = String(activeIngredient || "").trim();
+  const desc = String(description || "").trim();
+
+  if (!itemName && !ingredient && !desc) {
+    return res.status(400).json({ error: "يرجى إدخال اسم الصنف أو المادة الفعالة للتصنيف." });
   }
 
   try {
-    const prompt = `Classify this medical product into a broad category for a pharmacy inventory application.
-    Product: ${productName}
-    Active Ingredient: ${activeIngredient}
-    Description: ${description || "N/A"}
-
-    Return ONLY the category name in Arabic. Choose from these common pharmacy categories:
-    [عام, مضادات حيوية, مسكنات, أدوية قلب, أدوية ضغط, أدوية سكر, أجهزة طبية, فيتامينات ومكملات, أدوية جهاز هضمي, أدوية جهاز تنفسي].
-    If it doesn't fit exactly, choose the closest one.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
-      contents: prompt,
+    const result = await classifySingleProductWithGemini({
+      name: itemName,
+      activeIngredient: ingredient,
+      description: desc,
+      availableCategories,
     });
-    
-    const category = response.text?.trim() || "عام";
-    res.json({ category });
+    res.json({ success: true, ...result });
   } catch (err: any) {
     console.error("AI Categorization failed:", err);
-    res.status(500).json({ error: "Failed to categorize product" });
+    res.status(500).json({ error: err?.message || "تعذر تصنيف الصنف باستخدام Gemini AI." });
   }
 });
 
@@ -338,6 +470,14 @@ app.get("/api/statuspage/rss", (req, res) => {
 });
 
 // Seed data structures in Arabic
+interface UserPermissions {
+  canAccessStockReports: boolean;
+  canReceiveTargetedNotifications: boolean;
+  canExportReports: boolean;
+  canViewVisits: boolean;
+  canViewAgreements: boolean;
+}
+
 interface User {
   id: string;
   phone: string;
@@ -355,6 +495,7 @@ interface User {
   fcmTokens?: string[];
   fcmUpdatedAt?: string;
   createdAt: string;
+  permissions?: UserPermissions;
   lat?: number;
   lng?: number;
 }
@@ -934,7 +1075,12 @@ async function saveProductToDB(product: Product): Promise<void> {
     }
   }
   const db = getDB();
-  db.products.push(product);
+  const existingIdx = db.products.findIndex((p) => p.id === product.id);
+  if (existingIdx >= 0) {
+    db.products[existingIdx] = product;
+  } else {
+    db.products.push(product);
+  }
   saveDB(db);
 }
 
@@ -1802,9 +1948,13 @@ app.post("/api/auth/login", async (req, res) => {
 
   const users = await fetchAllUsersFromDB();
   
+  const normalizedEmail = rawInput.includes("@") ? rawInput : "";
   const user = users.find((u) => {
+    if (normalizedEmail && u.email && u.email.trim().toLowerCase() === normalizedEmail) {
+      return true;
+    }
     const uDigits = cleanPhoneDigits(u.phone);
-    if (!uDigits || uDigits.length < 6) return false;
+    if (!uDigits || uDigits.length < 6 || !inputDigits || inputDigits.length < 6) return false;
     if (uDigits === inputDigits) return true;
     if (inputDigits.length >= 8 && uDigits.length >= 8) {
       return inputDigits.slice(-8) === uDigits.slice(-8);
@@ -1850,45 +2000,60 @@ app.post("/api/auth/login", async (req, res) => {
 
     return res.json({ status: "success", user });
   } else {
-    return res.json({ status: "not_found", error: "رقم الهاتف غير مسجل مسبقاً بالتطبيق" });
+    return res.json({ status: "not_found", error: "رقم الهاتف أو البريد غير مسجل مسبقاً بالتطبيق" });
   }
 });
 
 app.post("/api/auth/register", async (req, res) => {
-  const { id, phone, name, role, entityName, location } = req.body || {};
+  const { id, phone, email, name, role, entityName, location } = req.body || {};
 
-  if (!phone || !name) {
-    return res.status(400).json({ error: "جميع الحقول الأساسية مطلوبة للتسجيل" });
+  const trimmedName = typeof name === "string" ? name.trim() : "";
+  const rawPhone = typeof phone === "string" ? phone.trim() : "";
+  const rawEmail = typeof email === "string" ? email.trim() : (rawPhone.includes("@") ? rawPhone : "");
+  const normalizedEmail = rawEmail.toLowerCase();
+  const hasValidEmail = normalizedEmail.includes("@") && normalizedEmail.includes(".");
+  const inputDigits = cleanPhoneDigits(rawPhone.includes("@") ? "" : rawPhone);
+  const hasValidPhone = inputDigits.length >= 6;
+
+  if (!trimmedName || (!hasValidPhone && !hasValidEmail)) {
+    return res.status(400).json({ error: "الاسم ورقم الهاتف أو البريد الإلكتروني الصحيح مطلوبان للتسجيل" });
   }
 
-  const inputDigits = cleanPhoneDigits(phone);
-  if (!inputDigits || inputDigits.length < 6) {
-    return res.status(400).json({ error: "يرجى إدخال رقم هاتف صحيح يتكون من 6 أرقام على الأقل" });
-  }
-
-  if (inputDigits.endsWith("776600049")) {
+  if (hasValidPhone && inputDigits.endsWith("776600049")) {
     return res.status(400).json({ error: "رقم هاتف المندوب المسؤول مسجل مسبقاً. يرجى تسجيل الدخول باستخدام كلمة المرور." });
+  }
+  if (hasValidEmail && (normalizedEmail === "belalalqaisi55@gmail.com" || normalizedEmail.startsWith("belalalqaisi55"))) {
+    return res.status(400).json({ error: "بريد المندوب المسؤول مسجل مسبقاً. يرجى تسجيل الدخول مباشرة." });
   }
 
   const users = await fetchAllUsersFromDB();
-  
-  const userExists = users.some((u) => {
-    const uDigits = cleanPhoneDigits(u.phone);
-    if (!uDigits || uDigits.length < 6) return false;
-    if (uDigits === inputDigits) return true;
-    if (inputDigits.length >= 8 && uDigits.length >= 8) {
-      return inputDigits.slice(-8) === uDigits.slice(-8);
+
+  const existingUser = users.find((u) => {
+    if (hasValidEmail && u.email && u.email.trim().toLowerCase() === normalizedEmail) {
+      return true;
+    }
+    if (hasValidPhone) {
+      const uDigits = cleanPhoneDigits(u.phone);
+      if (uDigits && uDigits.length >= 6) {
+        if (uDigits === inputDigits) return true;
+        if (inputDigits.length >= 8 && uDigits.length >= 8 && inputDigits.slice(-8) === uDigits.slice(-8)) {
+          return true;
+        }
+      }
     }
     return false;
   });
 
-  if (userExists) {
-    return res.status(400).json({ error: "رقم الهاتف مسجل مسبقاً بالتطبيق. يرجى تسجيل الدخول مباشرة بنفس الرقم بعد التأكيد." });
+  if (existingUser) {
+    return res.status(400).json({
+      error: "رقم الهاتف أو البريد الإلكتروني مسجل مسبقاً بالتطبيق. يرجى تسجيل الدخول مباشرة.",
+      user: existingUser
+    });
   }
 
   const settings = await fetchSettingsFromDB();
   const requiresApproval = settings.requireApprovalForNewAccounts !== undefined ? settings.requireApprovalForNewAccounts : settings.requireApprovalForNewClients;
-  
+
   // Security: Public registration can only be client (pharmacy or doctor), never rep
   const clientRole: "pharmacy" | "doctor" = role === "doctor" ? "doctor" : "pharmacy";
   const randomCode = String(Math.floor(1000 + Math.random() * 9000));
@@ -1899,11 +2064,12 @@ app.post("/api/auth/register", async (req, res) => {
 
   const newUser: User = {
     id: safeId,
-    phone: phone.trim(),
-    name: name.trim(),
+    phone: hasValidPhone ? rawPhone : (hasValidEmail ? rawEmail : ""),
+    ...(hasValidEmail ? { email: rawEmail } : {}),
+    name: trimmedName,
     role: clientRole,
-    entityName: entityName ? entityName.trim() : "",
-    location: location ? location.trim() : "",
+    entityName: entityName ? String(entityName).trim() : "",
+    location: location ? String(location).trim() : "",
     isApproved: !requiresApproval,
     status: requiresApproval ? "pending_approval" : "approved",
     confirmationCode: randomCode,
@@ -1912,10 +2078,45 @@ app.post("/api/auth/register", async (req, res) => {
 
   await saveUserToDB(newUser);
 
+  // Create immediate in-app notification & optional push for the representative (u_rep)
+  const roleLabel = clientRole === "doctor" ? "طبيب / عيادة 🩺" : "صيدلية 🏥";
+  const contactSummary = [
+    hasValidPhone ? `📱 ${newUser.phone}` : "",
+    hasValidEmail ? `📧 ${newUser.email}` : ""
+  ].filter(Boolean).join(" | ");
+
+  const regNotif: Notification = {
+    id: "n_reg_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+    title: `طلب تسجيل جديد (${roleLabel}): ${newUser.entityName || newUser.name}`,
+    message: `المسؤول: ${newUser.name}${contactSummary ? ` • ${contactSummary}` : ""}${newUser.location ? ` • 📍 ${newUser.location}` : ""}${requiresApproval ? ` • 🔑 رمز التأكيد: ${randomCode}` : ""}`,
+    type: "target",
+    targetClientId: "u_rep",
+    targetClientName: "د/ بلال القيسي (طلب تسجيل بانتظار التأكيد)",
+    createdAt: new Date().toISOString()
+  };
+
+  try {
+    await saveNotificationToDB(regNotif);
+    void sendFcmNotificationToUsers({
+      title: regNotif.title,
+      body: regNotif.message,
+      targetClientId: "u_rep",
+      data: {
+        type: "new_registration",
+        userId: newUser.id,
+        role: clientRole,
+        notification_id: regNotif.id
+      }
+    }).catch(() => {});
+  } catch (notifErr: any) {
+    console.warn("Registration notification persist notice:", notifErr?.message || notifErr);
+  }
+
   res.json({
     success: true,
     user: newUser,
     requiresApproval,
+    notification: regNotif,
     message: requiresApproval
       ? "تم تسجيل طلب انضمامك بنجاح. حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي."
       : "تم إنشاء وتفعيل حسابك بنجاح."
@@ -1923,18 +2124,23 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/verify-code", async (req, res) => {
-  const { phone, code } = req.body || {};
-  if (!phone || !code) {
-    return res.status(400).json({ error: "رقم الهاتف ورمز التأكيد مطلوبان" });
+  const { phone, email, code } = req.body || {};
+  const rawContact = String(phone || email || "").trim();
+  if (!rawContact || !code) {
+    return res.status(400).json({ error: "رقم الهاتف أو البريد ورمز التأكيد مطلوبان" });
   }
 
-  const inputDigits = cleanPhoneDigits(phone);
+  const inputDigits = cleanPhoneDigits(rawContact.includes("@") ? "" : rawContact);
+  const lowerContact = rawContact.toLowerCase();
   const inputCode = String(code).trim();
   const users = await fetchAllUsersFromDB();
 
   const user = users.find((u) => {
+    if (lowerContact.includes("@") && u.email && u.email.trim().toLowerCase() === lowerContact) {
+      return true;
+    }
     const uDigits = cleanPhoneDigits(u.phone);
-    if (!uDigits || uDigits.length < 6) return false;
+    if (!uDigits || uDigits.length < 6 || !inputDigits || inputDigits.length < 6) return false;
     if (uDigits === inputDigits) return true;
     if (inputDigits.length >= 8 && uDigits.length >= 8) {
       return inputDigits.slice(-8) === uDigits.slice(-8);
@@ -2017,8 +2223,13 @@ app.post("/api/admin/dr-avatar", async (req, res) => {
 // --- USERS / CLIENTS MANAGEMENT API ---
 
 app.get("/api/users", async (req, res) => {
-  const users = await fetchAllUsersFromDB();
-  res.json(users);
+  try {
+    const users = await fetchAllUsersFromDB();
+    res.json(users);
+  } catch (err: any) {
+    console.warn("/api/users error, falling back to local store:", err?.message || err);
+    res.json(getDB().users || []);
+  }
 });
 
 app.post("/api/users/batch-import", async (req, res) => {
@@ -2096,12 +2307,36 @@ app.put("/api/users/:id/status", async (req, res) => {
   res.json({ success: true, user: existing });
 });
 
+app.put("/api/users/:id/permissions", async (req, res) => {
+  const { id } = req.params;
+  const rawPerms = req.body?.permissions || req.body || {};
+
+  const users = await fetchAllUsersFromDB();
+  const existing = users.find((u) => u.id === id);
+
+  if (!existing) {
+    return res.status(404).json({ error: "العميل غير موجود" });
+  }
+
+  const normalizedPermissions: UserPermissions = {
+    canAccessStockReports: rawPerms.canAccessStockReports !== false,
+    canReceiveTargetedNotifications: rawPerms.canReceiveTargetedNotifications !== false,
+    canExportReports: rawPerms.canExportReports !== false,
+    canViewVisits: rawPerms.canViewVisits !== false,
+    canViewAgreements: rawPerms.canViewAgreements !== false,
+  };
+
+  existing.permissions = normalizedPermissions;
+  await saveUserToDB(existing);
+  res.json({ success: true, user: existing, permissions: normalizedPermissions });
+});
+
 app.put("/api/users/:id", async (req, res) => {
   const { id } = req.params;
-  const { phone, name, role, entityName, location, isApproved, status, avatar } = req.body || {};
+  const { phone, email, name, role, entityName, location, isApproved, status, avatar, permissions } = req.body || {};
 
-  if (!phone || !name) {
-    return res.status(400).json({ error: "اسم العميل ورقم الهاتف مطلوبان" });
+  if ((!phone && !email) || !name) {
+    return res.status(400).json({ error: "اسم العميل ورقم الهاتف أو البريد مطلوبان" });
   }
 
   const users = await fetchAllUsersFromDB();
@@ -2109,14 +2344,16 @@ app.put("/api/users/:id", async (req, res) => {
   
   const updatedUser: User = {
     id,
-    phone: phone.trim(),
-    name: name.trim(),
+    phone: phone ? String(phone).trim() : (existing ? existing.phone : ""),
+    ...(email || existing?.email ? { email: email ? String(email).trim() : existing?.email } : {}),
+    name: String(name).trim(),
     role: role || (existing ? existing.role : "pharmacy"),
-    entityName: entityName ? entityName.trim() : (existing ? existing.entityName : ""),
-    location: location ? location.trim() : (existing ? existing.location : ""),
+    entityName: entityName ? String(entityName).trim() : (existing ? existing.entityName : ""),
+    location: location ? String(location).trim() : (existing ? existing.location : ""),
     avatar: avatar !== undefined ? avatar : (existing ? existing.avatar : ""),
     isApproved: isApproved !== undefined ? isApproved : (existing ? existing.isApproved : true),
     status: status || (existing ? existing.status : "approved"),
+    ...(permissions || existing?.permissions ? { permissions: permissions || existing?.permissions } : {}),
     createdAt: existing ? existing.createdAt : new Date().toISOString()
   };
 
@@ -2347,6 +2584,54 @@ app.post("/api/products", async (req, res) => {
   await saveProductToDB(newProduct);
 
   res.json({ success: true, product: newProduct });
+});
+
+// Batch update product categories (by Representative / Gemini AI Auto-Classification)
+app.put("/api/products/batch-categories", async (req, res) => {
+  const { updates } = req.body || {};
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({ error: "قائمة التحديثات مطلوبة." });
+  }
+
+  const updateMap = new Map<string, { category: string; activeIngredient?: string }>();
+  for (const item of updates) {
+    if (item && typeof item.id === "string" && typeof item.category === "string" && item.category.trim()) {
+      updateMap.set(item.id, {
+        category: item.category.trim(),
+        activeIngredient:
+          typeof item.activeIngredient === "string" && item.activeIngredient.trim()
+            ? item.activeIngredient.trim()
+            : undefined,
+      });
+    }
+  }
+
+  if (updateMap.size === 0) {
+    return res.status(400).json({ error: "لا توجد تحديثات صالحة للتطبيق." });
+  }
+
+  const existingProducts = await fetchProductsFromDB();
+  const updatedProducts: Product[] = [];
+
+  for (const prod of existingProducts) {
+    const patch = updateMap.get(prod.id);
+    if (!patch) continue;
+    const updatedProduct: Product = {
+      ...prod,
+      category: patch.category,
+      ...(patch.activeIngredient && !prod.activeIngredient
+        ? { activeIngredient: patch.activeIngredient }
+        : {}),
+    };
+    await saveProductToDB(updatedProduct);
+    updatedProducts.push(updatedProduct);
+  }
+
+  res.json({
+    success: true,
+    updatedCount: updatedProducts.length,
+    products: updatedProducts,
+  });
 });
 
 // Update product (by Representative)
@@ -2636,9 +2921,12 @@ async function saveVisitToDB(visit: Visit): Promise<void> {
 async function fetchNotificationsFromDB(clientId?: string): Promise<Notification[]> {
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      const snap = await dbAdmin.collection("notifications").get();
+      const snap = (await Promise.race([
+        dbAdmin.collection("notifications").get(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore notifications fetch timeout")), 2500))
+      ])) as any;
       const list: Notification[] = [];
-      snap.forEach((doc) => {
+      snap.forEach((doc: any) => {
         const notif = doc.data() as Notification;
         if ((!clientId || notif.type === "broadcast" || notif.targetClientId === clientId) && !notif.isArchived) {
           list.push(notif);
@@ -2845,9 +3133,29 @@ app.patch("/api/visits/:id", async (req, res) => {
 });
 
 app.get("/api/notifications", async (req, res) => {
-  const { clientId } = req.query;
-  const list = await fetchNotificationsFromDB(clientId as string);
-  res.json(list);
+  try {
+    const clientId = req.query.clientId as string | undefined;
+    let list = await fetchNotificationsFromDB(clientId);
+    if (clientId) {
+      const users = await fetchAllUsersFromDB();
+      const targetUser = users.find((u) => u.id === clientId);
+      if (targetUser?.permissions?.canReceiveTargetedNotifications === false) {
+        list = list.filter((n) => n.type === "broadcast");
+      }
+    }
+    res.json(list);
+  } catch (err: any) {
+    console.warn("/api/notifications error, falling back to local store:", err?.message || err);
+    const list = getDB().notifications || [];
+    const clientId = req.query.clientId as string | undefined;
+    const targetUser = clientId ? (getDB().users || []).find((u) => u.id === clientId) : undefined;
+    const allowTargeted = targetUser?.permissions?.canReceiveTargetedNotifications !== false;
+    const filtered = (clientId
+      ? list.filter((n) => n.type === "broadcast" || (allowTargeted && n.targetClientId === clientId))
+      : list
+    ).filter((n) => !n.isArchived);
+    res.json(filtered);
+  }
 });
 
 app.post("/api/fcm/register", async (req, res) => {
@@ -2895,15 +3203,41 @@ app.post("/api/notifications", async (req, res) => {
   };
 
   await saveNotificationToDB(newNotif);
-  const fcmDelivery = await sendFcmNotificationToUsers({
-    title: newNotif.title,
-    body: newNotif.message,
-    targetClientId: newNotif.type === "target" ? newNotif.targetClientId : undefined,
-    data: {
-      notification_id: newNotif.id,
-      type: newNotif.type,
-    },
-  });
+
+  let skipTargetedFcm = false;
+  if (newNotif.type === "target" && newNotif.targetClientId) {
+    try {
+      const users = await fetchAllUsersFromDB();
+      const targetUser = users.find((u) => u.id === newNotif.targetClientId);
+      if (targetUser?.permissions?.canReceiveTargetedNotifications === false) {
+        skipTargetedFcm = true;
+      }
+    } catch {
+      // Fallback to local store check if Firestore query fails
+      const targetUser = (getDB().users || []).find((u) => u.id === newNotif.targetClientId);
+      if (targetUser?.permissions?.canReceiveTargetedNotifications === false) {
+        skipTargetedFcm = true;
+      }
+    }
+  }
+
+  const fcmDelivery = skipTargetedFcm
+    ? {
+        attempted: false,
+        tokenCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        reason: "targeted_notifications_disabled_by_admin",
+      }
+    : await sendFcmNotificationToUsers({
+        title: newNotif.title,
+        body: newNotif.message,
+        targetClientId: newNotif.type === "target" ? newNotif.targetClientId : undefined,
+        data: {
+          notification_id: newNotif.id,
+          type: newNotif.type,
+        },
+      });
   res.json({ success: true, notification: newNotif, fcmDelivery });
 });
 
@@ -3504,16 +3838,26 @@ async function robustGenerateContent(
 
   let lastError: any = null;
   for (const model of candidateModels) {
-    try {
-      const res = await ai.models.generateContent({
-        model,
-        contents,
-        config
-      });
-      return { response: res, modelUsed: model, fallbackSearchUsed: true };
-    } catch (err: any) {
-      console.warn(`Model ${model} failed, trying fallback:`, err?.status || err?.message);
-      lastError = err;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await ai.models.generateContent({
+          model,
+          contents,
+          config
+        });
+        return { response: res, modelUsed: model, fallbackSearchUsed: true };
+      } catch (err: any) {
+        const status = Number(err?.status || 0);
+        const msg = String(err?.message || "");
+        const isTransient = status === 503 || status === 429 || msg.includes("503") || msg.includes("UNAVAILABLE");
+        console.warn(`Model ${model} failed (attempt ${attempt + 1}), trying fallback:`, err?.status || err?.message);
+        lastError = err;
+        if (isTransient && attempt === 0) {
+          await new Promise((r) => setTimeout(r, 650));
+          continue;
+        }
+        break;
+      }
     }
   }
 
@@ -3541,8 +3885,25 @@ async function callOpenRouterChat({
     throw new Error("مفتاح OPENROUTER_API_KEY غير مهيأ في بيئة الخادم. يرجى إضافته في إعدادات المنصة (Secrets).");
   }
 
-  const appUrl = process.env.APP_URL || "https://mandoubak-med.app";
-  const workspaceId = process.env.OPENROUTER_WORKSPACE_ID || "21aaba5e-2929-5ce8-a166-d464aaf42366";
+  const toAsciiHeader = (val: string, fallback = ""): string => {
+    const cleaned = String(val || "")
+      .trim()
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/[^\x20-\x7E]/g, "")
+      .trim();
+    return cleaned || fallback;
+  };
+
+  const cleanApiKey = toAsciiHeader(apiKey);
+  if (!cleanApiKey || cleanApiKey.length < 12) {
+    throw new Error("مفتاح OPENROUTER_API_KEY غير مضبوط أو يحتوي على أحرف غير صالحة في إعدادات الأسرار.");
+  }
+
+  const appUrl = toAsciiHeader(process.env.APP_URL || "https://mandoubak-med.app", "https://mandoubak-med.app");
+  const workspaceId = toAsciiHeader(
+    process.env.OPENROUTER_WORKSPACE_ID || "21aaba5e-2929-5ce8-a166-d464aaf42366",
+    "21aaba5e-2929-5ce8-a166-d464aaf42366"
+  );
 
   const formattedMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
   if (systemInstruction && systemInstruction.trim()) {
@@ -3593,19 +3954,23 @@ async function callOpenRouterChat({
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${apiKey.trim()}`,
+          "Authorization": `Bearer ${cleanApiKey}`,
           "HTTP-Referer": appUrl,
-          "X-OpenRouter-Title": "مندوبك الطبي | Mandoubak Med",
-          "X-Title": "مندوبك الطبي | Mandoubak Med",
+          "X-OpenRouter-Title": "Mandoubak Med",
+          "X-Title": "Mandoubak Med",
           "Content-Type": "application/json",
           "X-Workspace-Id": workspaceId
         },
-        body: JSON.stringify(bodyPayload)
+        body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(20000)
       });
 
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`OpenRouter model ${candidate} failed (${res.status}):`, errText);
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("مفتاح OpenRouter غير صالح أو غير مصرح به (401). يرجى تحديث OPENROUTER_API_KEY في إعدادات الأسرار.");
+        }
         lastError = new Error(`OpenRouter Error (${res.status}): ${errText}`);
         continue;
       }
@@ -4073,9 +4438,12 @@ app.post("/api/ai/openrouter/chat", async (req, res) => {
 
 function formatGeminiChatError(err: any): string {
   const msg = String(err?.message || err || "");
-  const status = err?.status || (msg.includes("429") ? 429 : msg.includes("403") ? 403 : msg.includes("404") ? 404 : 500);
+  const status = err?.status || (msg.includes("503") ? 503 : msg.includes("429") ? 429 : msg.includes("403") ? 403 : msg.includes("404") ? 404 : 500);
   if (status === 403 || msg.includes("PERMISSION_DENIED") || msg.includes("API_KEY_INVALID")) {
     return "تعذر المصادقة مع مفتاح Gemini API (خطأ 403/400). يرجى التحقق من مفتاح API في إعدادات المشروع (Settings > Secrets).";
+  }
+  if (status === 503 || msg.includes("UNAVAILABLE") || msg.includes("high demand")) {
+    return "خوادم الذكاء الاصطناعي تشهد ضغطاً مؤقتاً (503). يرجى إعادة المحاولة بعد ثوانٍ قليلة أو التبديل إلى OpenRouter.";
   }
   if (status === 429 || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("Quota exceeded")) {
     return "تم تجاوز حد الاستخدام المجاني المؤقت لنموذج الذكاء الاصطناعي. يرجى المحاولة بعد لحظات أو التبديل إلى الوضع العام/السريع أو OpenRouter.";
@@ -4187,7 +4555,8 @@ app.post("/api/chat", async (req, res) => {
   } else if (mode === "fast") {
     plans.push(
       { model: "gemini-3.1-flash-lite" },
-      { model: "gemini-4-hydrogen" }
+      { model: "gemini-4-hydrogen" },
+      { model: "gemini-4-argon" }
     );
   } else if (mode === "search") {
     plans.push(
@@ -4217,7 +4586,8 @@ app.post("/api/chat", async (req, res) => {
   } else {
     plans.push(
       { model: "gemini-4-hydrogen" },
-      { model: "gemini-3.1-flash-lite" }
+      { model: "gemini-3.1-flash-lite" },
+      { model: "gemini-4-argon" }
     );
   }
 
@@ -4236,48 +4606,85 @@ app.post("/api/chat", async (req, res) => {
   let hasSentChunk = false;
 
   for (const plan of plans) {
-    try {
-      const config: any = {
-        systemInstruction: effectiveSystemInstruction
-      };
-      if (plan.tools) config.tools = plan.tools;
-      if (plan.toolConfig) config.toolConfig = plan.toolConfig;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const config: any = {
+          systemInstruction: effectiveSystemInstruction
+        };
+        if (plan.tools) config.tools = plan.tools;
+        if (plan.toolConfig) config.toolConfig = plan.toolConfig;
 
-      const stream = await aiClient.models.generateContentStream({
-        model: plan.model,
-        contents: formattedContents,
-        config
-      });
+        const stream = await aiClient.models.generateContentStream({
+          model: plan.model,
+          contents: formattedContents,
+          config
+        });
 
-      for await (const chunk of stream) {
-        if (!hasSentChunk) {
-          hasSentChunk = true;
-          res.write(`data: ${JSON.stringify({ provider: "gemini", modelUsed: plan.model })}\n\n`);
+        for await (const chunk of stream) {
+          if (!hasSentChunk) {
+            hasSentChunk = true;
+            res.write(`data: ${JSON.stringify({ provider: "gemini", modelUsed: plan.model })}\n\n`);
+          }
+          if (chunk.text) {
+            res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+          }
+          const groundingMeta = (chunk.candidates?.[0] as any)?.groundingMetadata;
+          if (groundingMeta?.groundingChunks && Array.isArray(groundingMeta.groundingChunks)) {
+            res.write(`data: ${JSON.stringify({ groundingSources: groundingMeta.groundingChunks })}\n\n`);
+          }
         }
-        if (chunk.text) {
-          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
-        }
-        const groundingMeta = (chunk.candidates?.[0] as any)?.groundingMetadata;
-        if (groundingMeta?.groundingChunks && Array.isArray(groundingMeta.groundingChunks)) {
-          res.write(`data: ${JSON.stringify({ groundingSources: groundingMeta.groundingChunks })}\n\n`);
-        }
-      }
 
-      if (hasSentChunk) {
-        res.write("data: [DONE]\n\n");
-        return res.end();
-      }
-    } catch (err: any) {
-      console.warn(`Gemini chat plan (${plan.model}${plan.tools ? "+tools" : ""}) failed:`, err?.status || err?.message);
-      lastError = err;
-      if (hasSentChunk) {
+        if (hasSentChunk) {
+          res.write("data: [DONE]\n\n");
+          return res.end();
+        }
+        break;
+      } catch (err: any) {
+        const errStatus = Number(err?.status || 0);
+        const errMsg = String(err?.message || "");
+        const isTransient = errStatus === 503 || errStatus === 429 || errMsg.includes("503") || errMsg.includes("UNAVAILABLE");
+        console.warn(`Gemini chat plan (${plan.model}${plan.tools ? "+tools" : ""}) failed (attempt ${attempt + 1}):`, err?.status || err?.message);
+        lastError = err;
+        if (hasSentChunk) {
+          break;
+        }
+        if (isTransient && attempt === 0) {
+          await new Promise((r) => setTimeout(r, 700));
+          continue;
+        }
         break;
       }
     }
+    if (hasSentChunk) {
+      break;
+    }
   }
 
-  // 4. Automatic OpenRouter fallback if Gemini failed before streaming & provider is auto
-  if (!hasSentChunk && provider !== "gemini" && openRouterKey) {
+  // 4. Non-streaming Gemini emergency fallback before OpenRouter
+  if (!hasSentChunk) {
+    try {
+      const { response: fallbackResp, modelUsed } = await robustGenerateContent(
+        aiClient,
+        plans[0]?.model || "gemini-4-hydrogen",
+        formattedContents,
+        { systemInstruction: effectiveSystemInstruction },
+        true
+      );
+      if (fallbackResp?.text) {
+        hasSentChunk = true;
+        res.write(`data: ${JSON.stringify({ provider: "gemini", modelUsed })}\n\n`);
+        res.write(`data: ${JSON.stringify({ text: fallbackResp.text })}\n\n`);
+        res.write("data: [DONE]\n\n");
+        return res.end();
+      }
+    } catch (nonStreamErr: any) {
+      lastError = nonStreamErr;
+    }
+  }
+
+  // 5. Automatic OpenRouter fallback if Gemini failed before streaming & provider is auto
+  const cleanOrKey = openRouterKey.replace(/^["']+|["']+$/g, "").replace(/[^\x20-\x7E]/g, "").trim();
+  if (!hasSentChunk && provider !== "gemini" && cleanOrKey.length >= 12) {
     try {
       const { reply, modelUsed } = await callOpenRouterChat({
         messages,
@@ -4349,22 +4756,166 @@ app.post("/api/ai/transcribe-audio", async (req, res) => {
 });
 
 app.post("/api/ai/suggest-category", async (req, res) => {
-  const { name, description } = req.body || {};
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY!,
-    httpOptions: {
-      headers: { 'User-Agent': 'aistudio-build' }
-    }
-  });
+  const { name, productName, activeIngredient, description, availableCategories } = req.body || {};
+  const itemName = String(productName || name || "").trim();
+  const ingredient = String(activeIngredient || "").trim();
+  const desc = String(description || "").trim();
+
+  if (!itemName && !ingredient && !desc) {
+    return res.status(400).json({ error: "يرجى إدخال اسم الصنف أو المادة الفعالة أولاً." });
+  }
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
-      contents: `Suggest a single, short drug category for a medicine named "${name}" with description "${description}". Return only the category name in Arabic.`,
+    const result = await classifySingleProductWithGemini({
+      name: itemName,
+      activeIngredient: ingredient,
+      description: desc,
+      availableCategories,
     });
-    res.json({ category: response.text?.trim() });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to suggest category" });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error("AI suggest-category error:", err);
+    res.status(500).json({ error: err?.message || "فشل اقتراح التصنيف عبر Gemini AI" });
+  }
+});
+
+// Batch auto-classify catalog products into available system categories using Gemini AI
+app.post("/api/ai/classify-catalog", async (req, res) => {
+  const { products, availableCategories } = req.body || {};
+
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(500).json({ error: "مفتاح Gemini API غير مهيأ على الخادم." });
+  }
+
+  if (!Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ error: "يرجى توفير قائمة الأصناف المراد تحليلها وتصنيفها." });
+  }
+
+  const categoriesList =
+    Array.isArray(availableCategories) && availableCategories.length > 0
+      ? Array.from(new Set(availableCategories.map((c) => String(c || "").trim()).filter(Boolean)))
+      : DEFAULT_CATALOG_CATEGORIES;
+
+  const sanitizedProducts = products
+    .filter((p) => p && typeof p.id === "string" && typeof p.name === "string" && p.name.trim())
+    .map((p) => ({
+      id: String(p.id).trim(),
+      name: String(p.name).trim(),
+      activeIngredient: p.activeIngredient ? String(p.activeIngredient).trim() : "",
+      description: p.description ? String(p.description).trim() : "",
+      currentCategory: p.currentCategory || p.category ? String(p.currentCategory || p.category).trim() : "عام",
+    }));
+
+  if (sanitizedProducts.length === 0) {
+    return res.status(400).json({ error: "لا توجد أصناف صالحة للتحليل." });
+  }
+
+  try {
+    const BATCH_SIZE = 35;
+    const allResults: Array<{
+      id: string;
+      suggestedCategory: string;
+      detectedActiveIngredient: string;
+      confidence: string;
+      reason: string;
+    }> = [];
+    let lastModelUsed = "gemini-4-hydrogen";
+
+    for (let i = 0; i < sanitizedProducts.length; i += BATCH_SIZE) {
+      const chunk = sanitizedProducts.slice(i, i + BATCH_SIZE);
+      const itemsPrompt = chunk
+        .map(
+          (item, idx) =>
+            `${idx + 1}. id="${item.id}" | الاسم: "${item.name}" | المادة الفعالة: "${
+              item.activeIngredient || "غير مذكورة"
+            }" | الوصف: "${item.description || "لا يوجد"}" | التصنيف الحالي: "${item.currentCategory}"`
+        )
+        .join("\n");
+
+      const prompt = `قم بتحليل أسماء الأصناف الطبية التالية في كتالوج الصيدليات والمستودعات الطبية، وصنّف كل صنف تلقائياً إلى أنسب فئة من قائمة الفئات المتاحة في النظام.
+
+قائمة الفئات المتاحة في النظام (يجب اختيار الفئة من هذه القائمة حصراً وبنفس النص):
+${categoriesList.map((c, idx) => `- ${c}`).join("\n")}
+
+قائمة الأصناف المطلوب تصنيفها (${chunk.length} صنف):
+${itemsPrompt}`;
+
+      const { response, modelUsed } = await robustGenerateContent(
+        ai,
+        "gemini-4-hydrogen",
+        prompt,
+        {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          systemInstruction:
+            "أنت خبير صيدلاني متخصص في تصنيف الأدوية والمستلزمات الطبية. حلّل اسم الدواء التجاري والشكل الصيدلاني والتركيز والمادة الفعالة (إن وجدت) واختر لكل صنف أنسب فئة من القائمة المتاحة فقط. أرجع مصفوفة JSON مطابقة للمخطط تحتوي على كل معرف id تم إرساله.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: {
+                  type: Type.STRING,
+                  description: "معرف الصنف كما ورد في المدخلات تماماً.",
+                },
+                suggestedCategory: {
+                  type: Type.STRING,
+                  description: "اسم الفئة المقترحة بالنص المطابق من الفئات المتاحة.",
+                },
+                detectedActiveIngredient: {
+                  type: Type.STRING,
+                  description: "المادة الفعالة العلمية المستنتجة من اسم الدواء إن أمكن معرفتها بدقة.",
+                },
+                confidence: {
+                  type: Type.STRING,
+                  description: "درجة الثقة في التصنيف: عالية أو متوسطة أو منخفضة.",
+                },
+                reason: {
+                  type: Type.STRING,
+                  description: "توضيح موجز باللغة العربية لسبب اختيار هذه الفئة (بحد أقصى 10 كلمات).",
+                },
+              },
+              required: ["id", "suggestedCategory", "confidence", "reason"],
+            },
+          },
+        },
+        false
+      );
+
+      lastModelUsed = modelUsed;
+      const parsedArray = JSON.parse((response.text ?? "[]").trim());
+      if (Array.isArray(parsedArray)) {
+        const resultById = new Map<string, any>();
+        for (const r of parsedArray) {
+          if (r && typeof r.id === "string") {
+            resultById.set(r.id.trim(), r);
+          }
+        }
+
+        for (const srcItem of chunk) {
+          const match = resultById.get(srcItem.id);
+          allResults.push({
+            id: srcItem.id,
+            suggestedCategory: normalizeCatalogCategory(match?.suggestedCategory || srcItem.currentCategory, categoriesList),
+            detectedActiveIngredient: String(match?.detectedActiveIngredient || "").trim(),
+            confidence: String(match?.confidence || "متوسطة").trim(),
+            reason: String(match?.reason || "تصنيف بناءً على الاسم الدوائي المتاح").trim(),
+          });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      model: lastModelUsed,
+      totalProcessed: allResults.length,
+      classifications: allResults,
+    });
+  } catch (err: any) {
+    console.error("AI Catalog Batch Classification Error:", err);
+    res.status(500).json({
+      error: "تعذر تحليل وتصنيف أصناف الكتالوج عبر Gemini AI: " + (err?.message || "خطأ غير متوقع"),
+    });
   }
 });
 
@@ -4449,9 +5000,104 @@ app.post("/api/gemini/stream", async (req, res) => {
   }
 });
 
+// --- GOOGLE GENAI MODEL INTERACTIONS API (gemini-4-hydrogen + google_search + thinking_level) ---
+app.post("/api/ai/interaction", async (req, res) => {
+  const {
+    input,
+    prompt,
+    model = "gemini-4-hydrogen",
+    useSearch = true,
+    thinkingLevel = "medium",
+    systemInstruction,
+    previousInteractionId,
+  } = req.body || {};
+
+  const userInput = (input || prompt || "").toString().trim();
+  if (!userInput) {
+    return res.status(400).json({ success: false, error: "نص السؤال (input) مطلوب لبدء التفاعل." });
+  }
+
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!geminiKey) {
+    return res.status(500).json({
+      success: false,
+      error: "مفتاح GEMINI_API_KEY غير مضبوط على الخادم. يرجى التحقق من Settings > Secrets.",
+    });
+  }
+
+  // Normalize legacy model names such as gemini-3.8-flash to active Gemini 4 models
+  const resolvedModel =
+    model === "gemini-3.8-flash" || model === "gemini-flash-latest"
+      ? "gemini-4-hydrogen"
+      : model;
+
+  const allowedThinkingLevels = ["low", "medium", "high", "xhigh"];
+  const normalizedThinking =
+    typeof thinkingLevel === "string" && allowedThinkingLevels.includes(thinkingLevel.toLowerCase())
+      ? thinkingLevel.toLowerCase()
+      : "medium";
+
+  try {
+    const aiClient = new GoogleGenAI({
+      apiKey: geminiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+
+    const interactionParams: any = {
+      model: resolvedModel,
+      input: userInput,
+      generation_config: {
+        thinking_level: normalizedThinking,
+      },
+    };
+
+    if (useSearch) {
+      interactionParams.tools = [{ type: "google_search" }];
+    }
+    if (systemInstruction && typeof systemInstruction === "string" && systemInstruction.trim()) {
+      interactionParams.system_instruction = systemInstruction.trim();
+    }
+    if (previousInteractionId && typeof previousInteractionId === "string" && previousInteractionId.trim()) {
+      interactionParams.previous_interaction_id = previousInteractionId.trim();
+    }
+
+    const interaction = await aiClient.interactions.create(interactionParams);
+
+    let fullOutput = interaction.output_text || "";
+    if (!fullOutput && Array.isArray(interaction.steps)) {
+      for (const step of interaction.steps) {
+        if (step.type === "model_output") {
+          const textContent = step.content?.find((c: any) => c.type === "text") as any;
+          if (textContent?.text) {
+            fullOutput += textContent.text;
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      interactionId: interaction.id,
+      modelUsed: resolvedModel,
+      output_text: fullOutput,
+      steps: interaction.steps || [],
+    });
+  } catch (err: any) {
+    console.error("Gemini Interaction Error:", err);
+    return res.status(err?.status || 500).json({
+      success: false,
+      error: formatGeminiChatError(err),
+    });
+  }
+});
+
 // --- GOOGLE GENAI INTERACTIONS AGENT API (ANTIGRAVITY & DEEP RESEARCH) ---
 app.post("/api/ai/agent-interaction", async (req, res) => {
-  const { input, prompt, agent = "antigravity-preview-05-2026", background = false } = req.body || {};
+  const { input, prompt, agent = "antigravity-preview-09-2026", background = false } = req.body || {};
   const userInput = input || prompt;
   if (!userInput || typeof userInput !== "string" || userInput.trim() === "") {
     return res.status(400).json({ error: "نص الإدخال (input/prompt) مطلوب لبدء المحادثة مع الوكيل الذكي" });
@@ -4468,7 +5114,7 @@ app.post("/api/ai/agent-interaction", async (req, res) => {
     });
 
     const interaction = await ai.interactions.create({
-      agent: agent || "antigravity-preview-05-2026",
+      agent: agent || "antigravity-preview-09-2026",
       input: userInput.trim(),
       environment: "remote",
       background: Boolean(background)
@@ -5243,14 +5889,40 @@ app.post("/api/system/reset", async (req, res) => {
 });
 
 
+app.get("/terms", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "public", "terms.html"));
+});
+
+app.get("/privacy", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "public", "privacy.html"));
+});
+
+app.all("/api/health", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({ status: "ok", timestamp: Date.now() });
+});
+
 // ---------------- VITE MIDDLEWARE / STATIC SERVING ----------------
 
 async function startServer() {
   const distPath = path.join(process.cwd(), "dist");
   const isCompiledServer = typeof process.argv[1] === "string" && process.argv[1].endsWith("server.cjs");
   if ((process.env.NODE_ENV === "production" || isCompiledServer) && fs.existsSync(path.join(distPath, "index.html"))) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (
+          filePath.endsWith("index.html") ||
+          filePath.endsWith("firebase-messaging-sw.js") ||
+          filePath.endsWith("sw.js")
+        ) {
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        } else if (filePath.endsWith("manifest.webmanifest")) {
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      },
+    }));
     app.get("*", (req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
@@ -5271,9 +5943,11 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Mandoubak Med Server running on http://localhost:${PORT}`);
   });
+  httpServer.keepAliveTimeout = 65000;
+  httpServer.headersTimeout = 66000;
 }
 
 if (!process.env.VERCEL) {

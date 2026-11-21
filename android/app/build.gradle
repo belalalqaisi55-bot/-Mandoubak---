@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.mandoubak.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -8,7 +14,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -32,20 +38,21 @@ android {
                 storePassword keystorePassword
                 keyAlias keyAlias
                 keyPassword keyPassword
-            } else {
-                def fallbackFile = file("mandoubak-release.keystore")
-                if (fallbackFile.exists()) {
-                    storeFile fallbackFile
-                    storePassword "12345678"
-                    keyAlias "mandoubak"
-                    keyPassword "12345678"
-                }
+            } else if (keystorePropertiesFile.exists() && keystoreProperties['storeFile']) {
+                def rawStoreFile = keystoreProperties['storeFile'].toString().trim()
+                def resolvedStoreFile = rootProject.file(rawStoreFile).exists()
+                    ? rootProject.file(rawStoreFile)
+                    : file(rawStoreFile)
+                storeFile resolvedStoreFile
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
             }
         }
     }
     buildTypes {
         release {
-            if (signingConfigs.release.storeFile != null || project.hasProperty('keystoreFile')) {
+            if (signingConfigs.release.storeFile != null && signingConfigs.release.storeFile.exists()) {
                 signingConfig signingConfigs.release
             }
             minifyEnabled true
@@ -56,6 +63,7 @@ android {
             if (signingConfigs.debug.storeFile != null) {
                 signingConfig signingConfigs.debug
             }
+            minifyEnabled false
             applicationIdSuffix ""
         }
     }
@@ -74,6 +82,8 @@ dependencies {
     implementation "androidx.core:core-splashscreen:${rootProject.ext.coreSplashScreenVersion}"
     implementation project(':capacitor-android')
     debugImplementation("com.reqable.android:user-certificate-trust:1.0.0")
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-messaging'
     testImplementation "junit:junit:${rootProject.ext.junitVersion}"
     androidTestImplementation "androidx.test.ext:junit:${rootProject.ext.androidxJunitVersion}"
     androidTestImplementation "androidx.test.espresso:espresso-core:${rootProject.ext.androidxEspressoCoreVersion}"

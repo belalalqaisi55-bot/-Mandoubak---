@@ -1,25 +1,56 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
   <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>مندوبك الطبي - Mandoubak Med</title>
+
     <script>
       // Silence Vite HMR WebSocket errors in AI Studio iframe environment
       (() => {
-        // Immediately unregister any active service worker and clear caches in development
-        if (typeof window !== 'undefined' && (location.hostname.includes('ais-dev') || location.hostname === 'localhost' || location.port === '3000')) {
+        // Purge outdated Cache Storage entries when app asset version updates or in dev mode
+        try {
+          const ASSET_CACHE_VER = '2026-11-20-bg2';
+          const prevVer = window.localStorage ? localStorage.getItem('mandoubak_asset_ver') : null;
+          const prevAvatar = window.localStorage ? localStorage.getItem('mandoubak_dr_avatar') : null;
+          if (prevAvatar === '/app-logo.png' || prevAvatar === '/app-logo.jpg') {
+            localStorage.removeItem('mandoubak_dr_avatar');
+          }
+          const isDev =
+            typeof window !== 'undefined' &&
+            (location.hostname.includes('ais-dev') ||
+              location.hostname === 'localhost' ||
+              location.port === '3000');
+
+          if (isDev || prevVer !== ASSET_CACHE_VER) {
+            if ('caches' in window) {
+              caches.keys().then((keys) => {
+                for (const k of keys) {
+                  caches.delete(k).catch(() => {});
+                }
+              });
+            }
+            if (window.localStorage) {
+              localStorage.setItem('mandoubak_asset_ver', ASSET_CACHE_VER);
+            }
+          }
+        } catch (_) {}
+
+        // Immediately unregister old non-FCM service workers in development
+        if (
+          typeof window !== 'undefined' &&
+          (location.hostname.includes('ais-dev') ||
+            location.hostname === 'localhost' ||
+            location.port === '3000')
+        ) {
           if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then((regs) => {
               for (const r of regs) {
-                const scriptUrl = r.active?.scriptURL || r.waiting?.scriptURL || r.installing?.scriptURL || '';
+                const scriptUrl =
+                  r.active?.scriptURL || r.waiting?.scriptURL || r.installing?.scriptURL || '';
                 if (!scriptUrl.includes('firebase-messaging-sw.js')) {
                   r.unregister().catch(() => {});
                 }
-              }
-            });
-          }
-          if ('caches' in window) {
-            caches.keys().then((keys) => {
-              for (const k of keys) {
-                caches.delete(k).catch(() => {});
               }
             });
           }
@@ -27,16 +58,25 @@
 
         const suppress = (arg) => {
           if (!arg) return false;
-          const msg = (arg instanceof Error) ? (arg.message + ' ' + (arg.stack || '')) : String(arg);
+          const msg =
+            arg instanceof Error ? arg.message + ' ' + (arg.stack || '') : String(arg);
           const lower = msg.toLowerCase();
-          return lower.includes('[vite]') || lower.includes('websocket') || lower.includes('closed without opened') || lower.includes('@vite/client');
+          return (
+            lower.includes('[vite]') ||
+            lower.includes('websocket') ||
+            lower.includes('closed without opened') ||
+            lower.includes('@vite/client')
+          );
         };
+
         const origError = console.error;
         const origWarn = console.warn;
+
         console.error = (...args) => {
           if (args.some((arg) => suppress(arg))) return;
           origError.apply(console, args);
         };
+
         console.warn = (...args) => {
           if (args.some((arg) => suppress(arg))) return;
           origWarn.apply(console, args);
@@ -48,21 +88,38 @@
           }
         };
 
-        window.addEventListener('error', (event) => {
-          const errText = (event.error ? (event.error.message + ' ' + (event.error.stack || '')) : '') + ' ' + (event.message || '') + ' ' + (event.filename || '');
-          if (suppress(errText) || suppress(event.error) || (event.filename && suppress(event.filename))) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            return true;
-          }
-        }, true);
+        window.addEventListener(
+          'error',
+          (event) => {
+            const errText =
+              (event.error ? event.error.message + ' ' + (event.error.stack || '') : '') +
+              ' ' +
+              (event.message || '') +
+              ' ' +
+              (event.filename || '');
+            if (
+              suppress(errText) ||
+              suppress(event.error) ||
+              (event.filename && suppress(event.filename))
+            ) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return true;
+            }
+          },
+          true
+        );
 
-        window.addEventListener('unhandledrejection', (event) => {
-          if (event.reason && suppress(event.reason)) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-          }
-        }, true);
+        window.addEventListener(
+          'unhandledrejection',
+          (event) => {
+            if (event.reason && suppress(event.reason)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
 
         // Virtual WebSocket implementation for Vite HMR to prevent "WebSocket closed without opened" errors
         try {
@@ -72,7 +129,9 @@
             constructor(url, protocols) {
               super();
               this.url = String(url || '');
-              this.protocol = Array.isArray(protocols) ? (protocols[0] || 'vite-hmr') : String(protocols || 'vite-hmr');
+              this.protocol = Array.isArray(protocols)
+                ? protocols[0] || 'vite-hmr'
+                : String(protocols || 'vite-hmr');
               this.readyState = 0; // CONNECTING
               this.binaryType = 'blob';
               this.bufferedAmount = 0;
@@ -88,41 +147,50 @@
                   const ev = new Event('open');
                   this.dispatchEvent(ev);
                   if (typeof this.onopen === 'function') {
-                    try { this.onopen(ev); } catch (_) {}
+                    try {
+                      this.onopen(ev);
+                    } catch (_) {}
                   }
                 }
               }, 5);
             }
 
-            send(data) {}
+            send(_data) {}
 
             close(code, reason) {
               if (this.readyState !== 3) {
                 this.readyState = 3; // CLOSED
-                const ev = typeof CloseEvent !== 'undefined'
-                  ? new CloseEvent('close', { code: code || 1000, reason: reason || 'Normal Closure', wasClean: true })
-                  : new Event('close');
+                const ev =
+                  typeof CloseEvent !== 'undefined'
+                    ? new CloseEvent('close', {
+                        code: code || 1000,
+                        reason: reason || 'Normal Closure',
+                        wasClean: true,
+                      })
+                    : new Event('close');
                 this.dispatchEvent(ev);
                 if (typeof this.onclose === 'function') {
-                  try { this.onclose(ev); } catch (_) {}
+                  try {
+                    this.onclose(ev);
+                  } catch (_) {}
                 }
               }
             }
           }
+
           ViteHmrMockSocket.CONNECTING = 0;
           ViteHmrMockSocket.OPEN = 1;
           ViteHmrMockSocket.CLOSING = 2;
           ViteHmrMockSocket.CLOSED = 3;
 
           const isHmrTarget = (url, protocols) => {
-            const u = typeof url === 'string' ? url : (url && url.href ? String(url.href) : '');
+            const u = typeof url === 'string' ? url : url && url.href ? String(url.href) : '';
             const p = Array.isArray(protocols) ? protocols.join(' ') : String(protocols || '');
             return (
               p.includes('vite-hmr') ||
               u.includes('vite-hmr') ||
-              u.includes('token=') ||
               u.includes('/@vite/') ||
-              (u.includes('ais-dev') && (u.includes('ws://') || u.includes('wss://')))
+              (u.includes('ais-dev') && u.includes('token=') && (u.includes('ws://') || u.includes('wss://')))
             );
           };
 
@@ -157,30 +225,53 @@
         } catch (_) {
           const mem = new Map();
           const polyfill = {
-            getItem: (k) => mem.get(String(k)) ?? null,
+            getItem: (k) => (mem.has(String(k)) ? mem.get(String(k)) : null),
             setItem: (k, v) => mem.set(String(k), String(v)),
             removeItem: (k) => mem.delete(String(k)),
             clear: () => mem.clear(),
             key: (i) => Array.from(mem.keys())[i] ?? null,
-            get length() { return mem.size; }
+            get length() {
+              return mem.size;
+            },
           };
-          try { Object.defineProperty(window, 'localStorage', { value: polyfill, configurable: true, writable: true }); } catch (_) {}
-          try { Object.defineProperty(window, 'sessionStorage', { value: polyfill, configurable: true, writable: true }); } catch (_) {}
+          try {
+            Object.defineProperty(window, 'localStorage', {
+              value: polyfill,
+              configurable: true,
+              writable: true,
+            });
+          } catch (_) {}
+          try {
+            Object.defineProperty(window, 'sessionStorage', {
+              value: polyfill,
+              configurable: true,
+              writable: true,
+            });
+          } catch (_) {}
         }
       })();
     </script>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>مندوبك الطبي - Mandoubak Med</title>
-    <meta name="description" content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)." />
+
+    <meta
+      name="description"
+      content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)."
+    />
     <meta property="og:title" content="مندوبك الطبي - Mandoubak Med" />
-    <meta property="og:description" content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)." />
+    <meta
+      property="og:description"
+      content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)."
+    />
     <meta property="og:image" content="/dr-belal.jpg" />
     <meta property="og:type" content="website" />
+
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="مندوبك الطبي - Mandoubak Med" />
-    <meta name="twitter:description" content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)." />
+    <meta
+      name="twitter:description"
+      content="تطبيق مندوبك الطبي للمبيعات والطلبيات الطبية | النسخة الرسمية المعتمدة والوحيدة للنشر والإنتاج برعاية د. بلال القيسي (Dr. Belal Alqaisi)."
+    />
     <meta name="twitter:image" content="/dr-belal.jpg" />
+
     <meta name="author" content="د. بلال القيسي (Dr. Belal Alqaisi)" />
     <meta name="creator" content="د. بلال القيسي" />
     <meta name="publisher" content="د. بلال القيسي - Mandoubak Med" />
@@ -191,13 +282,20 @@
     <meta name="apple-mobile-web-app-title" content="مندوبك الطبي" />
     <meta name="application-name" content="مندوبك الطبي" />
     <meta name="msapplication-TileColor" content="#0f766e" />
+
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/pwa-192x192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/pwa-512x512.png" />
-    <link rel="icon" type="image/jpeg" href="/app-logo.jpg" />
+    <link rel="icon" type="image/jpeg" href="/dr-belal.jpg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
     <!-- Google Fonts for Arabic & Classical Luxury: Tajawal, Cormorant Garamond, Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800&display=swap"
+      rel="stylesheet"
+    />
+
     <!-- Web App Manifest for PWA installation -->
     <link rel="manifest" href="/manifest.webmanifest" />
   </head>
@@ -206,4 +304,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
