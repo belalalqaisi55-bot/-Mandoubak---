@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { Analytics } from '@vercel/analytics/react';
 import { authenticatedFetch as fetch } from "./utils/authenticatedFetch";
 import { Product, StockReport, Order, OrderItem, User, UserPermissions, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
@@ -13659,6 +13660,7 @@ export default function App() {
           <span>{OFFICIAL_APP_URL}</span>
         </a>
       </footer>
+      <Analytics />
     </div>
   );
 }
