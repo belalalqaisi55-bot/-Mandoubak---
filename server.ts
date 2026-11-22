@@ -5897,11 +5897,6 @@ app.get("/privacy", (_req, res) => {
   res.sendFile(path.join(process.cwd(), "public", "privacy.html"));
 });
 
-app.all("/api/health", (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.status(200).json({ status: "ok", timestamp: Date.now() });
-});
-
 // ---------------- VITE MIDDLEWARE / STATIC SERVING ----------------
 
 async function startServer() {
