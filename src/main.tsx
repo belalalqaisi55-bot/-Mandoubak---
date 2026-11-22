@@ -1,6 +1,8 @@
 import './utils/suppressViteHmrErrors.ts';
 import React, { StrictMode, Component } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Analytics } from '@vercel/analytics/react';
+import { Capacitor } from '@capacitor/core';
 import App from './App.tsx';
 import './index.css';
 import { initGlobalApiProxy } from './utils/apiConfig.ts';
@@ -136,10 +138,13 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   }
 }
 
+const isWebRuntime = !Capacitor.isNativePlatform();
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <RootErrorBoundary>
       <App />
+      {isWebRuntime && <Analytics />}
     </RootErrorBoundary>
   </StrictMode>,
 );
