@@ -42,6 +42,7 @@ import {
 import { PharmacyOrdersChart } from "./PharmacyOrdersChart";
 import { DailyOrderVolumeChart } from "./DailyOrderVolumeChart";
 import { OrderResponseSpeedChart } from "./OrderResponseSpeedChart";
+import { MonthlyVisitsChart } from "./MonthlyVisitsChart";
 import { GeminiChatModal } from "./GeminiChatModal";
 
 
@@ -811,6 +812,8 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
 
                 <OrderResponseSpeedChart orders={orders} />
 
+                <MonthlyVisitsChart visits={visits} />
+
                 {/* Visit Tracking Highlights Summary */}
                 {isVisitTrackingEnabled && (
                   <div className="rounded-xl border border-teal-100 bg-gradient-to-r from-teal-50/40 via-white to-teal-50/20 p-4 space-y-3">
@@ -1027,6 +1030,8 @@ export const AdminAnalyticsDashboard: React.FC<AdminAnalyticsDashboardProps> = (
 
                 {isVisitTrackingEnabled ? (
                   <div className="space-y-4">
+                    <MonthlyVisitsChart visits={visits} />
+
                     {/* Rep Leaderboard Grid */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {visitMetrics.repVisitsList.map((rep, idx) => (
