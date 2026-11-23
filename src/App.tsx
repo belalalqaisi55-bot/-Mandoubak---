@@ -11,6 +11,7 @@ import { AiCreativeStudioModal } from "./components/AiCreativeStudioModal";
 import { AdminAnalyticsDashboard } from "./components/AdminAnalyticsDashboard";
 import { AgreementsManager } from "./components/AgreementsManager";
 import { GoogleChatTab } from "./components/GoogleChatTab";
+import { GoogleDocsTab } from "./components/GoogleDocsTab";
 import { PediatricDoseCalculator } from "./components/PediatricDoseCalculator";
 import { DrugInteractionsAndMonographs } from "./components/DrugInteractionsAndMonographs";
 import { PharmacyLoyaltyHub } from "./components/PharmacyLoyaltyHub";
@@ -149,6 +150,7 @@ import {
   Smartphone,
   Fingerprint,
   FileCheck2,
+  FileText,
   Cloud,
   CloudUpload,
   Database,
@@ -580,8 +582,8 @@ export default function App() {
   );
 
   // Navigation state
-  const [activeTab, setActiveTab] = useState<"sheet" | "history" | "reports" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("sheet");
-  const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
+  const [activeTab, setActiveTab] = useState<"sheet" | "history" | "reports" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "docs" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("sheet");
+  const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "docs" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
   const [visitViewMode, setVisitViewMode] = useState<"list" | "map">("list");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -7086,6 +7088,15 @@ export default function App() {
                       id="sidebar-rep-complaints"
                     />
                     <SidebarNavItem
+                      icon={<FileText className="h-4.5 w-4.5 text-blue-600" />}
+                      label="مستندات Google Docs 📄"
+                      active={repTab === "docs"}
+                      onClick={() => setRepTab("docs")}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-rep-docs"
+                    />
+                    <SidebarNavItem
                       icon={<Sparkles className="h-4.5 w-4.5 text-purple-600" />}
                       label="فيديو طريقة الاستخدام 📱"
                       active={false}
@@ -7190,6 +7201,15 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       highlight
                       id="sidebar-pharmacy-complaints"
+                    />
+                    <SidebarNavItem
+                      icon={<FileText className="h-4.5 w-4.5 text-blue-600" />}
+                      label="مستندات Google Docs 📄"
+                      active={activeTab === "docs"}
+                      onClick={() => setActiveTab("docs")}
+                      collapsed={isSidebarCollapsed}
+                      highlight
+                      id="sidebar-pharmacy-docs"
                     />
                     {(() => {
                       const visibleNotifCount = notifications.filter(
@@ -11048,6 +11068,16 @@ export default function App() {
                 </div>
               )}
 
+              {repTab === "docs" && (
+                <div className="p-3 sm:p-5">
+                  <GoogleDocsTab
+                    currentUser={user}
+                    products={products}
+                    agreements={agreements}
+                  />
+                </div>
+              )}
+
               {repTab === "pediatric" && (
                 <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-2xs m-3">
                   <PediatricDoseCalculator />
@@ -13066,6 +13096,22 @@ export default function App() {
                   <GoogleChatTab
                     currentUser={user}
                     clients={uniqueClients}
+                  />
+                </motion.div>
+              )}
+
+              {activeTab === "docs" && (
+                <motion.div
+                  key="client-tab-docs"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  className="space-y-4"
+                >
+                  <GoogleDocsTab
+                    currentUser={user}
+                    products={products}
+                    agreements={agreements}
                   />
                 </motion.div>
               )}

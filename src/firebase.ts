@@ -489,6 +489,9 @@ function sanitizeAndValidateVapidKey(raw: unknown): string | undefined {
   }
 }
 
+const PROJECT_FIREBASE_VAPID_KEY =
+  "BCJNUtnQWMQCz9NXk0n2iumgeZ3HwrO47OMgdLh4K502mpo0s9zUM3Sgzfv64lpAWPDKxhNbXdQ65Gf_Fzw6qr8";
+
 export async function requestFcmToken(): Promise<string | null> {
   if (!isFirebaseConfigured || !messaging || typeof window === "undefined") {
     return null;
@@ -501,11 +504,13 @@ export async function requestFcmToken(): Promise<string | null> {
     const rawVapidKey =
       (import.meta as any).env?.VITE_FIREBASE_VAPID_KEY ||
       configAny.vapidKey;
-    const vapidKey = sanitizeAndValidateVapidKey(rawVapidKey);
+    const validatedEnvOrConfigKey = sanitizeAndValidateVapidKey(rawVapidKey);
 
-    if (rawVapidKey && !vapidKey) {
-      console.warn("قيمة VITE_FIREBASE_VAPID_KEY غير صالحة (يجب أن تكون مفتاح Web Push VAPID بصيغة Base64URL من Firebase Console). سيتم استخدام المفتاح الافتراضي للـ SDK.");
+    if (rawVapidKey && !validatedEnvOrConfigKey) {
+      console.warn("قيمة VITE_FIREBASE_VAPID_KEY غير صالحة (يجب أن تكون مفتاح Web Push VAPID بصيغة Base64URL من Firebase Console). سيتم استخدام مفتاح المشروع المعتمد.");
     }
+
+    const vapidKey = validatedEnvOrConfigKey || sanitizeAndValidateVapidKey(PROJECT_FIREBASE_VAPID_KEY);
 
     let serviceWorkerRegistration: ServiceWorkerRegistration | undefined;
     if ("serviceWorker" in navigator) {
