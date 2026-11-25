@@ -16,11 +16,13 @@ import {
   inMemoryPersistence
 } from "firebase/auth";
 import { getStorage } from "firebase/storage";
-import { getMessaging } from "firebase/messaging";
+import { getMessaging, isSupported as isMessagingSupported } from "firebase/messaging";
+import { getAnalytics, isSupported as isAnalyticsSupported } from "firebase/analytics";
 import {
   initializeFirestore,
   getFirestore,
   doc,
+  getDoc,
   getDocFromServer,
   getDocs,
   setLogLevel,
@@ -45,7 +47,8 @@ let auth: any = null;
 let storage: any = null;
 let appCheck: any = null;
 let messaging: any = null;
-export { app, auth, db, storage, appCheck, messaging };
+let analytics: any = null;
+export { app, auth, db, storage, appCheck, messaging, analytics };
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
 
@@ -206,10 +209,33 @@ if (isFirebaseConfigured) {
       }
     }
 
-    try {
-      messaging = getMessaging(app);
-    } catch (msgErr) {
-      console.warn("Firebase Messaging initialization notice:", msgErr);
+    if (typeof window !== "undefined") {
+      try {
+        messaging = getMessaging(app);
+      } catch (msgErr) {
+        console.warn("Firebase Messaging initialization notice:", msgErr);
+      }
+      isMessagingSupported()
+        .then((supported) => {
+          if (supported && app && !messaging) {
+            messaging = getMessaging(app);
+          } else if (!supported) {
+            messaging = null;
+          }
+        })
+        .catch(() => {});
+    }
+
+    if (typeof window !== "undefined") {
+      isAnalyticsSupported()
+        .then((supported) => {
+          if (supported && app) {
+            analytics = getAnalytics(app);
+          }
+        })
+        .catch(() => {
+          // Ignore analytics notice in unsupported WebViews/environments
+        });
     }
 
     // Attempt silent anonymous sign-in so Firestore has a valid auth session
@@ -296,6 +322,55 @@ export async function registerWithEmail(email: string, pass: string) {
 export async function signOutUser() {
   if (!auth) return;
   await signOut(auth);
+}
+
+/**
+ * Ensures an active Firebase Auth UID exists for Firestore owner-scoped registration.
+ * If an anonymous session already owns a different users/{uid} document (e.g. testing multiple phones
+ * from one browser), signs out the anonymous session and obtains a fresh anonymous UID so
+ * Firestore allow-create rules (incoming().id == request.auth.uid) succeed cleanly.
+ */
+export async function ensureAnonymousFirebaseUid(options?: {
+  matchPhone?: string;
+}): Promise<string | null> {
+  if (!isFirebaseConfigured || !auth) {
+    return null;
+  }
+  try {
+    if (typeof auth.authStateReady === "function") {
+      await auth.authStateReady();
+    }
+    let current = auth.currentUser;
+    if (!current) {
+      const cred = await signInAnonymously(auth);
+      current = cred?.user || auth.currentUser;
+    }
+    if (current && current.isAnonymous && db) {
+      try {
+        const existingSnap = await getDoc(doc(db, "users", current.uid));
+        if (existingSnap.exists()) {
+          const existingPhone = String(existingSnap.data()?.phone || "").replace(/\D/g, "");
+          const targetPhone = String(options?.matchPhone || "").replace(/\D/g, "");
+          const isSamePhone =
+            existingPhone &&
+            targetPhone &&
+            (existingPhone === targetPhone ||
+              (existingPhone.length >= 8 && targetPhone.length >= 8 && existingPhone.slice(-8) === targetPhone.slice(-8)));
+          if (!isSamePhone) {
+            await signOut(auth);
+            const freshCred = await signInAnonymously(auth);
+            current = freshCred?.user || auth.currentUser;
+          }
+        }
+      } catch {
+        // Ignore lookup failures and return current UID
+      }
+    }
+    return current?.uid || null;
+  } catch (err) {
+    console.warn("ensureAnonymousFirebaseUid notice:", err);
+    return auth?.currentUser?.uid || null;
+  }
 }
 
 export async function resetPassword(email: string) {
@@ -492,13 +567,95 @@ function sanitizeAndValidateVapidKey(raw: unknown): string | undefined {
 const PROJECT_FIREBASE_VAPID_KEY =
   "BCJNUtnQWMQCz9NXk0n2iumgeZ3HwrO47OMgdLh4K502mpo0s9zUM3Sgzfv64lpAWPDKxhNbXdQ65Gf_Fzw6qr8";
 
+const FCM_SW_URL = "/firebase-messaging-sw.js";
+const FCM_SW_SCOPE = "/firebase-cloud-messaging-push-scope";
+
+async function ensureMessagingInstance(): Promise<any | null> {
+  if (!isFirebaseConfigured || !app || typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const supported = await isMessagingSupported();
+    if (!supported) {
+      return null;
+    }
+    if (!messaging) {
+      messaging = getMessaging(app);
+    }
+    return messaging;
+  } catch (err) {
+    console.warn("Firebase Messaging support check notice:", err);
+    return messaging || null;
+  }
+}
+
+async function waitForActiveServiceWorker(
+  registration: ServiceWorkerRegistration,
+  timeoutMs: number = 6000
+): Promise<ServiceWorkerRegistration> {
+  if (registration.active) {
+    return registration;
+  }
+  const targetWorker = registration.installing || registration.waiting;
+  if (!targetWorker) {
+    return registration;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        targetWorker.removeEventListener("statechange", onStateChange);
+        resolve();
+      }
+    };
+    const onStateChange = () => {
+      if (targetWorker.state === "activated" || targetWorker.state === "redundant" || registration.active) {
+        finish();
+      }
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    targetWorker.addEventListener("statechange", onStateChange);
+  });
+  return registration;
+}
+
+async function registerFcmServiceWorker(): Promise<ServiceWorkerRegistration | undefined> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return undefined;
+  }
+  try {
+    // Register FCM worker under dedicated scope so it coexists cleanly with VitePWA root /sw.js
+    const registration = await navigator.serviceWorker.register(FCM_SW_URL, {
+      scope: FCM_SW_SCOPE,
+      updateViaCache: "none",
+    });
+    registration.update().catch(() => {});
+    return await waitForActiveServiceWorker(registration);
+  } catch (swErr) {
+    console.warn("FCM service worker registration notice:", swErr);
+    try {
+      const fallbackReg = await navigator.serviceWorker.register(FCM_SW_URL);
+      return await waitForActiveServiceWorker(fallbackReg);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export async function requestFcmToken(): Promise<string | null> {
-  if (!isFirebaseConfigured || !messaging || typeof window === "undefined") {
+  if (typeof window === "undefined") {
     return null;
   }
   if (!("Notification" in window) || window.Notification.permission !== "granted") {
     return null;
   }
+  const msgInstance = await ensureMessagingInstance();
+  if (!msgInstance) {
+    return null;
+  }
+
   try {
     const configAny = firebaseConfig as any;
     const rawVapidKey =
@@ -511,15 +668,7 @@ export async function requestFcmToken(): Promise<string | null> {
     }
 
     const vapidKey = validatedEnvOrConfigKey || sanitizeAndValidateVapidKey(PROJECT_FIREBASE_VAPID_KEY);
-
-    let serviceWorkerRegistration: ServiceWorkerRegistration | undefined;
-    if ("serviceWorker" in navigator) {
-      try {
-        serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-      } catch (swErr) {
-        console.warn("FCM service worker registration notice:", swErr);
-      }
-    }
+    const serviceWorkerRegistration = await registerFcmServiceWorker();
 
     const { getToken } = await import("firebase/messaging");
     const tokenOptions: { vapidKey?: string; serviceWorkerRegistration?: ServiceWorkerRegistration } = {};
@@ -530,7 +679,7 @@ export async function requestFcmToken(): Promise<string | null> {
       tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
     }
 
-    const token = await getToken(messaging, tokenOptions);
+    const token = await getToken(msgInstance, tokenOptions);
     if (token) {
       return token;
     }
@@ -544,12 +693,13 @@ export async function requestFcmToken(): Promise<string | null> {
 export async function subscribeToForegroundFcmMessages(
   callback: (payload: any) => void
 ): Promise<() => void> {
-  if (!isFirebaseConfigured || !messaging || typeof window === "undefined") {
+  const msgInstance = await ensureMessagingInstance();
+  if (!msgInstance || typeof window === "undefined") {
     return () => {};
   }
   try {
     const { onMessage } = await import("firebase/messaging");
-    return onMessage(messaging, callback);
+    return onMessage(msgInstance, callback);
   } catch (err) {
     console.warn("FCM foreground listener notice:", err);
     return () => {};

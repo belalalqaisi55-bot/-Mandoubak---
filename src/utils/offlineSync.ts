@@ -1,4 +1,5 @@
 import { doc, setDoc, deleteDoc } from "firebase/firestore";
+import { authenticatedFetch as fetch } from "./authenticatedFetch";
 import { Order, StockReport, Product, SyncQueueItem, OfflineSyncStats, SyncLogEntry } from "../types";
 import { isFirebaseConfigured, db } from "../firebase";
 

@@ -175,7 +175,6 @@ export const UserProfileModal = ({
                     onClick={async () => {
                       try {
                         await signOutUser();
-                        localStorage.removeItem("mandoubak_id_token");
                         setStatusMessage("تم فك ارتباط حساب Google بنجاح.");
                       } catch (err: any) {
                         setErrorMessage(formatFirebaseAuthError(err));
@@ -194,8 +193,7 @@ export const UserProfileModal = ({
                     try {
                       const gUser = await signInWithGoogle();
                       if (gUser) {
-                        const token = await (gUser as any).getIdToken();
-                        if (token) localStorage.setItem("mandoubak_id_token", token);
+                        await (gUser as any).getIdToken();
                         setStatusMessage(`تم ربط حساب Google (${gUser.email || gUser.displayName}) بنجاح ✓`);
                       }
                     } catch (err: any) {

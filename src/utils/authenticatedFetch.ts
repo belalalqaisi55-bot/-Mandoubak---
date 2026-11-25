@@ -88,6 +88,49 @@ function raceWithAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal | null
   });
 }
 
+let inMemorySessionToken: string | null = null;
+
+export function setAppSessionToken(token: string | null): void {
+  inMemorySessionToken = token && token.trim() ? token.trim() : null;
+  recentGetSnapshots.clear();
+}
+
+export function getAppSessionToken(): string | null {
+  return inMemorySessionToken;
+}
+
+export function clearAppSessionToken(): void {
+  inMemorySessionToken = null;
+  recentGetSnapshots.clear();
+}
+
+function isTokenExpired(token: string, skewSeconds = 30): boolean {
+  try {
+    const parts = token.split(".");
+    if (parts.length === 3) {
+      const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+      const payload = JSON.parse(atob(padded));
+      if (typeof payload?.exp === "number") {
+        return payload.exp * 1000 <= Date.now() + skewSeconds * 1000;
+      }
+      return false;
+    }
+    if (parts.length === 2) {
+      const base64 = parts[0].replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+      const payload = JSON.parse(atob(padded));
+      if (typeof payload?.exp === "number") {
+        return payload.exp <= Date.now() + skewSeconds * 1000;
+      }
+      return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 export const authenticatedFetch = async (
   url: RequestInfo | URL,
   options: AuthenticatedRequestInit = {}
@@ -98,26 +141,30 @@ export const authenticatedFetch = async (
   if (auth?.currentUser && !auth.currentUser.isAnonymous) {
     try {
       idToken = await auth.currentUser.getIdToken();
-      if (idToken) localStorage.setItem("mandoubak_id_token", idToken);
     } catch {
-      // Ignore silent token refresh failure
+      // Fall back to in-memory app session token if available
     }
-  } else {
-    const storedToken = localStorage.getItem("mandoubak_id_token");
-    if (storedToken) {
-      if (isJwtExpired(storedToken)) {
-        localStorage.removeItem("mandoubak_id_token");
-      } else {
-        idToken = storedToken;
-      }
+  }
+  if (!idToken && inMemorySessionToken) {
+    if (isTokenExpired(inMemorySessionToken)) {
+      inMemorySessionToken = null;
+    } else {
+      idToken = inMemorySessionToken;
     }
   }
 
   const isFormData = typeof FormData !== "undefined" && fetchOptions.body instanceof FormData;
+  const hasBody = fetchOptions.body !== undefined && fetchOptions.body !== null;
   const buildHeaders = (token: string | null): Record<string, string> => {
+    const incomingHeaders = { ...((fetchOptions.headers as Record<string, string>) || {}) };
+    const hasExplicitContentType = Object.keys(incomingHeaders).some(
+      (k) => k.toLowerCase() === "content-type"
+    );
     const baseHeaders: Record<string, string> = {
-      ...((fetchOptions.headers as Record<string, string>) || {}),
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...incomingHeaders,
+      ...(hasBody && !isFormData && !hasExplicitContentType
+        ? { "Content-Type": "application/json" }
+        : {}),
     };
     if (token) {
       baseHeaders.Authorization = `Bearer ${token}`;
@@ -178,9 +225,13 @@ export const authenticatedFetch = async (
   const executeNetworkFetch = async (token: string | null): Promise<Response> => {
     // Strip caller abort signal when sharing an in-flight GET so one unmount doesn't abort another caller
     const { signal: _ignoredSignal, ...sharedFetchOptions } = fetchOptions;
-    const initToUse =
+    const initToUse: RequestInit =
       isReadMethod && typeof url === "string"
-        ? { ...sharedFetchOptions, headers: buildHeaders(token) }
+        ? {
+            ...sharedFetchOptions,
+            cache: sharedFetchOptions.cache ?? "no-store",
+            headers: buildHeaders(token),
+          }
         : { ...fetchOptions, headers: buildHeaders(token) };
 
     try {
@@ -215,7 +266,6 @@ export const authenticatedFetch = async (
           const refreshedToken = await auth.currentUser.getIdToken(true);
           if (refreshedToken && refreshedToken !== idToken) {
             idToken = refreshedToken;
-            localStorage.setItem("mandoubak_id_token", refreshedToken);
             res = await executeNetworkFetch(refreshedToken);
           }
         } catch {
@@ -285,7 +335,6 @@ export const authenticatedFetch = async (
         const refreshedToken = await auth.currentUser.getIdToken(true);
         if (refreshedToken && refreshedToken !== idToken) {
           idToken = refreshedToken;
-          localStorage.setItem("mandoubak_id_token", refreshedToken);
           response = await executeNetworkFetch(refreshedToken);
         }
       } catch {
@@ -302,6 +351,7 @@ export const authenticatedFetch = async (
   const durationMs =
     (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
   const isAuthErr = response.status === 401 || response.status === 403;
+  const isAuthEndpoint = urlStr.includes("/api/auth/");
   const isRateLimited = response.status === 429;
   await logApiResponse({
     url: urlStr,
@@ -310,15 +360,15 @@ export const authenticatedFetch = async (
     durationMs,
     requestPayload,
     levelOverride:
-      (silentNetworkLog || isRateLimited) && !response.ok ? ApiLogLevel.WARN : undefined,
+      (silentNetworkLog || isRateLimited || isAuthEndpoint) && !response.ok ? ApiLogLevel.WARN : undefined,
   });
 
-  if (isAuthErr) {
-    if (idToken) {
-      localStorage.removeItem("mandoubak_id_token");
-      if (!silentNetworkLog) {
-        throw new Error("Unauthorized");
-      }
+  if (isAuthErr && !isAuthEndpoint) {
+    if (inMemorySessionToken && idToken === inMemorySessionToken) {
+      clearAppSessionToken();
+    }
+    if (idToken && !silentNetworkLog) {
+      throw new Error("Unauthorized");
     }
   }
 

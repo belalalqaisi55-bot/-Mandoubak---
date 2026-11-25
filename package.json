@@ -19,7 +19,8 @@
     "build:android": "npm run build && npx cap sync android",
     "build:release": "bash scripts/build-release.sh",
     "deploy:hosting": "npm run build && npx -y firebase-tools@latest deploy --only hosting",
-    "deploy:firebase": "npm run build && npx -y firebase-tools@latest deploy --only hosting,firestore:rules"
+    "deploy:functions": "npx -y firebase-tools@latest deploy --only functions",
+    "deploy:firebase": "npm run build && npx -y firebase-tools@latest deploy --only hosting,firestore:rules,functions"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

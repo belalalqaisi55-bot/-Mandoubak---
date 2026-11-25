@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { authenticatedFetch as fetch } from "../utils/authenticatedFetch";
 import { User, Notification, Visit, Order, StockReport, AppSettings } from "../types";
 import { collection, getDocs, doc, setDoc } from "firebase/firestore";
 import { db, isFirebaseConfigured, getDocsWithTimeout } from "../firebase";

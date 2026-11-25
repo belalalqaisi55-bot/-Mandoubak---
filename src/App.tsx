@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { authenticatedFetch as fetch } from "./utils/authenticatedFetch";
+import { authenticatedFetch as fetch, setAppSessionToken, clearAppSessionToken } from "./utils/authenticatedFetch";
 import { Product, StockReport, Order, OrderItem, User, UserPermissions, Visit, VisitTask, Notification, AppSettings, Agreement, DeviceContact, DeviceInfo, Complaint, ComplaintStatus, ComplaintType, ComplaintPriority } from "./types";
 import { DEFAULT_PRODUCTS } from "./data/defaultProducts";
 import { DEFAULT_CLIENTS } from "./data/defaultClients";
@@ -9,6 +9,7 @@ import { GeminiChatModal } from "./components/GeminiChatModal";
 import { PromoVideoModal } from "./components/PromoVideoModal";
 import { AiCreativeStudioModal } from "./components/AiCreativeStudioModal";
 import { AdminAnalyticsDashboard } from "./components/AdminAnalyticsDashboard";
+import { AlertsDashboard } from "./components/AlertsDashboard";
 import { AgreementsManager } from "./components/AgreementsManager";
 import { GoogleChatTab } from "./components/GoogleChatTab";
 import { GoogleDocsTab } from "./components/GoogleDocsTab";
@@ -72,7 +73,7 @@ import {
   getSyncLogs
 } from "./utils/offlineSync";
 import { collection, doc, getDocs, setDoc, getDoc, query, where, orderBy, deleteDoc, onSnapshot } from "firebase/firestore";
-import { auth, db, isFirebaseConfigured, signInWithGoogle, signInWithEmail, registerWithEmail, resetPassword, signOutUser, subscribeToAuthState, getDocsWithTimeout, handleFirestoreError, OperationType, formatFirebaseAuthError, requestFcmToken, subscribeToForegroundFcmMessages } from "./firebase";
+import { auth, db, isFirebaseConfigured, signInWithGoogle, signInWithEmail, registerWithEmail, resetPassword, signOutUser, ensureAnonymousFirebaseUid, subscribeToAuthState, getDocsWithTimeout, handleFirestoreError, OperationType, formatFirebaseAuthError, requestFcmToken, subscribeToForegroundFcmMessages } from "./firebase";
 import { motion, AnimatePresence } from "motion/react";
 import { ConnectionStatusIndicator } from "./components/ConnectionStatusIndicator";
 import { useConnectionStatus } from "./hooks/useConnectionStatus";
@@ -409,15 +410,11 @@ export default function App() {
         }
         const currentFbUser = auth?.currentUser;
         if (!currentFbUser || currentFbUser.isAnonymous) {
-          localStorage.removeItem("mandoubak_id_token");
           if (!cancelled) setGoogleUser(null);
           return;
         }
 
-        const freshToken = await currentFbUser.getIdToken();
-        if (freshToken) {
-          localStorage.setItem("mandoubak_id_token", freshToken);
-        }
+        await currentFbUser.getIdToken();
         const res = await fetch('/api/me', { silentNetworkLog: true });
         if (!res.ok) {
           if (!cancelled) setGoogleUser(null);
@@ -438,6 +435,13 @@ export default function App() {
   // User Confirmation & Access Control States
   const [pendingApprovalUser, setPendingApprovalUser] = useState<User | null>(() => {
     try {
+      const savedPending = localStorage.getItem("mandoubak_pending_user");
+      if (savedPending) {
+        const parsedPending = JSON.parse(savedPending);
+        if (parsedPending && typeof parsedPending === "object" && (parsedPending.isApproved === false || parsedPending.status === "pending_approval")) {
+          return parsedPending;
+        }
+      }
       const saved = localStorage.getItem("mandoubak_user");
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -455,6 +459,7 @@ export default function App() {
     } catch (e) {}
     return null;
   });
+  const [firestoreUsersDenied, setFirestoreUsersDenied] = useState(false);
   const [confirmationCodeInput, setConfirmationCodeInput] = useState("");
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [isCheckingApprovalStatus, setIsCheckingApprovalStatus] = useState(false);
@@ -467,7 +472,7 @@ export default function App() {
   });
   const [clientApprovalFilter, setClientApprovalFilter] = useState<"all" | "pending" | "approved" | "suspended">("all");
 
-  // Automatically persist user session to localStorage whenever user state updates
+  // Automatically persist user session & pending approval session to localStorage
   useEffect(() => {
     try {
       if (user) {
@@ -480,20 +485,31 @@ export default function App() {
     }
   }, [user]);
 
+  useEffect(() => {
+    try {
+      if (pendingApprovalUser) {
+        localStorage.setItem("mandoubak_pending_user", JSON.stringify(pendingApprovalUser));
+      } else {
+        localStorage.removeItem("mandoubak_pending_user");
+      }
+    } catch (e) {
+      console.warn("Error syncing pendingApprovalUser to localStorage", e);
+    }
+  }, [pendingApprovalUser]);
+
   // Firebase Auth listener for persistent Google Sign-In & Firestore synchronization
   useEffect(() => {
     if (!isFirebaseConfigured) return;
     const unsubscribe = subscribeToAuthState(async (firebaseUser) => {
       if (!firebaseUser) {
-        localStorage.removeItem("mandoubak_id_token");
+        clearAppSessionToken();
         setGoogleUser(null);
         return;
       }
       if (firebaseUser) {
         if (!firebaseUser.isAnonymous) {
           try {
-            const token = await firebaseUser.getIdToken();
-            if (token) localStorage.setItem("mandoubak_id_token", token);
+            await firebaseUser.getIdToken();
           } catch {}
           setGoogleUser({
             name: firebaseUser.displayName,
@@ -553,6 +569,8 @@ export default function App() {
 
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [showAdminSetupCard, setShowAdminSetupCard] = useState(false);
+  const [claimAdminPasscode, setClaimAdminPasscode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [loginMethod, setLoginMethod] = useState<"phone" | "email">("phone");
@@ -814,6 +832,8 @@ export default function App() {
     return [];
   });
   const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => {
+    const isInitialPrivileged = user?.role === "rep" || user?.role === "admin";
+    if (!isInitialPrivileged) return [];
     try {
       const cached = localStorage.getItem("mandoubak_local_clients");
       if (cached !== null) {
@@ -977,14 +997,7 @@ export default function App() {
     setOrderInputs(prev => ({ ...prev, [productId]: next === 0 && delta < 0 ? "" : next.toString() }));
   };
 
-  // Low Stock report dashboard states
-  const [lowStockSearch, setLowStockSearch] = useState("");
-  const [lowStockFilter, setLowStockFilter] = useState<"all" | "critical" | "warning">("all");
-  const [lowStockSort, setLowStockSort] = useState<"severity" | "recent">("severity");
-  const [quickRestockItem, setQuickRestockItem] = useState<StockReport | null>(null);
-  const [quickRestockQty, setQuickRestockQty] = useState("");
-
-  // Client-side configurable low stock threshold for Product Card warning badges
+  // Client-side configurable low stock threshold for Product Card warning badges & AlertsDashboard
   const [lowStockThreshold, setLowStockThreshold] = useState<number>(() => loadClientLowStockThreshold());
   const [showOnlyLowStockCatalog, setShowOnlyLowStockCatalog] = useState(false);
 
@@ -1320,10 +1333,12 @@ export default function App() {
   // Fetch initial data & subscribe to real-time settings / avatar sync
   useEffect(() => {
     fetchProducts();
-    fetchAllRegisteredUsers({ silent: true });
     fetchAppSettings();
     let initialUserSyncTimer: ReturnType<typeof setTimeout> | null = null;
     if (user) {
+      if (user.role === "rep" || user.role === "admin") {
+        fetchAllRegisteredUsers({ silent: true });
+      }
       // Stagger initial user data sync slightly to avoid bursting the upstream proxy rate limit on mount
       initialUserSyncTimer = setTimeout(() => {
         fetchUserSpecificData(true);
@@ -1360,6 +1375,30 @@ export default function App() {
               try {
                 localStorage.setItem("mandoubak_product_categories", JSON.stringify(snapData.productCategories));
               } catch (e) {}
+            }
+
+            // Real-time synchronization of security/approval settings
+            if (snapData && typeof snapData.requireApprovalForNewClients === "boolean") {
+              setAppSettings((prev) => ({
+                ...prev,
+                requireApprovalForNewClients: snapData.requireApprovalForNewClients,
+                requireApprovalForNewAccounts:
+                  typeof snapData.requireApprovalForNewAccounts === "boolean"
+                    ? snapData.requireApprovalForNewAccounts
+                    : snapData.requireApprovalForNewClients,
+                singlePhonePerDevice:
+                  typeof snapData.singlePhonePerDevice === "boolean"
+                    ? snapData.singlePhonePerDevice
+                    : prev.singlePhonePerDevice,
+                autoApproveKnownNumbers:
+                  typeof snapData.autoApproveKnownNumbers === "boolean"
+                    ? snapData.autoApproveKnownNumbers
+                    : prev.autoApproveKnownNumbers,
+                enableVisitTracking:
+                  typeof snapData.enableVisitTracking === "boolean"
+                    ? snapData.enableVisitTracking
+                    : prev.enableVisitTracking,
+              }));
             }
 
             // Real-time synchronization of category colors
@@ -1429,6 +1468,7 @@ export default function App() {
           unsubscribeUsers = onSnapshot(
             collection(db, "users"),
             (snap) => {
+              setFirestoreUsersDenied(false);
               if (!snap.empty) {
                 const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
                 const deletedKeys = getDeletedClientKeys();
@@ -1460,6 +1500,9 @@ export default function App() {
               }
             },
             (err) => {
+              if (err?.code === "permission-denied" || String(err?.message || "").toLowerCase().includes("permission")) {
+                setFirestoreUsersDenied(true);
+              }
               console.warn("Users realtime sync notice:", err.message);
             }
           );
@@ -1534,6 +1577,34 @@ export default function App() {
     };
   }, [user?.id, user?.role]);
 
+  // Real-time auto-unlock for pending accounts once Dr. Belal approves them in Firestore
+  useEffect(() => {
+    if (user || !pendingApprovalUser?.id || !isFirebaseConfigured || !db) return;
+    let active = true;
+    const unsubPending = onSnapshot(
+      doc(db, "users", pendingApprovalUser.id),
+      (snap) => {
+        if (!active || !snap.exists()) return;
+        const remote = { id: snap.id, ...snap.data() } as User;
+        if (remote.isApproved === true || remote.status === "approved") {
+          setPendingApprovalUser(null);
+          setUser(remote);
+          try {
+            localStorage.setItem("mandoubak_user", JSON.stringify(remote));
+          } catch {}
+          showSuccess("تهانينا! تم اعتماد حسابك من قبل المندوب د/ بلال القيسي 🎉");
+        }
+      },
+      () => {
+        // Ignore listener notice if not signed in as owner yet
+      }
+    );
+    return () => {
+      active = false;
+      unsubPending();
+    };
+  }, [user, pendingApprovalUser?.id]);
+
   // Fetch Firebase Remote Config for A/B Testing Onboarding Flow
   useEffect(() => {
     fetchOnboardingFlow().then((flow) => {
@@ -1574,53 +1645,46 @@ export default function App() {
       });
 
       if (res.success) {
-        // 1. Try saved user from localStorage
-        const savedUserStr = localStorage.getItem("pharma_user");
-        if (savedUserStr) {
-          try {
-            const parsed = JSON.parse(savedUserStr);
-            if (parsed && parsed.phone) {
-              setUser(parsed);
-              showSuccess(`مرحباً بعودتك، ${parsed.name}! 🔐✓`);
-              return;
-            }
-          } catch (e) {}
+        // 1. Restore verified existing session if the user has an active non-anonymous Firebase Auth session
+        if (auth?.currentUser && !auth.currentUser.isAnonymous) {
+          const savedUserStr = localStorage.getItem("mandoubak_user") || localStorage.getItem("pharma_user");
+          if (savedUserStr) {
+            try {
+              const parsed = JSON.parse(savedUserStr);
+              if (parsed && parsed.id && parsed.isApproved !== false && parsed.status !== "suspended") {
+                setUser(parsed);
+                setPendingApprovalUser(null);
+                showSuccess(`مرحباً بعودتك، ${parsed.name}! 🔐✓`);
+                return;
+              }
+            } catch {}
+          }
         }
 
-        // 2. Try bound device phone if registered
-        const boundPhone = localStorage.getItem("mandoubak_bound_phone");
-        if (boundPhone && registeredUsers.length > 0) {
-          const match = registeredUsers.find((u) => u.phone === boundPhone);
-          if (match) {
-            setUser(match);
-            localStorage.setItem("pharma_user", JSON.stringify(match));
-            showSuccess(`مرحباً ${match.name}! تم الدخول بالبصمة بنجاح 🔐✓`);
+        // 2. For previously bound client phones (non-admin), re-authenticate cleanly with backend API
+        const boundPhone = localStorage.getItem("mandoubak_bound_phone") || "";
+        const boundDigits = cleanArabicPhone(boundPhone);
+        if (boundDigits.length >= 6 && !boundDigits.endsWith("776600049")) {
+          const loginRes = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone: boundDigits }),
+            silentNetworkLog: true,
+          });
+          const loginData = await loginRes.json().catch(() => null);
+          if (loginRes.ok && loginData?.user && loginData.user.isApproved !== false && loginData.user.status !== "suspended") {
+            if (loginData.sessionToken) {
+              setAppSessionToken(loginData.sessionToken);
+            }
+            setUser(loginData.user);
+            setPendingApprovalUser(null);
+            localStorage.setItem("mandoubak_user", JSON.stringify(loginData.user));
+            showSuccess(`مرحباً ${loginData.user.name}! تم الدخول بالبصمة بنجاح 🔐✓`);
             return;
           }
         }
 
-        // 3. Fallback to primary rep or default approved user
-        const primaryUser = registeredUsers.find((u) => u.role === "rep") || registeredUsers[0];
-        if (primaryUser) {
-          setUser(primaryUser);
-          localStorage.setItem("pharma_user", JSON.stringify(primaryUser));
-          showSuccess(`مرحباً ${primaryUser.name}! تم التحقق بالبصمة 🔐✓`);
-        } else {
-          const defaultRep: User = {
-            id: "u_rep_master",
-            name: "د/ بلال القيسي (المندوب الطبي)",
-            phone: "776600049",
-            role: "rep",
-            entityName: "شركة العالمية للأدوية",
-            location: "صنعاء / اليمن",
-            isApproved: true,
-            status: "approved",
-            createdAt: new Date().toISOString(),
-          };
-          setUser(defaultRep);
-          localStorage.setItem("pharma_user", JSON.stringify(defaultRep));
-          showSuccess(`مرحباً د/ بلال القيسي! تم التحقق بالبصمة 🔐✓`);
-        }
+        showError("يرجى تسجيل الدخول برقم الهاتف وكلمة المرور أو بحساب Google أولاً قبل استخدام الدخول بالبصمة.");
       } else if (!res.cancelled) {
         showError(res.error || "فشل التحقق من البصمة");
       }
@@ -1705,6 +1769,24 @@ export default function App() {
     } catch {}
 
     const nowIso = new Date().toISOString();
+    const mergedTokens = Array.from(
+      new Set([token, ...(Array.isArray(targetUser.fcmTokens) ? targetUser.fcmTokens : [])])
+    ).slice(0, 10);
+    const updatedUserWithToken: User = {
+      ...targetUser,
+      fcmToken: token,
+      fcmTokens: mergedTokens,
+      fcmUpdatedAt: nowIso,
+    };
+
+    if (user?.id === targetUser.id) {
+      setUser((prev) =>
+        prev && prev.id === targetUser.id
+          ? { ...prev, fcmToken: token, fcmTokens: mergedTokens, fcmUpdatedAt: nowIso }
+          : prev
+      );
+    }
+
     const res = await fetch("/api/fcm/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1723,11 +1805,9 @@ export default function App() {
       } catch {}
     }
 
-    await syncToFirebase("users", "set", targetUser.id, {
-      ...targetUser,
-      fcmToken: token,
-      fcmUpdatedAt: nowIso,
-    }).catch((err) => console.warn("FCM Firestore sync notice:", err));
+    await syncToFirebase("users", "set", targetUser.id, updatedUserWithToken).catch((err) =>
+      console.warn("FCM Firestore sync notice:", err)
+    );
   };
 
   const registerDeviceFcmToken = async (targetUser: User) => {
@@ -1818,8 +1898,10 @@ export default function App() {
       nativeSendNotification({
         title,
         body: body || title,
+        icon: "/icons/pwa-192x192.png",
         channel: "broadcast",
-        tag: `fcm_${Date.now()}`,
+        tag: payload?.data?.notification_id || `fcm_${Date.now()}`,
+        data: payload?.data || {},
       });
       fetchUserSpecificData(true);
     }).then((unsub) => {
@@ -1829,9 +1911,22 @@ export default function App() {
         unsubscribeFcm = unsub;
       }
     });
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event?.data?.type === "FCM_NOTIFICATION_CLICK") {
+        fetchUserSpecificData(true);
+      }
+    };
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    }
+
     return () => {
       active = false;
       if (unsubscribeFcm) unsubscribeFcm();
+      if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+      }
     };
   }, [user?.id]);
 
@@ -1847,11 +1942,13 @@ export default function App() {
         if (user) {
           await registerDeviceFcmToken(user);
         }
-        showSuccess("تم تفعيل وتخويل إشعارات النظام على هاتفك بنجاح! 🔔");
+        showSuccess("تم تفعيل وتخويل إشعارات النظام الفورية (FCM) على جهازك بنجاح! 🔔");
         try {
           new window.Notification("تطبيق مندوبك الطبي 👨‍⚕️", {
-            body: "تم تفعيل التنبيهات الفورية بنجاح. ستصلك الإشعارات والعروض على شاشة هاتفك فور إرسالها.",
-            icon: "/favicon.ico",
+            body: "تم تفعيل التنبيهات الفورية بنجاح. ستصلك الإشعارات والعروض فور إرسالها حتى عند إغلاق التطبيق.",
+            icon: "/icons/pwa-192x192.png",
+            dir: "rtl",
+            lang: "ar",
           });
         } catch (err) {
           console.error("Notification trigger error:", err);
@@ -2211,7 +2308,10 @@ export default function App() {
         }
       };
 
-      const usersTask = user?.role === "rep" ? fetchAllRegisteredUsers({ silent: isBackground }) : Promise.resolve();
+      const usersTask =
+        user?.role === "rep" || user?.role === "admin"
+          ? fetchAllRegisteredUsers({ silent: isBackground })
+          : Promise.resolve();
 
       // Execute sync tasks in two staggered batches to prevent bursting upstream API rate limits
       await Promise.allSettled([
@@ -2299,8 +2399,9 @@ export default function App() {
     }, 150);
   };
 
-  const handleConfirmQuickRestock = async (report: StockReport) => {
-    if (!quickRestockQty || Number(quickRestockQty) <= 0) {
+  const handleConfirmQuickRestock = async (report: StockReport, requestedQty: number) => {
+    const qty = Number(requestedQty);
+    if (!Number.isFinite(qty) || qty <= 0) {
       showError("يرجى إدخال كمية صحيحة أكبر من الصفر");
       return;
     }
@@ -2319,7 +2420,7 @@ export default function App() {
           {
             productId: report.productId,
             productName: report.productName,
-            quantity: Number(quickRestockQty),
+            quantity: qty,
             price: prodPrice
           }
         ],
@@ -2355,8 +2456,6 @@ export default function App() {
       } else {
         showSuccess(`تم حفظ طلبية التوريد العاجلة محلياً وستُرسل تلقائياً فور توفر الاتصال!`);
       }
-      setQuickRestockItem(null);
-      setQuickRestockQty("");
       fetchUserSpecificData(true);
     } catch (e) {
       showError("حدث خطأ أثناء إرسال طلبية التوريد");
@@ -2824,6 +2923,28 @@ export default function App() {
           const cfgDoc = (await Promise.race([docPromise, timeoutPromise])) as any;
           if (cfgDoc && cfgDoc.exists && cfgDoc.exists()) {
             const cfgData = cfgDoc.data() as AppSettings;
+            if (cfgData && typeof cfgData.requireApprovalForNewClients === "boolean") {
+              setAppSettings((prev) => ({
+                ...prev,
+                requireApprovalForNewClients: cfgData.requireApprovalForNewClients,
+                requireApprovalForNewAccounts:
+                  typeof cfgData.requireApprovalForNewAccounts === "boolean"
+                    ? cfgData.requireApprovalForNewAccounts
+                    : cfgData.requireApprovalForNewClients,
+                singlePhonePerDevice:
+                  typeof cfgData.singlePhonePerDevice === "boolean"
+                    ? cfgData.singlePhonePerDevice
+                    : prev.singlePhonePerDevice,
+                autoApproveKnownNumbers:
+                  typeof cfgData.autoApproveKnownNumbers === "boolean"
+                    ? cfgData.autoApproveKnownNumbers
+                    : prev.autoApproveKnownNumbers,
+                enableVisitTracking:
+                  typeof cfgData.enableVisitTracking === "boolean"
+                    ? cfgData.enableVisitTracking
+                    : prev.enableVisitTracking,
+              }));
+            }
             if (cfgData && cfgData.drProfileAvatar && cfgData.drProfileAvatar !== "/app-logo.png" && cfgData.drProfileAvatar !== "/app-logo.jpg") {
               setDrProfileAvatar(cfgData.drProfileAvatar);
               try {
@@ -2847,7 +2968,11 @@ export default function App() {
   };
 
   const handleUpdateAppSetting = async (key: keyof AppSettings, value: boolean) => {
-    const updated = { ...appSettings, [key]: value };
+    const updated = {
+      ...appSettings,
+      [key]: value,
+      ...(key === "requireApprovalForNewClients" ? { requireApprovalForNewAccounts: value } : {}),
+    };
     setAppSettings(updated);
     try {
       await fetch("/api/settings", {
@@ -2855,10 +2980,12 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updated),
       });
+      await syncToFirebase("settings", "set", "app_config", updated);
       showSuccess("تم حفظ إعدادات الأمان والتأكيد بنجاح 🛡️");
     } catch (e) {
       console.warn("Error updating settings on backend:", e);
-      showSuccess("تم حفظ الإعدادات محلياً");
+      await syncToFirebase("settings", "set", "app_config", updated).catch(() => {});
+      showSuccess("تم حفظ الإعدادات بنجاح");
     }
   };
 
@@ -2977,8 +3104,12 @@ export default function App() {
     return promise;
   };
 
-  // Fetch registered users (for Representative view)
-  const fetchAllRegisteredUsers = async (options?: { silent?: boolean }) => {
+  // Fetch registered users (strictly for Representative / Admin view)
+  const fetchAllRegisteredUsers = async (options?: { silent?: boolean; forcePrivileged?: boolean }) => {
+    const isPrivilegedCaller = Boolean(options?.forcePrivileged) || user?.role === "rep" || user?.role === "admin";
+    if (!isPrivilegedCaller) {
+      return;
+    }
     if (usersFetchInFlightRef.current) {
       return usersFetchInFlightRef.current;
     }
@@ -3015,23 +3146,49 @@ export default function App() {
         }
       }
 
-      // 2. Fetch from Firestore (merge only non-deleted users)
+      // 2. Fetch from Firestore (merge by ID and keep Firestore state authoritative for synced accounts)
       if (isFirebaseConfigured && db) {
         try {
           const snapshot = await getDocsWithTimeout(collection(db, "users"), 5000);
+          setFirestoreUsersDenied(false);
           const fsUsers = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as User));
           if (fsUsers.length > 0) {
-            const existingIds = new Set(usersList.map((u) => u.id));
-            const existingPhones = new Set(usersList.map((u) => u.phone).filter(Boolean));
-            fsUsers.forEach((u: any) => {
-              if (u && u.id && !existingIds.has(u.id) && (!u.phone || !existingPhones.has(u.phone))) {
-                usersList.push(u);
-                existingIds.add(u.id);
-                if (u.phone) existingPhones.add(u.phone);
+            const mergedById = new Map<string, User>();
+            const phoneDigitsToId = new Map<string, string>();
+            usersList.forEach((u) => {
+              if (!u?.id) return;
+              mergedById.set(u.id, u);
+              const digits = cleanArabicPhone(u.phone || "");
+              if (digits.length >= 6) {
+                phoneDigitsToId.set(digits, u.id);
               }
             });
+            fsUsers.forEach((u: any) => {
+              if (!u || !u.id) return;
+              if (mergedById.has(u.id)) {
+                mergedById.set(u.id, { ...mergedById.get(u.id)!, ...u });
+                return;
+              }
+              const digits = cleanArabicPhone(u.phone || "");
+              const matchingPhoneId = digits.length >= 6 ? phoneDigitsToId.get(digits) : undefined;
+              if (matchingPhoneId && mergedById.has(matchingPhoneId)) {
+                const prev = mergedById.get(matchingPhoneId)!;
+                mergedById.delete(matchingPhoneId);
+                mergedById.set(u.id, { ...prev, ...u });
+                phoneDigitsToId.set(digits, u.id);
+              } else {
+                mergedById.set(u.id, u);
+                if (digits.length >= 6) {
+                  phoneDigitsToId.set(digits, u.id);
+                }
+              }
+            });
+            usersList = Array.from(mergedById.values());
           }
-        } catch (fsErr) {
+        } catch (fsErr: any) {
+          if (fsErr?.code === "permission-denied" || String(fsErr?.message || "").toLowerCase().includes("permission")) {
+            setFirestoreUsersDenied(true);
+          }
           console.warn("Firestore users fetch:", fsErr);
         }
       }
@@ -3159,7 +3316,7 @@ export default function App() {
       await Promise.all([
         fetchProducts(),
         fetchUserSpecificData(false, true),
-        fetchAllRegisteredUsers(),
+        user?.role === "rep" || user?.role === "admin" ? fetchAllRegisteredUsers() : Promise.resolve(),
         fetchAppSettings()
       ]);
     } catch (err: any) {
@@ -3312,6 +3469,9 @@ export default function App() {
         });
         const data = await res.json().catch(() => null);
         if (res.ok && data?.user) {
+          if (data.sessionToken) {
+            setAppSessionToken(data.sessionToken);
+          }
           verifiedUser = data.user;
         }
       } catch {
@@ -3367,6 +3527,9 @@ export default function App() {
           if (res.ok) {
             const data = await res.json();
             if (data.user && (data.user.isApproved || data.user.status === "approved")) {
+              if (data.sessionToken) {
+                setAppSessionToken(data.sessionToken);
+              }
               approvedUser = data.user;
             }
           }
@@ -3375,7 +3538,7 @@ export default function App() {
         }
       }
 
-      // 2. Try Firestore direct doc lookup by ID first, then email/phone query
+      // 2. Try Firestore direct owner doc lookup by ID
       if (!approvedUser && isFirebaseConfigured && db) {
         try {
           if (pendingApprovalUser.id) {
@@ -3384,23 +3547,6 @@ export default function App() {
               const dData = directSnap.data() as User;
               if (dData.isApproved || dData.status === "approved") {
                 approvedUser = { ...dData, id: directSnap.id };
-              }
-            }
-          }
-          if (!approvedUser) {
-            const snapshot = await getDocs(collection(db, "users"));
-            const found = snapshot.docs.find(d => {
-              const uData = d.data();
-              const uEmail = (uData.email || "").toLowerCase().trim();
-              if (pendingEmail && uEmail && uEmail === pendingEmail) return true;
-              const uPhone = cleanArabicPhone(uData.phone || "");
-              if (!cleanPhone || cleanPhone.length < 6 || !uPhone || uPhone.length < 6) return false;
-              return uPhone === cleanPhone || (uPhone.length >= 8 && cleanPhone.length >= 8 && uPhone.slice(-8) === cleanPhone.slice(-8));
-            });
-            if (found) {
-              const fData = found.data() as User;
-              if (fData.isApproved || fData.status === "approved") {
-                approvedUser = { ...fData, id: found.id };
               }
             }
           }
@@ -3440,6 +3586,54 @@ export default function App() {
     } finally {
       setIsCheckingApprovalStatus(false);
     }
+  };
+
+  const sanitizeUserForFirestore = (rawUser: Partial<User> & { id: string }, options?: { isSelfCreate?: boolean }) => {
+    const allowedRoles = new Set(["pharmacy", "doctor", "rep", "admin"]);
+    const allowedStatuses = new Set(["approved", "pending_approval", "suspended", "rejected"]);
+    const safeRole = allowedRoles.has(String(rawUser.role || "")) ? rawUser.role : "pharmacy";
+    const safeStatus = allowedStatuses.has(String(rawUser.status || ""))
+      ? rawUser.status
+      : rawUser.isApproved === false
+        ? "pending_approval"
+        : "approved";
+
+    const cleanDoc: Record<string, any> = {
+      id: String(rawUser.id).trim().slice(0, 128),
+      name: String(rawUser.name || "مستخدم").trim().slice(0, 128) || "مستخدم",
+      role: safeRole,
+      status: safeStatus,
+      isApproved: typeof rawUser.isApproved === "boolean" ? rawUser.isApproved : safeStatus === "approved",
+    };
+
+    if (typeof rawUser.phone === "string" && rawUser.phone.trim()) {
+      cleanDoc.phone = rawUser.phone.trim().slice(0, 32);
+    }
+    if (typeof rawUser.email === "string" && rawUser.email.trim()) {
+      cleanDoc.email = rawUser.email.trim().slice(0, 256);
+    }
+    if (typeof rawUser.entityName === "string" && rawUser.entityName.trim()) {
+      cleanDoc.entityName = rawUser.entityName.trim().slice(0, 128);
+    }
+    if (typeof rawUser.location === "string" && rawUser.location.trim()) {
+      cleanDoc.location = rawUser.location.trim().slice(0, 256);
+    }
+    if (typeof rawUser.confirmationCode === "string" && rawUser.confirmationCode.trim()) {
+      cleanDoc.confirmationCode = rawUser.confirmationCode.trim().slice(0, 32);
+    }
+    if (typeof rawUser.createdAt === "string" && rawUser.createdAt.trim()) {
+      cleanDoc.createdAt = rawUser.createdAt.trim().slice(0, 64);
+    }
+    if (typeof rawUser.fcmToken === "string" && rawUser.fcmToken.trim()) {
+      cleanDoc.fcmToken = rawUser.fcmToken.trim().slice(0, 512);
+    }
+    if (Array.isArray(rawUser.fcmTokens) && rawUser.fcmTokens.length > 0) {
+      cleanDoc.fcmTokens = rawUser.fcmTokens.filter((t) => typeof t === "string" && t.trim()).slice(0, 20);
+    }
+    if (!options?.isSelfCreate && rawUser.permissions && typeof rawUser.permissions === "object") {
+      cleanDoc.permissions = rawUser.permissions;
+    }
+    return cleanDoc;
   };
 
   // Middleware for automatic CRUD data synchronization between IndexedDB, localStorage and Firestore across all collections
@@ -3510,7 +3704,11 @@ export default function App() {
     if (isFirebaseConfigured && db && isDeviceOnline()) {
       try {
         if (action === "set" && id && data) {
-          await setDoc(doc(db, collectionName, id), data, { merge: true });
+          const payloadToWrite =
+            collectionName === "users" && id !== "u_rep"
+              ? sanitizeUserForFirestore({ id, ...data }, { isSelfCreate: !data.permissions })
+              : data;
+          await setDoc(doc(db, collectionName, id), payloadToWrite, { merge: true });
         } else if (action === "delete" && id) {
           await deleteDoc(doc(db, collectionName, id));
         }
@@ -3893,178 +4091,144 @@ export default function App() {
     e.preventDefault();
     const rawInput = phone.trim().toLowerCase();
     const cleanPhoneInput = cleanArabicPhone(phone);
-    const isRepEmail = rawInput.includes("belalalqaisi55@gmail.com") || rawInput === "belalalqaisi55" || rawInput.includes("belalalqaisi");
+    const isRepEmail = rawInput === "belalalqaisi55@gmail.com" || rawInput === "belalalqaisi55" || rawInput.includes("belalalqaisi");
     const isRepPhone = cleanPhoneInput.endsWith("776600049") || phone.includes("776600049");
     const isRep = isRepPhone || isRepEmail;
 
-    if (!cleanPhoneInput && !isRepEmail) {
+    if (!cleanPhoneInput && !isRepEmail && !rawInput.includes("@")) {
       showError("الرجاء إدخال رقم هاتف صحيح أو البريد الإلكتروني");
       return;
     }
 
     setLoading(true);
     try {
-      // 1. Rep / Admin Login Check - Strict Password Verification
-      if (isRep) {
-        const validAdminSecrets = ["Mandoubk302344$", "Belal302344"];
-        if (password && !validAdminSecrets.includes(password.trim()) && !isRepEmail) {
-          showError("كلمة المرور الخاصة بالمندوب المسؤول غير صحيحة. يرجى إدخال كلمة المرور السرية.");
-          setLoading(false);
-          return;
-        }
-        const adminUser: User = {
-          id: "u_rep",
-          email: "belalalqaisi55@gmail.com",
-          phone: "+967776600049",
-          name: "د/ بلال القيسي (المندوب الطبي والمسؤول)",
-          role: "rep",
-          entityName: "المكتب العلمي والمبيعات الطبية (الإدارة)",
-          location: "صنعاء / جميع المحافظات",
-          isApproved: true,
-          status: "approved",
-          createdAt: new Date().toISOString()
-        };
-        setUser(adminUser);
-        setPendingApprovalUser(null);
-        localStorage.setItem("mandoubak_user", JSON.stringify(adminUser));
-        localStorage.setItem("mandoubak_bound_phone", "+967776600049");
-        showSuccess("أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️");
-        setPassword("");
-
-        await syncToFirebase("users", "set", adminUser.id, adminUser);
-        setLoading(false);
-        return;
-      }
-
-      // 2. Try Backend API login
+      // 1. Server-verified authentication for both Admin/Rep and Facility Clients
       let data: any = null;
+      let backendReached = false;
       try {
         const r = await fetch("/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: cleanPhoneInput, password: password.trim() }),
+          body: JSON.stringify({
+            phone: cleanPhoneInput || undefined,
+            email: isRepEmail || rawInput.includes("@") ? rawInput : undefined,
+            password: password.trim(),
+          }),
         });
-        if (r && r.ok && r.headers.get("content-type")?.includes("application/json")) {
-          try {
-            data = await r.json();
-          } catch (e) {}
-        } else if (r && !r.ok) {
-          const errData = await r.json().catch(() => null);
-          if (errData?.requiresApproval && errData?.user) {
-            setPendingApprovalUser(errData.user);
-            localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
+        backendReached = true;
+        const parsed = await r.json().catch(() => null);
+        if (r.ok && parsed) {
+          data = parsed;
+        } else {
+          if (r.status === 403 && parsed?.requiresAdminSetup) {
+            setShowAdminSetupCard(true);
+            showError(parsed.error || "يرجى إعداد كلمة مرور المسؤول لأول مرة.");
+            return;
+          }
+          if (r.status === 401 || isRep) {
+            showError(parsed?.error || "كلمة المرور الخاصة بالمندوب المسؤول غير صحيحة.");
+            return;
+          }
+          if (parsed?.requiresApproval && parsed?.user) {
+            setPendingApprovalUser(parsed.user);
+            if (cleanPhoneInput) localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
             showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
-            setLoading(false);
+            return;
+          }
+          if (parsed?.error) {
+            showError(parsed.error);
             return;
           }
         }
       } catch (netErr) {
-        console.warn("Backend API login unreachable, using client authentication fallback", netErr);
+        if (isRep) {
+          showError("تعذر الاتصال بالخادم للتحقق من كلمة مرور المسؤول. يمكنك أيضاً تسجيل الدخول بحساب Google المعتمد.");
+          return;
+        }
+        console.warn("Backend API login unreachable, trying Firestore owner fallback", netErr);
       }
 
       if (data && data.user) {
         const loggedUser = data.user as User;
-        // Check approval status
-        if (loggedUser.status === "suspended") {
-          showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
-          setLoading(false);
+        if (loggedUser.status === "suspended" || data.status === "suspended") {
+          showError(data.error || "تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
           return;
         }
-        if (loggedUser.isApproved === false || loggedUser.status === "pending_approval") {
+        if (loggedUser.isApproved === false || loggedUser.status === "pending_approval" || data.status === "pending_approval") {
           setPendingApprovalUser(loggedUser);
-          localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
-          showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
-          setLoading(false);
+          if (cleanPhoneInput) localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
+          showError(data.message || "حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
           return;
         }
 
+        if (data.sessionToken) {
+          setAppSessionToken(data.sessionToken);
+        }
         setUser(loggedUser);
         setPendingApprovalUser(null);
+        setShowAdminSetupCard(false);
         localStorage.setItem("mandoubak_user", JSON.stringify(loggedUser));
-        localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
-        showSuccess(`أهلاً بك، ${loggedUser.name}`);
+        localStorage.setItem("mandoubak_bound_phone", loggedUser.phone || cleanPhoneInput || "");
         setPassword("");
+
+        if (loggedUser.role === "rep" || loggedUser.role === "admin") {
+          setFirestoreUsersDenied(false);
+          void fetchAllRegisteredUsers({ forcePrivileged: true });
+          showSuccess("أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️");
+        } else {
+          showSuccess(`أهلاً بك، ${loggedUser.name}`);
+        }
         return;
       }
 
-      // 3. Try Firestore direct query
-      if (isFirebaseConfigured && db) {
+      if (backendReached && data?.status === "not_found") {
+        setIsRegistering(true);
+        setRegForm((prev) => ({ ...prev, phone: cleanPhoneInput }));
+        showError("هذا الرقم غير مسجل مسبقاً بالتطبيق. يرجى إكمال بيانات منشأتك للانضمام والتسجيل.");
+        return;
+      }
+
+      // 2. Non-rep offline fallback: Firestore owner document lookup (when Firebase session exists)
+      if (!isRep && isFirebaseConfigured && db && auth?.currentUser?.uid) {
         try {
-          const snapshot = await getDocs(collection(db, "users"));
-          const foundDoc = snapshot.docs.find(d => {
-            const uData = d.data();
-            const uPhone = cleanArabicPhone(uData.phone || "");
+          const matchesPhone = (uPhoneRaw: unknown) => {
+            const uPhone = cleanArabicPhone(String(uPhoneRaw || ""));
             if (!uPhone || uPhone.length < 6 || !cleanPhoneInput || cleanPhoneInput.length < 6) return false;
             if (uPhone === cleanPhoneInput) return true;
             if (uPhone.length >= 8 && cleanPhoneInput.length >= 8) {
               return uPhone.slice(-8) === cleanPhoneInput.slice(-8);
             }
             return false;
-          });
+          };
 
-          if (foundDoc) {
-            const fireUser = { id: foundDoc.id, ...foundDoc.data() } as User;
-            if (fireUser.status === "suspended") {
+          const ownerSnap = await getDoc(doc(db, "users", auth.currentUser.uid));
+          if (ownerSnap.exists() && matchesPhone(ownerSnap.data()?.phone)) {
+            const foundUser = { id: ownerSnap.id, ...ownerSnap.data() } as User;
+            if (foundUser.status === "suspended") {
               showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
-              setLoading(false);
               return;
             }
-            if (fireUser.isApproved === false || fireUser.status === "pending_approval") {
-              setPendingApprovalUser(fireUser);
+            if (foundUser.isApproved === false || foundUser.status === "pending_approval") {
+              setPendingApprovalUser(foundUser);
               localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
               showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
-              setLoading(false);
               return;
             }
 
-            setUser(fireUser);
+            setUser(foundUser);
             setPendingApprovalUser(null);
-            localStorage.setItem("mandoubak_user", JSON.stringify(fireUser));
+            localStorage.setItem("mandoubak_user", JSON.stringify(foundUser));
             localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
-            showSuccess(`أهلاً بك، ${fireUser.name}`);
+            showSuccess(`أهلاً بك، ${foundUser.name}`);
             setPassword("");
             return;
           }
         } catch (fsErr) {
-          console.warn("Firestore login query error:", fsErr);
+          console.warn("Firestore owner login fallback notice:", fsErr);
         }
       }
 
-      // 4. Try local registeredUsers list
-      const existingClient = registeredUsers.find((c) => {
-        const cDigits = cleanArabicPhone(c.phone || "");
-        if (!cDigits || cDigits.length < 6 || !cleanPhoneInput || cleanPhoneInput.length < 6) return false;
-        if (cDigits === cleanPhoneInput) return true;
-        if (cDigits.length >= 8 && cleanPhoneInput.length >= 8) {
-          return cDigits.slice(-8) === cleanPhoneInput.slice(-8);
-        }
-        return false;
-      });
-
-      if (existingClient) {
-        if (existingClient.status === "suspended") {
-          showError("تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي (776600049).");
-          setLoading(false);
-          return;
-        }
-        if (existingClient.isApproved === false || existingClient.status === "pending_approval") {
-          setPendingApprovalUser(existingClient);
-          localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
-          showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
-          setLoading(false);
-          return;
-        }
-
-        setUser(existingClient);
-        setPendingApprovalUser(null);
-        localStorage.setItem("mandoubak_user", JSON.stringify(existingClient));
-        localStorage.setItem("mandoubak_bound_phone", cleanPhoneInput);
-        showSuccess(`أهلاً بك، ${existingClient.name}`);
-        setPassword("");
-        return;
-      }
-
-      // 5. If user is not found, prompt to register facility
+      // 3. Prompt to register facility if not found
       setIsRegistering(true);
       setRegForm((prev) => ({ ...prev, phone: cleanPhoneInput }));
       showError("هذا الرقم غير مسجل مسبقاً بالتطبيق. يرجى إكمال بيانات منشأتك للانضمام والتسجيل.");
@@ -4075,14 +4239,51 @@ export default function App() {
     }
   };
 
+  const handleClaimAdminPasscode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanPass = claimAdminPasscode.trim();
+    if (cleanPass.length < 6) {
+      showError("يجب أن تتكون كلمة مرور المسؤول من 6 أحرف على الأقل.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const r = await fetch("/api/auth/claim-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passcode: cleanPass }),
+      });
+      const data = await r.json().catch(() => null);
+      if (!r.ok || !data?.user) {
+        showError(data?.error || "تعذر إعداد كلمة مرور المسؤول.");
+        return;
+      }
+      if (data.sessionToken) {
+        setAppSessionToken(data.sessionToken);
+      }
+      setUser(data.user);
+      setPendingApprovalUser(null);
+      setShowAdminSetupCard(false);
+      setClaimAdminPasscode("");
+      setPassword("");
+      localStorage.setItem("mandoubak_user", JSON.stringify(data.user));
+      localStorage.setItem("mandoubak_bound_phone", "+967776600049");
+      setFirestoreUsersDenied(false);
+      void fetchAllRegisteredUsers({ forcePrivileged: true });
+      showSuccess("تم تعيين كلمة مرور المسؤول وتسجيل الدخول بنجاح! 🔐✓");
+    } catch {
+      showError("تعذر الاتصال بالخادم لإعداد كلمة مرور المسؤول.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setLoading(true);
     try {
       const googleUser = await signInWithGoogle();
       if (googleUser) {
-        // Store ID Token for API authentication
-        const idToken = await (googleUser as any).getIdToken();
-        localStorage.setItem("mandoubak_id_token", idToken);
+        await (googleUser as any).getIdToken();
         setGoogleUser({
           name: googleUser.displayName,
           email: googleUser.email,
@@ -4094,24 +4295,32 @@ export default function App() {
         const isRep = userEmail === "belalalqaisi55@gmail.com" || userEmail.startsWith("belalalqaisi55") || userEmail.includes("belalalqaisi");
 
         let existingUser: User | null = null;
+        let foundInFirestore = false;
         if (!isRep && isFirebaseConfigured && db) {
           try {
             const directSnap = await getDoc(doc(db, "users", googleUser.uid));
             if (directSnap.exists()) {
               existingUser = { id: directSnap.id, ...directSnap.data() } as User;
+              foundInFirestore = true;
             }
           } catch (fsErr) {
             handleFirestoreError(fsErr, OperationType.GET, `users/${googleUser.uid}`);
           }
         }
         if (!isRep && !existingUser) {
-          existingUser =
+          const localMatch =
             registeredUsers.find(
               (u) =>
                 u.id === googleUser.uid ||
                 (userEmail && (u.email || "").toLowerCase().trim() === userEmail)
             ) || null;
+          if (localMatch) {
+            existingUser = { ...localMatch, id: googleUser.uid };
+          }
         }
+
+        const safeDisplayName = (googleUser.displayName || "مستخدم Google").trim().slice(0, 128);
+        const safeGooglePhone = (googleUser.phoneNumber || "").trim().slice(0, 32);
 
         let loggedUser: User = isRep
           ? {
@@ -4129,10 +4338,10 @@ export default function App() {
           : existingUser || {
               id: googleUser.uid,
               email: googleUser.email || undefined,
-              phone: googleUser.phoneNumber || googleUser.email || "google_user",
-              name: googleUser.displayName || "مستخدم Google",
+              phone: safeGooglePhone,
+              name: safeDisplayName,
               role: "pharmacy",
-              entityName: googleUser.displayName ? `منشأة ${googleUser.displayName}` : "منشأة طبية مسجلة",
+              entityName: googleUser.displayName ? `منشأة ${safeDisplayName}`.slice(0, 128) : "منشأة طبية مسجلة",
               location: "مسجل عبر Google Auth",
               isApproved: !appSettings.requireApprovalForNewClients,
               status: appSettings.requireApprovalForNewClients ? "pending_approval" : "approved",
@@ -4140,7 +4349,7 @@ export default function App() {
               createdAt: new Date().toISOString(),
             };
 
-        if (!isRep && !existingUser) {
+        if (!isRep && (!existingUser || !foundInFirestore)) {
           try {
             const regRes = await fetch("/api/auth/register", {
               method: "POST",
@@ -4148,19 +4357,26 @@ export default function App() {
               body: JSON.stringify(loggedUser),
             });
             const regData = await regRes.json().catch(() => null);
+            if (regData?.sessionToken) {
+              setAppSessionToken(regData.sessionToken);
+            }
             if (regData?.user) {
-              loggedUser = regData.user;
+              loggedUser = { ...regData.user, id: googleUser.uid };
             }
           } catch {
             // Continue with Firestore/local sync if offline
           }
           unmarkClientsDeleted([loggedUser.id, loggedUser.phone || ""]);
           try {
-            await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+            await syncToFirebase(
+              "users",
+              "set",
+              loggedUser.id,
+              sanitizeUserForFirestore(loggedUser, { isSelfCreate: !foundInFirestore })
+            );
           } catch {
             // Non-fatal if backend persisted
           }
-          void fetchAllRegisteredUsers();
         }
 
         if (!isRep && loggedUser.status === "suspended") {
@@ -4182,6 +4398,10 @@ export default function App() {
           await syncToFirebase("users", "set", loggedUser.id, loggedUser);
         } catch {
           // Non-fatal
+        }
+        if (isRep) {
+          setFirestoreUsersDenied(false);
+          void fetchAllRegisteredUsers({ forcePrivileged: true });
         }
         showSuccess(isRep ? "أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️" : `أهلاً بك ${loggedUser.name}! تم تسجيل الدخول بنجاح كعميل.`);
       }
@@ -4224,10 +4444,7 @@ export default function App() {
         return;
       }
 
-      const idToken = await (fbUser as any).getIdToken();
-      if (idToken) {
-        localStorage.setItem("mandoubak_id_token", idToken);
-      }
+      await (fbUser as any).getIdToken();
 
       const resolvedEmail = (fbUser.email || cleanEmail).trim();
       const lowerEmail = resolvedEmail.toLowerCase();
@@ -4259,8 +4476,8 @@ export default function App() {
         const loggedUser: User = existingUser || {
           id: isRep ? "u_rep" : fbUser.uid,
           email: isRep ? "belalalqaisi55@gmail.com" : resolvedEmail,
-          phone: isRep ? "+967776600049" : (fbUser.phoneNumber || resolvedEmail),
-          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : (fbUser.displayName || resolvedEmail.split("@")[0] || "عميل مسجل"),
+          phone: isRep ? "+967776600049" : (fbUser.phoneNumber || "").slice(0, 32),
+          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : (fbUser.displayName || resolvedEmail.split("@")[0] || "عميل مسجل").slice(0, 128),
           role: isRep ? "rep" : "pharmacy",
           entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : "منشأة طبية مسجلة بالبريد",
           location: isRep ? "صنعاء / جميع المحافظات" : "مسجل بالبريد الإلكتروني",
@@ -4275,7 +4492,7 @@ export default function App() {
         }
         if (!isRep && (loggedUser.isApproved === false || loggedUser.status === "pending_approval")) {
           setPendingApprovalUser(loggedUser);
-          await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+          await syncToFirebase("users", "set", loggedUser.id, sanitizeUserForFirestore(loggedUser, { isSelfCreate: !existingUser }));
           showError("حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي (776600049)");
           return;
         }
@@ -4287,7 +4504,7 @@ export default function App() {
           localStorage.setItem("mandoubak_bound_phone", loggedUser.phone);
         }
         setEmailPassword("");
-        await syncToFirebase("users", "set", loggedUser.id, loggedUser);
+        await syncToFirebase("users", "set", loggedUser.id, sanitizeUserForFirestore(loggedUser, { isSelfCreate: !existingUser }));
         showSuccess(
           isRep
             ? "أهلاً بك دكتور بلال القيسي (المسؤول والمندوب الطبي المعتمد) 👨‍⚕️"
@@ -4306,11 +4523,11 @@ export default function App() {
         let newUser: User = {
           id: isRep ? "u_rep" : fbUser.uid,
           email: resolvedEmail,
-          phone: isRep ? "+967776600049" : (cleanRegPhone || resolvedEmail),
-          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : emailRegForm.name.trim(),
+          phone: isRep ? "+967776600049" : cleanRegPhone.slice(0, 32),
+          name: isRep ? "د/ بلال القيسي (المسؤول والمندوب الطبي)" : emailRegForm.name.trim().slice(0, 128),
           role: validatedRole,
-          entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : emailRegForm.entityName.trim(),
-          location: isRep ? "صنعاء / جميع المحافظات" : emailRegForm.location.trim(),
+          entityName: isRep ? "المكتب العلمي والمبيعات الطبية (الإدارة)" : emailRegForm.entityName.trim().slice(0, 128),
+          location: isRep ? "صنعاء / جميع المحافظات" : emailRegForm.location.trim().slice(0, 256),
           isApproved: !requiresApproval,
           status: requiresApproval ? "pending_approval" : "approved",
           confirmationCode: randomCode,
@@ -4325,8 +4542,11 @@ export default function App() {
               body: JSON.stringify(newUser),
             });
             const regData = await regRes.json().catch(() => null);
+            if (regData?.sessionToken) {
+              setAppSessionToken(regData.sessionToken);
+            }
             if (regData?.user) {
-              newUser = regData.user;
+              newUser = { ...regData.user, id: fbUser.uid };
             }
           } catch {
             // Silently continue with Firestore/local sync if offline
@@ -4335,7 +4555,7 @@ export default function App() {
         }
 
         try {
-          await syncToFirebase("users", "set", newUser.id, newUser);
+          await syncToFirebase("users", "set", newUser.id, sanitizeUserForFirestore(newUser, { isSelfCreate: !isRep }));
         } catch {
           // Non-fatal if backend already saved the registration
         }
@@ -4343,7 +4563,9 @@ export default function App() {
           localStorage.setItem("mandoubak_bound_phone", cleanRegPhone);
         }
         setEmailPassword("");
-        void fetchAllRegisteredUsers();
+        if (isRep) {
+          void fetchAllRegisteredUsers({ forcePrivileged: true });
+        }
 
         if (requiresApproval) {
           setPendingApprovalUser(newUser);
@@ -4411,14 +4633,15 @@ export default function App() {
       const validatedRole: "pharmacy" | "doctor" = regForm.role === "doctor" ? "doctor" : "pharmacy";
       const randomCode = String(Math.floor(1000 + Math.random() * 9000));
       const requiresApproval = appSettings.requireApprovalForNewClients;
+      const firebaseUid = await ensureAnonymousFirebaseUid({ matchPhone: finalPhone });
 
       const payload: User = {
-        id: "u_" + Date.now(),
-        phone: finalPhone,
-        name: regForm.name.trim(),
+        id: firebaseUid || ("u_" + Date.now()),
+        phone: finalPhone.slice(0, 32),
+        name: regForm.name.trim().slice(0, 128),
         role: validatedRole,
-        entityName: regForm.entityName.trim(),
-        location: regForm.location.trim(),
+        entityName: regForm.entityName.trim().slice(0, 128),
+        location: regForm.location.trim().slice(0, 256),
         isApproved: !requiresApproval,
         status: requiresApproval ? "pending_approval" : "approved",
         confirmationCode: randomCode,
@@ -4449,17 +4672,26 @@ export default function App() {
         return;
       }
 
-      const registeredUser: User = (data && data.user) ? data.user : payload;
+      if (data?.sessionToken) {
+        setAppSessionToken(data.sessionToken);
+      }
+
+      const registeredUser: User = (data && data.user)
+        ? { ...data.user, id: firebaseUid || data.user.id }
+        : payload;
       unmarkClientsDeleted([registeredUser.id, registeredUser.phone || ""]);
 
       try {
-        await syncToFirebase("users", "set", registeredUser.id, registeredUser);
+        await syncToFirebase(
+          "users",
+          "set",
+          registeredUser.id,
+          sanitizeUserForFirestore(registeredUser, { isSelfCreate: true })
+        );
       } catch {
         // Non-fatal if backend persisted registration
       }
       localStorage.setItem("mandoubak_bound_phone", finalPhone);
-
-      void fetchAllRegisteredUsers();
 
       // Check if requires approval
       if (registeredUser.isApproved === false || registeredUser.status === "pending_approval") {
@@ -4495,13 +4727,19 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    clearAppSessionToken();
     try {
       await signOutUser();
     } catch (e) {
       console.warn("Sign out notice:", e);
     }
     setUser(null);
+    setPendingApprovalUser(null);
+    setShowAdminSetupCard(false);
+    setClaimAdminPasscode("");
     localStorage.removeItem("mandoubak_user");
+    localStorage.removeItem("mandoubak_pending_user");
+    localStorage.removeItem("mandoubak_id_token");
     setRemainingInputs({});
     setOrderInputs({});
     showSuccess("تم تسجيل الخروج بنجاح");
@@ -6264,9 +6502,11 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
+                          clearAppSessionToken();
                           setPendingApprovalUser(null);
                           setPhone("");
                           localStorage.removeItem("mandoubak_user");
+                          localStorage.removeItem("mandoubak_id_token");
                           signOutUser().catch(() => {});
                         }}
                         className="text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors py-1 cursor-pointer"
@@ -6307,7 +6547,51 @@ export default function App() {
                       </button>
                     </div>
 
-                    {loginMethod === "phone" ? (
+                    {showAdminSetupCard ? (
+                      <form onSubmit={handleClaimAdminPasscode} className="space-y-4 rounded-2xl border border-rose-200 bg-rose-50/40 p-4" id="form-claim-admin">
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-black text-rose-900">إعداد كلمة مرور المسؤول لأول مرة 🔐</h3>
+                          <p className="text-xs text-slate-600">
+                            لم يتم تعيين كلمة مرور المسؤول بعد. أنشئ كلمة مرور قوية (6 أحرف على الأقل) لحماية لوحة التحكم.
+                          </p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                            كلمة مرور المسؤول الجديدة
+                          </label>
+                          <input
+                            type="password"
+                            minLength={6}
+                            placeholder="أدخل كلمة مرور من 6 أحرف على الأقل..."
+                            value={claimAdminPasscode}
+                            onChange={(e) => setClaimAdminPasscode(e.target.value)}
+                            className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-right font-medium text-slate-900 focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                            id="input-claim-admin-passcode"
+                            required
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="submit"
+                            disabled={loading || claimAdminPasscode.trim().length < 6}
+                            className="flex-1 rounded-xl bg-rose-700 py-3 font-bold text-white hover:bg-rose-800 disabled:opacity-50 transition-all cursor-pointer text-xs sm:text-sm"
+                            id="btn-claim-admin-submit"
+                          >
+                            {loading ? "جاري الحفظ..." : "تعيين كلمة المرور والدخول ✓"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowAdminSetupCard(false);
+                              setClaimAdminPasscode("");
+                            }}
+                            className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
+                      </form>
+                    ) : loginMethod === "phone" ? (
                       /* STEP 1: Phone Login */
                       <form onSubmit={handleLogin} className="space-y-4" id="form-login">
                         {/* Device Binding Badge if registered before */}
@@ -6361,8 +6645,13 @@ export default function App() {
                             cleanDigits = cleanDigits.replaceAll(arabicDigits[i], String(i));
                           }
                           cleanDigits = cleanDigits.replace(/\D/g, "");
-                          const isRepNumber = cleanDigits.endsWith("776600049");
-                          return isRepNumber ? (
+                          const normalizedLower = phone.trim().toLowerCase();
+                          const isRepIdentifier =
+                            cleanDigits.endsWith("776600049") ||
+                            normalizedLower === "belalalqaisi55@gmail.com" ||
+                            normalizedLower === "belalalqaisi55" ||
+                            normalizedLower.includes("belalalqaisi");
+                          return isRepIdentifier && !showAdminSetupCard ? (
                             <motion.div
                               initial={{ opacity: 0, height: 0 }}
                               animate={{ opacity: 1, height: "auto" }}
@@ -6378,7 +6667,6 @@ export default function App() {
                                 onChange={(e) => setPassword(e.target.value)}
                                 className="w-full rounded-xl border border-rose-300 bg-rose-50/20 px-4 py-3.5 text-right font-medium text-slate-900 transition-colors focus:border-rose-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
                                 id="input-password"
-                                required
                               />
                             </motion.div>
                           ) : null;
@@ -6432,7 +6720,7 @@ export default function App() {
                             id="btn-switch-to-register"
                           >
                             <Building className="h-3.5 w-3.5" />
-                            <span>منشأة أو عيادة جديدة؟ اضغط هنا للتسجيل 📝</span>
+                          <span>منشأة أو عيادة جديدة؟ اضغط هنا للتسجيل 📝</span>
                           </button>
                         </div>
                       </form>
@@ -6866,7 +7154,7 @@ export default function App() {
 
             {/* Sidebar Navigation Items */}
             <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3 scrollbar-thin scrollbar-thumb-slate-200">
-              {user.role === "rep" ? (
+              {user.role === "rep" || user.role === "admin" ? (
                 /* REP SIDE NAVIGATION CATEGORIES */
                 <>
                   <div className="space-y-1">
@@ -6883,6 +7171,19 @@ export default function App() {
                       collapsed={isSidebarCollapsed}
                       highlight
                       id="sidebar-rep-analytics"
+                    />
+                    <SidebarNavItem
+                      icon={<AlertTriangle className="h-4.5 w-4.5 text-rose-600" />}
+                      label="لوحة التنبيهات والعجز"
+                      active={false}
+                      badge={stockReports.filter(r => r.remainingQty < lowStockThreshold).length > 0 ? stockReports.filter(r => r.remainingQty < lowStockThreshold).length : undefined}
+                      badgeColor="bg-rose-600 text-white font-bold"
+                      onClick={() => {
+                        const elem = document.getElementById("alerts-dashboard-section");
+                        if (elem) elem.scrollIntoView({ behavior: "smooth" });
+                      }}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-rep-alerts"
                     />
                     <SidebarNavItem
                       icon={<Share2 className="h-4.5 w-4.5 text-teal-600" />}
@@ -7579,7 +7880,7 @@ export default function App() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-3 space-y-5">
-                    {user.role === "rep" ? (
+                    {user.role === "rep" || user.role === "admin" ? (
                       <>
                         <div className="space-y-1">
                           <div className="px-3 text-4xs font-black uppercase text-teal-700 font-bold">لوحة المؤشرات والتحليلات 📊</div>
@@ -7589,6 +7890,18 @@ export default function App() {
                             active={repTab === "analytics"}
                             onClick={() => { setRepTab("analytics"); setIsMobileSidebarOpen(false); }}
                             highlight
+                          />
+                          <SidebarNavItem
+                            icon={<AlertTriangle className="h-4.5 w-4.5 text-rose-600" />}
+                            label="لوحة التنبيهات والعجز"
+                            active={false}
+                            onClick={() => {
+                              setIsMobileSidebarOpen(false);
+                              setTimeout(() => {
+                                const elem = document.getElementById("alerts-dashboard-section");
+                                if (elem) elem.scrollIntoView({ behavior: "smooth" });
+                              }, 100);
+                            }}
                           />
                         </div>
 
@@ -7927,7 +8240,7 @@ export default function App() {
           {/* NATIVE MOBILE BOTTOM NAVIGATION BAR */}
           {user && (
             <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-xl border-t border-slate-200/90 px-2 py-1.5 flex items-center justify-around shadow-lg native-bottom-nav">
-              {user.role === "rep" ? (
+              {user.role === "rep" || user.role === "admin" ? (
                 <>
                   <button
                     type="button"
@@ -8080,7 +8393,7 @@ export default function App() {
                     <div className="h-2 w-2 rounded-full bg-teal-500 animate-pulse" />
                     <div>
                       <h2 className="text-xs sm:text-sm font-black text-slate-900 flex items-center gap-1.5">
-                        {user.role === "rep" ? (
+                        {user.role === "rep" || user.role === "admin" ? (
                           <>
                             {repTab === "analytics" && "📊 لوحة التحليلات والمؤشرات السحابية (Firestore Analytics)"}
                             {repTab === "orders" && "📥 طلبيات العملاء الواردة"}
@@ -8171,7 +8484,7 @@ export default function App() {
 
             {/* View Container */}
             <main className="flex-1 p-1.5 sm:p-3 md:p-4 max-w-full lg:max-w-[1600px] w-full mx-auto space-y-3 sm:space-y-4">
-              {user.role === "rep" ? (
+              {user.role === "rep" || user.role === "admin" ? (
           /* ============================================================== */
           /* CLIENT ROLE: MEDICAL REPRESENTATIVE (ADMIN / SALES DELEGATE) */
           /* ============================================================== */
@@ -8265,7 +8578,7 @@ export default function App() {
               {/* Card 5: Low Stock Alert Card */}
               <div 
                 onClick={() => {
-                  const elem = document.getElementById("low-stock-report-section");
+                  const elem = document.getElementById("alerts-dashboard-section");
                   if (elem) elem.scrollIntoView({ behavior: "smooth" });
                 }}
                 className="glass-card glass-card-hover cursor-pointer rounded-xl border border-rose-200 bg-gradient-to-br from-rose-50/60 via-white to-rose-50/30 p-3 sm:p-3.5 shadow-xs relative overflow-hidden"
@@ -8278,13 +8591,13 @@ export default function App() {
                 </div>
                 <div className="mt-2 relative flex items-baseline justify-between">
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-xl sm:text-2xl font-black text-rose-700 tracking-tight">
-                      {stockReports.filter(r => r.remainingQty < 5).length}
+                    <span className="text-xl sm:text-2xl font-black text-rose-700 tracking-tight tabular-nums">
+                      {stockReports.filter(r => r.remainingQty < lowStockThreshold).length}
                     </span>
                     <span className="text-4xs font-bold text-rose-800 bg-rose-100/80 px-1.5 py-0.2 rounded-full border border-rose-200">عجز</span>
                   </div>
-                  {stockReports.filter(r => r.remainingQty < 5).length > 0 && (
-                    <span className="animate-pulse rounded-full bg-rose-500 px-1.5 py-0.2 text-4xs font-bold text-white shadow-xs">
+                  {stockReports.filter(r => r.remainingQty < lowStockThreshold).length > 0 && (
+                    <span className="rounded-full bg-rose-500 px-1.5 py-0.2 text-4xs font-bold text-white shadow-xs">
                       متابعة
                     </span>
                   )}
@@ -8318,238 +8631,20 @@ export default function App() {
               </button>
             </div>
 
-            {/* Low Stock Report & Prioritization Dashboard Section */}
-            <div id="low-stock-report-section" className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-xs space-y-3">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between pb-3 border-b border-slate-100">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <TrendingDown className="h-5 w-5 text-rose-600 shrink-0" />
-                    <span>لوحة مراقبة عجز المخزون وتحديد الأولويات 📉</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    مراقبة تلقائية للأصناف التي أوشكت على النفاد (أقل من 5 قطع) لتسهيل تخطيط وجدولة زيارات إعادة التعبئة.
-                  </p>
-                </div>
-                
-                {/* Reset or Sync Button */}
-                <button
-                  onClick={() => fetchUserSpecificData(false, true)}
-                  className="inline-flex items-center gap-1.5 self-start md:self-auto rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>تحديث البيانات الميدانية</span>
-                </button>
-              </div>
-
-
-
-              {/* Search & Filter Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-100">
-                <div className="relative flex-1 min-w-[200px] flex items-center">
-                  <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="البحث باسم الصنف أو اسم المنشأة..."
-                    value={lowStockSearch}
-                    onChange={(e) => setLowStockSearch(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-3 pr-9 text-xs text-right font-medium text-slate-800 transition-colors focus:border-teal-500 focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-3xs font-bold text-slate-400 uppercase tracking-wide">تصنيف العجز:</span>
-                  <div className="flex rounded-lg bg-slate-200 p-0.5 text-2xs font-bold">
-                    <button
-                      onClick={() => setLowStockFilter("all")}
-                      className={`rounded-md px-3 py-1 transition-all ${
-                        lowStockFilter === "all" ? "bg-white text-teal-800 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      الكل ({stockReports.filter(r => r.remainingQty < 5).length})
-                    </button>
-                    <button
-                      onClick={() => setLowStockFilter("critical")}
-                      className={`rounded-md px-3 py-1 transition-all ${
-                        lowStockFilter === "critical" ? "bg-white text-rose-800 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      نفاد تام (0) ({stockReports.filter(r => r.remainingQty === 0).length})
-                    </button>
-                    <button
-                      onClick={() => setLowStockFilter("warning")}
-                      className={`rounded-md px-3 py-1 transition-all ${
-                        lowStockFilter === "warning" ? "bg-white text-amber-800 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      شبه منتهٍ (1-4) ({stockReports.filter(r => r.remainingQty > 0 && r.remainingQty < 5).length})
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1 border-r border-slate-200 pr-2 mr-1">
-                    <span className="text-3xs font-bold text-slate-400">ترتيب:</span>
-                    <select
-                      value={lowStockSort}
-                      onChange={(e) => setLowStockSort(e.target.value as any)}
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-2xs font-bold text-slate-700 focus:outline-none"
-                    >
-                      <option value="severity">الأكثر حرجاً أولاً</option>
-                      <option value="recent">الأحدث إبلاغاً</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Low Stock Items Grid */}
-              {(() => {
-                const baseReports = stockReports.filter(r => r.remainingQty < 5);
-                
-                const filtered = baseReports.filter(r => {
-                  const matchesSearch = 
-                    r.productName.toLowerCase().includes(lowStockSearch.toLowerCase()) ||
-                    r.entityName.toLowerCase().includes(lowStockSearch.toLowerCase()) ||
-                    r.clientName.toLowerCase().includes(lowStockSearch.toLowerCase());
-                    
-                  const matchesFilter = 
-                    lowStockFilter === "all" ||
-                    (lowStockFilter === "critical" && r.remainingQty === 0) ||
-                    (lowStockFilter === "warning" && r.remainingQty > 0 && r.remainingQty < 5);
-                    
-                  return matchesSearch && matchesFilter;
-                });
-
-                const sorted = [...filtered].sort((a, b) => {
-                  if (lowStockSort === "severity") {
-                    return a.remainingQty - b.remainingQty; // 0 first
-                  } else {
-                    return new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime();
-                  }
-                });
-
-                if (sorted.length === 0) {
-                  return (
-                    <div className="py-12 text-center text-slate-400 border border-dashed border-slate-150 rounded-2xl bg-slate-25/30">
-                      <TrendingDown className="mx-auto h-10 w-10 text-slate-300 mb-2.5" />
-                      <p className="text-xs font-bold">لا توجد سجلات عجز مخزون مطابقة للفلاتر النشطة حالياً.</p>
-                      <p className="text-3xs text-slate-400 mt-1">تأكد من قيام الصيدليات برفع كشوفات الجرد الميدانية بانتظام.</p>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {sorted.map((report, idx) => (
-                      <motion.div
-                        key={`adm-srep-${report.id || 'sr'}-${idx}`}
-                        layout
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className={`rounded-xl border p-4 space-y-3 transition-shadow hover:shadow-md text-right ${
-                          report.remainingQty === 0 
-                            ? "border-rose-200 bg-gradient-to-br from-rose-50/20 to-white" 
-                            : "border-amber-200 bg-gradient-to-br from-amber-50/20 to-white"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <span className="block text-2xs font-bold text-slate-400 mb-0.5 font-mono">
-                              {report.entityName}
-                            </span>
-                            <h4 className="text-sm font-bold text-slate-900 leading-snug">
-                              {report.productName}
-                            </h4>
-                          </div>
-                          
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-                            report.remainingQty === 0 
-                              ? "bg-rose-100 text-rose-800" 
-                              : "bg-amber-100 text-amber-800"
-                          }`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${report.remainingQty === 0 ? "bg-rose-600 animate-ping" : "bg-amber-500"}`} />
-                            <span>{report.remainingQty === 0 ? "نفاد تام" : `${report.remainingQty} علبة`}</span>
-                          </span>
-                        </div>
-
-                        <div className="space-y-1 bg-white/60 p-2.5 rounded-lg border border-slate-100 text-2xs text-slate-600">
-                          <div className="flex justify-between">
-                            <span className="text-slate-400 font-medium">المسؤول الطبي:</span>
-                            <span className="font-bold text-slate-800">{report.clientName}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-400 font-medium">تاريخ الجرد:</span>
-                            <span className="font-mono text-slate-500">
-                              {new Date(report.reportedAt).toLocaleDateString("ar-YE")} {new Date(report.reportedAt).toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" })}
-                            </span>
-                          </div>
-                        </div>
-
-                        {quickRestockItem?.id === report.id ? (
-                          <motion.div 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: "auto" }}
-                            className="bg-slate-50 border border-slate-200 p-2.5 rounded-lg space-y-2 text-right"
-                          >
-                            <label className="block text-3xs font-bold text-slate-500">كمية طلب التوريد الفورية:</label>
-                            <div className="flex items-center gap-1.5">
-                              <div className="relative flex-1">
-                                <input 
-                                  type="number"
-                                  min="1"
-                                  placeholder="الكمية"
-                                  value={quickRestockQty}
-                                  onChange={(e) => setQuickRestockQty(e.target.value)}
-                                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-right font-bold text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/20"
-                                  required
-                                  autoFocus
-                                />
-                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-3xs text-slate-400 font-bold">علبة</span>
-                              </div>
-                              <button
-                                onClick={() => handleConfirmQuickRestock(report)}
-                                disabled={loading || !quickRestockQty}
-                                className="rounded-md bg-teal-600 px-3 py-1.5 text-2xs font-bold text-white hover:bg-teal-700 transition-colors shrink-0 disabled:bg-slate-300"
-                              >
-                                تأكيد
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setQuickRestockItem(null);
-                                  setQuickRestockQty("");
-                                }}
-                                className="rounded-md bg-slate-200 px-2.5 py-1.5 text-2xs font-bold text-slate-600 hover:bg-slate-300 transition-colors shrink-0"
-                              >
-                                إلغاء
-                              </button>
-                            </div>
-                          </motion.div>
-                        ) : (
-                          <div className="flex gap-2 pt-2 border-t border-slate-100">
-                            <button
-                              onClick={() => handleScheduleRestockVisit(report)}
-                              className="flex-1 rounded-lg bg-teal-50 hover:bg-teal-100 px-2 py-1.5 text-2xs font-bold text-teal-800 transition-colors flex items-center justify-center gap-1"
-                              title="جدولة زيارة وتعبئة البيانات تلقائياً"
-                            >
-                              <Calendar className="h-3.5 w-3.5 text-teal-600" />
-                              <span>تخطيط زيارة توريد</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                setQuickRestockItem(report);
-                                setQuickRestockQty("20");
-                              }}
-                              className="flex-1 rounded-lg bg-slate-900 hover:bg-slate-800 px-2 py-1.5 text-2xs font-bold text-white transition-colors flex items-center justify-center gap-1"
-                              title="إرسال طلبية توريد فورية باسم الصيدلية"
-                            >
-                              <ShoppingCart className="h-3.5 w-3.5 text-teal-400" />
-                              <span>طلب توريد فوري</span>
-                            </button>
-                          </div>
-                        )}
-                      </motion.div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
+            {/* Alerts Dashboard: Products Below Threshold & Urgent Restocking Pharmacies */}
+            <AlertsDashboard
+              products={products}
+              stockReports={stockReports}
+              clients={uniqueClients}
+              orders={orders}
+              defaultThreshold={lowStockThreshold}
+              onThresholdChange={(next) => setLowStockThreshold(next)}
+              onScheduleRestockVisit={handleScheduleRestockVisit}
+              onQuickRestock={handleConfirmQuickRestock}
+              onRefreshData={() => fetchUserSpecificData(false, true)}
+              onNavigateToCatalog={() => setRepTab("catalog")}
+              isLoading={isSyncing}
+            />
 
             {/* TAB CONTENTS */}
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -9929,6 +10024,32 @@ export default function App() {
 
                 return (
                   <div className="p-5 space-y-6">
+                    {/* Cloud Sync Notice when Admin logged in with phone/password instead of Google */}
+                    {isFirebaseConfigured &&
+                      (firestoreUsersDenied ||
+                        !auth?.currentUser ||
+                        auth.currentUser.isAnonymous ||
+                        !(auth.currentUser.email || "").toLowerCase().includes("belalalqaisi55")) && (
+                        <div className="rounded-2xl border border-amber-300 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                          <div className="space-y-1">
+                            <h4 className="text-xs font-extrabold text-amber-950 flex items-center gap-1.5">
+                              <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                              <span>تفعيل المزامنة السحابية لاستقبال تسجيلات الهواتف الأخرى</span>
+                            </h4>
+                            <p className="text-2xs text-amber-800 leading-relaxed">
+                              أنت متصل حالياً بالدخول المحلي برقم الهاتف. لجلب واعتماد الحسابات المسجلة من الأجهزة الأخرى عبر السحابة (خاصة على Vercel)، فعّل جلسة Google بحسابك <span className="font-mono font-bold">BelalAlqaisi55@gmail.com</span>.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleGoogleSignIn}
+                            className="shrink-0 inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 text-2xs font-bold shadow-xs transition-colors cursor-pointer"
+                          >
+                            <span>تفعيل بحساب Google</span>
+                          </button>
+                        </div>
+                      )}
+
                     {/* Security & Confirmation Settings Banner */}
                     <div className="rounded-2xl border border-teal-200 bg-gradient-to-l from-teal-50/80 via-white to-teal-50/40 p-4.5 shadow-2xs space-y-3.5">
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-teal-100/70 pb-3">
@@ -11758,13 +11879,12 @@ export default function App() {
 
                   {/* Micro Stats Counter Strip & Client-Side Low-Stock Threshold */}
                   {(() => {
-                    const isRepUser = user?.role === "admin";
                     const lowStockCardsCount = filteredProducts.filter((p) =>
                       evaluateProductStockWarning(p, {
                         remainingInput: remainingInputs[p.id],
                         latestReportsMap: latestStockReportsByProduct,
                         defaultThreshold: lowStockThreshold,
-                        combineSourcesForRep: isRepUser,
+                        combineSourcesForRep: false,
                       }).isBelowThreshold
                     ).length;
 
@@ -11827,7 +11947,7 @@ export default function App() {
                             remainingInput: remainingVal,
                             latestReportsMap: latestStockReportsByProduct,
                             defaultThreshold: lowStockThreshold,
-                            combineSourcesForRep: user?.role === "admin",
+                            combineSourcesForRep: false,
                           });
                           const isLowStock = stockWarning.isBelowThreshold;
                           const hasOrder = orderVal !== "" && Number(orderVal) > 0;
@@ -12098,7 +12218,7 @@ export default function App() {
                                   remainingInput: remainingVal,
                                   latestReportsMap: latestStockReportsByProduct,
                                   defaultThreshold: lowStockThreshold,
-                                  combineSourcesForRep: user?.role === "admin",
+                                  combineSourcesForRep: false,
                                 });
                                 const isLowStock = stockWarning.isBelowThreshold;
                                 const hasOrder = orderVal !== "" && Number(orderVal) > 0;

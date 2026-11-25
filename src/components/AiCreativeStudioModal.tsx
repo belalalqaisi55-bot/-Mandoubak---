@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { authenticatedFetch as fetch } from "../utils/authenticatedFetch";
 import { useModalBackHandler } from "../hooks/useModalBackHandler";
 import {
   Sparkles,

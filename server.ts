@@ -2,10 +2,8 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
-import admin from "firebase-admin";
-import { getApps } from "firebase-admin/app";
+import { getApps, initializeApp as initializeAdminApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Firestore, Query } from "firebase-admin/firestore";
 import { getMessaging as getAdminMessaging } from "firebase-admin/messaging";
@@ -22,14 +20,18 @@ const ai = new GoogleGenAI({
 
 import axios from 'axios';
 import qs from 'qs';
-import { DEFAULT_PRODUCTS } from "./src/data/defaultProducts";
+import { DEFAULT_PRODUCTS } from "./src/data/defaultProducts.ts";
 
 dotenv.config();
 process.env.DISABLE_HMR = "true";
 
 export const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = path.join(process.cwd(), "data-store.json");
+const SEED_DB_FILE = path.join(process.cwd(), "data-store.json");
+const DB_FILE = process.env.VERCEL
+  ? path.join("/tmp", "data-store.json")
+  : SEED_DB_FILE;
+let inMemoryDBFallback: DB | null = null;
 
 // Initialize Firebase Admin if configuration exists
 const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
@@ -40,9 +42,34 @@ if (fs.existsSync(firebaseConfigPath)) {
   try {
     const config = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8"));
     if (config.projectId && config.projectId !== "remixed-project-id") {
-      admin.initializeApp({
-        projectId: config.projectId
-      });
+      if (getApps().length === 0) {
+        let serviceAccountCred: any = null;
+        const saJsonRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+        if (saJsonRaw && saJsonRaw.trim().startsWith("{")) {
+          try {
+            serviceAccountCred = JSON.parse(saJsonRaw);
+          } catch (parseErr: any) {
+            console.warn("Invalid FIREBASE_SERVICE_ACCOUNT_JSON format:", parseErr?.message || parseErr);
+          }
+        } else if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+          serviceAccountCred = {
+            projectId: config.projectId,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+          };
+        }
+
+        initializeAdminApp(
+          serviceAccountCred
+            ? {
+                credential: cert(serviceAccountCred),
+                projectId: config.projectId,
+              }
+            : {
+                projectId: config.projectId,
+              }
+        );
+      }
       if (config.firestoreDatabaseId && config.firestoreDatabaseId !== "(default)") {
         dbAdmin = getFirestore(config.firestoreDatabaseId);
       } else {
@@ -72,6 +99,17 @@ if (fs.existsSync(firebaseConfigPath)) {
   }
 }
 
+// Disable Express ETag generation so dynamic /api/* responses never return stale 304 caches
+app.set("etag", false);
+
+// Prevent browser/proxy caching on all /api/* endpoints
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
 // Enable CORS with full credentials and cookie support for browsers, iframes, and mobile apps
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -99,53 +137,195 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// --- SESSION & AUTHENTICATION HELPERS ---
+const RAW_SESSION_SECRET = (process.env.SESSION_SECRET || "").trim();
+const SERVER_SESSION_SECRET =
+  RAW_SESSION_SECRET && RAW_SESSION_SECRET !== "YOUR_SESSION_SECRET"
+    ? RAW_SESSION_SECRET
+    : crypto.randomBytes(32).toString("hex");
+
+interface AppSessionPayload {
+  uid: string;
+  role: "rep" | "admin" | "pharmacy" | "doctor";
+  email?: string;
+  phone?: string;
+  iat: number;
+  exp: number;
+}
+
+function signAppSessionToken(payload: Omit<AppSessionPayload, "iat" | "exp">, ttlMs = 7 * 24 * 60 * 60 * 1000): string {
+  const now = Date.now();
+  const fullPayload: AppSessionPayload = {
+    ...payload,
+    iat: now,
+    exp: now + ttlMs,
+  };
+  const body = Buffer.from(JSON.stringify(fullPayload), "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", SERVER_SESSION_SECRET).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+function verifyAppSessionToken(token: string): AppSessionPayload | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 2) return null;
+    const [body, sig] = parts;
+    if (!body || !sig) return null;
+    const expectedSig = crypto.createHmac("sha256", SERVER_SESSION_SECRET).update(body).digest("base64url");
+    const sigBuf = Buffer.from(sig, "utf8");
+    const expectedBuf = Buffer.from(expectedSig, "utf8");
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return null;
+    }
+    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as AppSessionPayload;
+    if (!parsed || !parsed.uid || !parsed.role || typeof parsed.exp !== "number" || parsed.exp <= Date.now()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isRepIdentity(email?: string, phone?: string, uid?: string): boolean {
+  const lowerEmail = String(email || "").trim().toLowerCase();
+  const digits = String(phone || "").replace(/\D/g, "");
+  return (
+    uid === "u_rep" ||
+    lowerEmail === "belalalqaisi55@gmail.com" ||
+    digits.endsWith("776600049")
+  );
+}
+
+async function resolveAuthenticatedIdentity(req: express.Request): Promise<{
+  uid: string;
+  role: "rep" | "admin" | "pharmacy" | "doctor";
+  email?: string;
+  phone?: string;
+  firebaseUser?: any;
+} | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.split("Bearer ")[1]?.trim();
+  if (!token) {
+    return null;
+  }
+
+  // 1. Verify server-signed HMAC session token (2-part token)
+  if (token.split(".").length === 2) {
+    const session = verifyAppSessionToken(token);
+    if (!session) return null;
+    return {
+      uid: session.uid,
+      role: session.role,
+      email: session.email,
+      phone: session.phone,
+    };
+  }
+
+  // 2. Verify Firebase ID Token (3-part JWT)
+  if (getApps().length === 0) {
+    return null;
+  }
+  const decodedToken = await Promise.race([
+    getAuth().verifyIdToken(token),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(Object.assign(new Error("Token verification timeout"), { code: "auth/timeout" })), 8000)
+    ),
+  ]);
+
+  const tokenEmail = typeof decodedToken.email === "string" ? decodedToken.email.trim().toLowerCase() : "";
+  const tokenPhone = typeof decodedToken.phone_number === "string" ? decodedToken.phone_number : "";
+  const isVerifiedSuperRep =
+    (tokenEmail === "belalalqaisi55@gmail.com" && decodedToken.email_verified !== false) ||
+    tokenPhone.replace(/\D/g, "").endsWith("776600049");
+
+  let role: "rep" | "admin" | "pharmacy" | "doctor" = isVerifiedSuperRep ? "rep" : "pharmacy";
+  let effectiveUid = isVerifiedSuperRep ? "u_rep" : decodedToken.uid;
+
+  if (!isVerifiedSuperRep) {
+    try {
+      const users = await fetchAllUsersFromDB();
+      const matched = users.find((u) => u.id === decodedToken.uid || (tokenEmail && u.email?.trim().toLowerCase() === tokenEmail));
+      if (matched?.role === "rep" || matched?.role === "admin" || matched?.role === "doctor" || matched?.role === "pharmacy") {
+        role = matched.role;
+      }
+    } catch {
+      // Fallback to default client role
+    }
+  }
+
+  return {
+    uid: effectiveUid,
+    role,
+    email: decodedToken.email,
+    phone: tokenPhone || undefined,
+    firebaseUser: decodedToken,
+  };
+}
+
 // --- AUTHENTICATION MIDDLEWARE ---
 const verifyToken = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: No token provided' });
-  }
-  const token = authHeader.split('Bearer ')[1]?.trim();
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized: Empty token' });
-  }
-  if (getApps().length === 0) {
-    return res.status(401).json({ error: 'Authentication service unavailable' });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized: No token provided" });
   }
   try {
-    const decodedToken = await Promise.race([
-      getAuth().verifyIdToken(token),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(Object.assign(new Error('Token verification timeout'), { code: 'auth/timeout' })), 8000)
-      ),
-    ]);
-    (req as any).user = decodedToken;
+    const identity = await resolveAuthenticatedIdentity(req);
+    if (!identity) {
+      return res.status(401).json({ error: "Unauthorized: Invalid token", code: "auth/invalid-token" });
+    }
+    (req as any).user = identity.firebaseUser || {
+      uid: identity.uid,
+      role: identity.role,
+      email: identity.email,
+      phone: identity.phone,
+    };
+    (req as any).authUid = identity.uid;
+    (req as any).authRole = identity.role;
+    (req as any).isPrivileged = identity.role === "rep" || identity.role === "admin";
     next();
   } catch (error: any) {
-    const code = error?.code || '';
-    if (code === 'auth/id-token-expired') {
-      console.warn('Token verification notice: Firebase ID token expired; client refresh required.');
-      return res.status(401).json({ error: 'Unauthorized: Token expired', code });
+    const code = error?.code || "";
+    if (code === "auth/id-token-expired") {
+      console.warn("Token verification notice: Firebase ID token expired; client refresh required.");
+      return res.status(401).json({ error: "Unauthorized: Token expired", code });
     }
-    console.warn('Token verification error:', error?.message || error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token', code: code || 'auth/invalid-token' });
+    console.warn("Token verification error:", error?.message || error);
+    return res.status(401).json({ error: "Unauthorized: Invalid token", code: code || "auth/invalid-token" });
   }
 };
 
-// --- AUTH ROUTES ---
-// Example protected route
-app.get('/api/dashboard', verifyToken, (req, res) => {
+const requireAuth = verifyToken;
+
+const requirePrivileged = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  void verifyToken(req, res, () => {
+    if (!(req as any).isPrivileged) {
+      return res.status(403).json({ error: "Forbidden: Admin or representative access required" });
+    }
+    next();
+  });
+};
+
+// --- HEALTH & AUTH ROUTES ---
+app.all("/api/health", (_req, res) => {
+  res.status(200).json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
+});
+
+app.get('/api/dashboard', requireAuth, (req, res) => {
   res.json({ 
     message: "Welcome to the dashboard",
     user: (req as any).user 
   });
 });
 
-app.get('/api/me', verifyToken, (req, res) => {
+app.get('/api/me', requireAuth, (req, res) => {
   res.json({ user: (req as any).user || null });
 });
 
-app.get('/auth/logout', (req, res) => {
+app.get('/auth/logout', (_req, res) => {
   res.status(200).json({ message: "Logged out successfully" });
 });
 
@@ -273,7 +453,7 @@ ${categoriesList.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}`;
 }
 
 // Auto-categorize product based on name / active ingredient / description
-app.post("/api/categorize-product", async (req, res) => {
+app.post("/api/categorize-product", requireAuth, async (req, res) => {
   const { productName, name, activeIngredient, description, availableCategories } = req.body || {};
   const itemName = String(productName || name || "").trim();
   const ingredient = String(activeIngredient || "").trim();
@@ -510,6 +690,7 @@ interface AppSettings {
   productCategories?: string[];
   categoryColors?: Record<string, string>;
   geminiWebhookSecret?: string;
+  adminPasscodeHash?: string;
 }
 
 
@@ -747,6 +928,7 @@ interface Notification {
   createdAt: string;
   isArchived?: boolean;
   archivedAt?: string;
+  fcmDispatchedBy?: string;
 }
 
 export type AgreementType = "bonus" | "samples" | "gift_support" | "discount_terms" | "other";
@@ -861,20 +1043,41 @@ function getDefaults() {
 function getDB(): DB {
   try {
     const defaults = getDefaults();
+    const defaultProducts = defaults.products && defaults.products.length > 0 ? defaults.products : DEFAULT_PRODUCTS;
+    const defaultUsers = defaults.users && defaults.users.length > 0 ? defaults.users : DEFAULT_USERS;
+
     if (!fs.existsSync(DB_FILE)) {
-      const initialDB: DB = {
-        users: defaults.users,
-        products: defaults.products,
-        stockReports: [],
-        orders: [],
-        visits: [],
-        notifications: [],
-        agreements: [],
-        complaints: [],
-        trashArchive: [],
-        geminiWebhooks: []
-      };
-      fs.writeFileSync(DB_FILE, JSON.stringify(initialDB, null, 2), "utf8");
+      if (inMemoryDBFallback) {
+        return inMemoryDBFallback;
+      }
+      let initialDB: DB | null = null;
+      if (DB_FILE !== SEED_DB_FILE && fs.existsSync(SEED_DB_FILE)) {
+        try {
+          initialDB = JSON.parse(fs.readFileSync(SEED_DB_FILE, "utf8")) as DB;
+        } catch {
+          initialDB = null;
+        }
+      }
+      if (!initialDB) {
+        initialDB = {
+          users: defaultUsers,
+          products: defaultProducts,
+          stockReports: [],
+          orders: [],
+          visits: [],
+          notifications: [],
+          agreements: [],
+          complaints: [],
+          trashArchive: [],
+          geminiWebhooks: []
+        };
+      }
+      inMemoryDBFallback = initialDB;
+      try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(initialDB, null, 2), "utf8");
+      } catch {
+        // Ignore read-only filesystem errors and continue using in-memory fallback
+      }
       return initialDB;
     }
 
@@ -882,11 +1085,11 @@ function getDB(): DB {
     const parsed = JSON.parse(data) as DB;
     
     // Ensure lists are initialized
-    if (!parsed.users) parsed.users = [];
+    if (!parsed.users) parsed.users = defaultUsers;
     const defaultClientIds = new Set(["c_1", "c_2", "c_3", "c_4", "c_5"]);
     parsed.users = parsed.users.filter((u) => !defaultClientIds.has(u.id));
 
-    if (!parsed.products || parsed.products.length === 0) parsed.products = defaults.products;
+    if (!parsed.products || parsed.products.length === 0) parsed.products = defaultProducts;
     if (!parsed.stockReports) parsed.stockReports = [];
     if (!parsed.orders) parsed.orders = [];
     if (!parsed.visits) parsed.visits = [];
@@ -896,12 +1099,14 @@ function getDB(): DB {
     if (!parsed.trashArchive) parsed.trashArchive = [];
     if (!parsed.geminiWebhooks) parsed.geminiWebhooks = [];
 
+    inMemoryDBFallback = parsed;
     return parsed;
   } catch (err) {
     console.error("Error reading database", err);
+    if (inMemoryDBFallback) return inMemoryDBFallback;
     return {
-      users: [],
-      products: [],
+      users: DEFAULT_USERS,
+      products: DEFAULT_PRODUCTS,
       stockReports: [],
       orders: [],
       visits: [],
@@ -917,6 +1122,7 @@ function getDB(): DB {
 
 // Save database
 function saveDB(db: DB) {
+  inMemoryDBFallback = db;
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
   } catch (err) {
@@ -1896,18 +2102,111 @@ function cleanPhoneDigits(phoneStr: string): string {
   return s.replace(/\D/g, "");
 }
 
-export function isValidAdminSecret(pwd?: string): boolean {
-  if (!pwd) return false;
-  const input = pwd.trim();
-  const envSecret = (process.env.ADMIN_SECRET || process.env.APP_ADMIN_SECRET || "").trim();
-  const validSecrets = ["Mandoubk302344$", "Belal302344"];
-  if (envSecret && !validSecrets.includes(envSecret)) {
-    validSecrets.push(envSecret);
+function hashPasscode(passcode: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(passcode.trim(), salt, 64).toString("hex");
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyScryptPasscode(passcode: string, storedHash?: string): boolean {
+  if (!passcode || !storedHash || !storedHash.startsWith("scrypt:")) return false;
+  const parts = storedHash.split(":");
+  if (parts.length !== 3) return false;
+  const [, salt, hexDigest] = parts;
+  if (!salt || !hexDigest) return false;
+  try {
+    const derived = crypto.scryptSync(passcode.trim(), salt, 64);
+    const expected = Buffer.from(hexDigest, "hex");
+    return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
   }
-  return validSecrets.includes(input);
+}
+
+function getEnvAdminSecret(): string {
+  const raw = (process.env.ADMIN_SECRET || process.env.APP_ADMIN_SECRET || "").trim();
+  if (!raw || raw === "YOUR_ADMIN_SECRET") return "";
+  return raw;
+}
+
+function isAdminPasscodeConfigured(settings?: AppSettings): boolean {
+  return Boolean(getEnvAdminSecret() || settings?.adminPasscodeHash);
+}
+
+export function isValidAdminSecret(pwd?: string, settings?: AppSettings): boolean {
+  if (!pwd || !pwd.trim()) return false;
+  const input = pwd.trim();
+  const envSecret = getEnvAdminSecret();
+  if (envSecret) {
+    const a = Buffer.from(input, "utf8");
+    const b = Buffer.from(envSecret, "utf8");
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  if (settings?.adminPasscodeHash) {
+    return verifyScryptPasscode(input, settings.adminPasscodeHash);
+  }
+  return false;
+}
+
+function sanitizePublicSettings(settings: AppSettings): AppSettings {
+  const { adminPasscodeHash: _h, geminiWebhookSecret: _w, ...safe } = settings;
+  return safe;
+}
+
+function sanitizePublicUser(user: User): User {
+  const { confirmationCode: _c, ...safe } = user;
+  return safe;
 }
 
 // --- AUTH API ---
+
+app.get("/api/auth/admin-setup-status", async (_req, res) => {
+  const settings = await fetchSettingsFromDB();
+  const envConfigured = Boolean(getEnvAdminSecret());
+  res.json({
+    requiresSetup: !isAdminPasscodeConfigured(settings),
+    envConfigured,
+  });
+});
+
+app.post("/api/auth/claim-admin", async (req, res) => {
+  const { passcode } = req.body || {};
+  const cleanPasscode = typeof passcode === "string" ? passcode.trim() : "";
+  if (cleanPasscode.length < 6) {
+    return res.status(400).json({ error: "يجب أن تتكون كلمة مرور المسؤول من 6 أحرف على الأقل." });
+  }
+
+  const settings = await fetchSettingsFromDB();
+  if (isAdminPasscodeConfigured(settings)) {
+    return res.status(403).json({ error: "تم إعداد كلمة مرور المسؤول مسبقاً ولا يمكن إعادة تعيينها من هذا المسار." });
+  }
+
+  const adminPasscodeHash = hashPasscode(cleanPasscode);
+  await saveSettingsToDB({ ...settings, adminPasscodeHash });
+
+  const adminUser: User = {
+    id: "u_rep",
+    email: "belalalqaisi55@gmail.com",
+    phone: "+967776600049",
+    name: "د/ بلال القيسي (المندوب الطبي والمسؤول)",
+    role: "rep",
+    entityName: "المكتب العلمي والمبيعات الطبية (الإدارة)",
+    location: "صنعاء / جميع المحافظات",
+    isApproved: true,
+    status: "approved",
+    createdAt: new Date().toISOString()
+  };
+  await saveUserToDB(adminUser);
+
+  const sessionToken = signAppSessionToken({
+    uid: adminUser.id,
+    role: "rep",
+    email: adminUser.email,
+    phone: adminUser.phone,
+  });
+
+  return res.json({ status: "success", user: adminUser, sessionToken });
+});
 
 app.post("/api/auth/login", async (req, res) => {
   const { phone, email, password } = req.body || {};
@@ -1917,13 +2216,21 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   const inputDigits = cleanPhoneDigits(rawInput);
-  const isRepEmail = rawInput.includes("belalalqaisi55@gmail.com") || rawInput === "belalalqaisi55";
+  const isRepEmail = rawInput === "belalalqaisi55@gmail.com" || rawInput === "belalalqaisi55";
   const repDigits = "776600049";
   const isRepPhone = inputDigits.endsWith(repDigits);
   const isRep = isRepPhone || isRepEmail;
 
+  const settings = await fetchSettingsFromDB();
+
   if (isRep) {
-    if (password && !isValidAdminSecret(password)) {
+    if (!isAdminPasscodeConfigured(settings)) {
+      return res.status(403).json({
+        error: "لم يتم إعداد كلمة مرور المسؤول بعد. يمكنك إعدادها الآن لأول مرة أو تسجيل الدخول بحساب جوجل.",
+        requiresAdminSetup: true,
+      });
+    }
+    if (!isValidAdminSecret(password, settings)) {
       return res.status(401).json({ error: "كلمة المرور الخاصة بالمندوب المسؤول غير صحيحة" });
     }
     const adminUser: User = {
@@ -1939,7 +2246,13 @@ app.post("/api/auth/login", async (req, res) => {
       createdAt: new Date().toISOString()
     };
     await saveUserToDB(adminUser);
-    return res.json({ status: "success", user: adminUser });
+    const sessionToken = signAppSessionToken({
+      uid: adminUser.id,
+      role: "rep",
+      email: adminUser.email,
+      phone: adminUser.phone,
+    });
+    return res.json({ status: "success", user: adminUser, sessionToken });
   }
 
   if (!inputDigits && !rawInput.includes("@")) {
@@ -1963,30 +2276,40 @@ app.post("/api/auth/login", async (req, res) => {
   });
 
   if (user) {
-    if (user.role === "rep") {
-      if (!isValidAdminSecret(password)) {
+    if (user.role === "rep" || user.role === "admin") {
+      if (!isAdminPasscodeConfigured(settings)) {
+        return res.status(403).json({
+          error: "لم يتم إعداد كلمة مرور المسؤول بعد. يمكنك إعدادها الآن لأول مرة أو تسجيل الدخول بحساب جوجل.",
+          requiresAdminSetup: true,
+        });
+      }
+      if (!isValidAdminSecret(password, settings)) {
         return res.status(401).json({ error: "كلمة المرور الخاصة بالمندوب المسؤول غير صحيحة" });
       }
-      return res.json({ status: "success", user });
+      const sessionToken = signAppSessionToken({
+        uid: user.id,
+        role: user.role,
+        email: user.email,
+        phone: user.phone,
+      });
+      return res.json({ status: "success", user, sessionToken });
     }
 
     // Check account status
     if (user.status === "suspended") {
       return res.json({
         status: "suspended",
-        user,
+        user: sanitizePublicUser(user),
         error: "تم تعليق هذا الحساب مؤقتاً. يرجى التواصل مع المندوب د/ بلال القيسي للتفعيل."
       });
     }
 
-    const settings = await fetchSettingsFromDB();
-    
     // Check if unconfirmed / pending approval
     const isUnconfirmed = user.isApproved === false || user.status === "pending_approval";
     if (isUnconfirmed && settings.requireApprovalForNewClients) {
       return res.json({
         status: "pending_approval",
-        user,
+        user: sanitizePublicUser(user),
         message: "حسابك قيد المراجعة والتأكيد من قبل المندوب المسؤول د/ بلال القيسي."
       });
     }
@@ -1998,7 +2321,13 @@ app.post("/api/auth/login", async (req, res) => {
       await saveUserToDB(user);
     }
 
-    return res.json({ status: "success", user });
+    const sessionToken = signAppSessionToken({
+      uid: user.id,
+      role: user.role === "doctor" ? "doctor" : "pharmacy",
+      email: user.email,
+      phone: user.phone,
+    });
+    return res.json({ status: "success", user: sanitizePublicUser(user), sessionToken });
   } else {
     return res.json({ status: "not_found", error: "رقم الهاتف أو البريد غير مسجل مسبقاً بالتطبيق" });
   }
@@ -2112,11 +2441,20 @@ app.post("/api/auth/register", async (req, res) => {
     console.warn("Registration notification persist notice:", notifErr?.message || notifErr);
   }
 
+  const sessionToken = !requiresApproval
+    ? signAppSessionToken({
+        uid: newUser.id,
+        role: clientRole,
+        email: newUser.email,
+        phone: newUser.phone,
+      })
+    : undefined;
+
   res.json({
     success: true,
-    user: newUser,
+    user: sanitizePublicUser(newUser),
     requiresApproval,
-    notification: regNotif,
+    ...(sessionToken ? { sessionToken } : {}),
     message: requiresApproval
       ? "تم تسجيل طلب انضمامك بنجاح. حسابك بانتظار التأكيد والاعتماد من قبل د/ بلال القيسي."
       : "تم إنشاء وتفعيل حسابك بنجاح."
@@ -2152,12 +2490,26 @@ app.post("/api/auth/verify-code", async (req, res) => {
     return res.status(404).json({ error: "الحساب غير موجود" });
   }
 
-  // Master confirmation bypass code 3023 or the user's generated confirmationCode
-  if (user.confirmationCode === inputCode || inputCode === "3023") {
+  const settings = await fetchSettingsFromDB();
+  if (
+    (user.confirmationCode && user.confirmationCode === inputCode) ||
+    isValidAdminSecret(inputCode, settings)
+  ) {
     user.isApproved = true;
     user.status = "approved";
     await saveUserToDB(user);
-    return res.json({ success: true, user, message: "تم تأكيد واعتماد الحساب بنجاح!" });
+    const sessionToken = signAppSessionToken({
+      uid: user.id,
+      role: user.role === "rep" || user.role === "admin" || user.role === "doctor" ? user.role : "pharmacy",
+      email: user.email,
+      phone: user.phone,
+    });
+    return res.json({
+      success: true,
+      user: sanitizePublicUser(user),
+      sessionToken,
+      message: "تم تأكيد واعتماد الحساب بنجاح!",
+    });
   }
 
   return res.status(400).json({ error: "رمز التأكيد المدخل غير مطابق. يرجى التواصل مع المندوب د/ بلال القيسي." });
@@ -2167,7 +2519,7 @@ app.post("/api/auth/verify-code", async (req, res) => {
 
 app.get("/api/settings", async (req, res) => {
   const settings = await fetchSettingsFromDB();
-  res.json(settings);
+  res.json(sanitizePublicSettings(settings));
 });
 
 // Direct APK Download Endpoint
@@ -2190,9 +2542,10 @@ app.get("/api/download/apk", (req, res) => {
   res.send(buffer);
 });
 
-app.post("/api/settings", async (req, res) => {
+app.post("/api/settings", requirePrivileged, async (req, res) => {
   const current = await fetchSettingsFromDB();
   const updated: AppSettings = {
+    ...current,
     requireApprovalForNewClients: req.body.requireApprovalForNewClients !== undefined ? Boolean(req.body.requireApprovalForNewClients) : current.requireApprovalForNewClients,
     requireApprovalForNewAccounts: req.body.requireApprovalForNewAccounts !== undefined ? Boolean(req.body.requireApprovalForNewAccounts) : (current.requireApprovalForNewAccounts !== undefined ? current.requireApprovalForNewAccounts : current.requireApprovalForNewClients),
     singlePhonePerDevice: req.body.singlePhonePerDevice !== undefined ? Boolean(req.body.singlePhonePerDevice) : current.singlePhonePerDevice,
@@ -2204,7 +2557,7 @@ app.post("/api/settings", async (req, res) => {
   };
 
   await saveSettingsToDB(updated);
-  res.json({ success: true, settings: updated });
+  res.json({ success: true, settings: sanitizePublicSettings(updated) });
 });
 
 app.get("/api/admin/dr-avatar", async (req, res) => {
@@ -2212,7 +2565,7 @@ app.get("/api/admin/dr-avatar", async (req, res) => {
   res.json({ drProfileAvatar: settings.drProfileAvatar || "" });
 });
 
-app.post("/api/admin/dr-avatar", async (req, res) => {
+app.post("/api/admin/dr-avatar", requirePrivileged, async (req, res) => {
   const { avatar } = req.body || {};
   const current = await fetchSettingsFromDB();
   const updated: AppSettings = { ...current, drProfileAvatar: avatar || "" };
@@ -2222,7 +2575,7 @@ app.post("/api/admin/dr-avatar", async (req, res) => {
 
 // --- USERS / CLIENTS MANAGEMENT API ---
 
-app.get("/api/users", async (req, res) => {
+app.get("/api/users", requirePrivileged, async (req, res) => {
   try {
     const users = await fetchAllUsersFromDB();
     res.json(users);
@@ -2232,7 +2585,7 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
-app.post("/api/users/batch-import", async (req, res) => {
+app.post("/api/users/batch-import", requirePrivileged, async (req, res) => {
   const { clients } = req.body || {};
   if (!clients || !Array.isArray(clients)) {
     return res.status(400).json({ error: "قائمة العملاء غير صالحة" });
@@ -2283,7 +2636,7 @@ app.post("/api/users/batch-import", async (req, res) => {
   });
 });
 
-app.put("/api/users/:id/status", async (req, res) => {
+app.put("/api/users/:id/status", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { isApproved, status } = req.body || {};
 
@@ -2307,7 +2660,7 @@ app.put("/api/users/:id/status", async (req, res) => {
   res.json({ success: true, user: existing });
 });
 
-app.put("/api/users/:id/permissions", async (req, res) => {
+app.put("/api/users/:id/permissions", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const rawPerms = req.body?.permissions || req.body || {};
 
@@ -2331,7 +2684,7 @@ app.put("/api/users/:id/permissions", async (req, res) => {
   res.json({ success: true, user: existing, permissions: normalizedPermissions });
 });
 
-app.put("/api/users/:id", async (req, res) => {
+app.put("/api/users/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { phone, email, name, role, entityName, location, isApproved, status, avatar, permissions } = req.body || {};
 
@@ -2361,7 +2714,7 @@ app.put("/api/users/:id", async (req, res) => {
   res.json({ success: true, user: updatedUser });
 });
 
-app.delete("/api/users", async (req, res) => {
+app.delete("/api/users", requirePrivileged, async (req, res) => {
   const deletedBy = (req.query.deletedBy as string) || (req.body?.deletedBy as string) || "د. بلال القيسي";
   const db = getDB();
   const nonRepUsers = db.users.filter((u) => u.id !== "u_rep" && u.role !== "rep");
@@ -2485,7 +2838,7 @@ async function deleteClientFromDB(id: string, deletedBy = "د. بلال القي
   return deletedFromFirestore;
 }
 
-app.delete("/api/users/:id", async (req, res) => {
+app.delete("/api/users/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const phone = (req.query.phone as string) || (req.body?.phone as string) || undefined;
   const deletedBy = (req.query.deletedBy as string) || (req.body?.deletedBy as string) || "د. بلال القيسي";
@@ -2493,7 +2846,7 @@ app.delete("/api/users/:id", async (req, res) => {
   return res.json({ success });
 });
 
-app.delete("/api/clients/:id", async (req, res) => {
+app.delete("/api/clients/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const phone = (req.query.phone as string) || (req.body?.phone as string) || undefined;
   const deletedBy = (req.query.deletedBy as string) || (req.body?.deletedBy as string) || "د. بلال القيسي";
@@ -2503,12 +2856,12 @@ app.delete("/api/clients/:id", async (req, res) => {
 
 // ---------------- ADMIN TRASH & RECYCLE BIN ARCHIVE API ROUTES ----------------
 
-app.get("/api/trash", async (req, res) => {
+app.get("/api/trash", requirePrivileged, async (req, res) => {
   const list = await fetchTrashArchiveFromDB();
   res.json({ success: true, items: list, count: list.length });
 });
 
-app.post("/api/trash", async (req, res) => {
+app.post("/api/trash", requirePrivileged, async (req, res) => {
   const item = req.body;
   if (!item || !item.itemType || !item.originalId) {
     return res.status(400).json({ error: "بيانات المحذوفات غير مكتملة" });
@@ -2528,7 +2881,7 @@ app.post("/api/trash", async (req, res) => {
   res.json({ success: true, item: trashItem, message: "تمت أرشفة العنصر في سلة المحذوفات بنجاح" });
 });
 
-app.post("/api/trash/:id/restore", async (req, res) => {
+app.post("/api/trash/:id/restore", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const result = await restoreTrashItemInDB(id);
   if (!result.success) {
@@ -2537,13 +2890,13 @@ app.post("/api/trash/:id/restore", async (req, res) => {
   res.json(result);
 });
 
-app.delete("/api/trash/:id", async (req, res) => {
+app.delete("/api/trash/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   await deleteTrashItemFromDB(id);
   res.json({ success: true, message: "تم حذف العنصر نهائياً من الأرشيف" });
 });
 
-app.delete("/api/trash", async (req, res) => {
+app.delete("/api/trash", requirePrivileged, async (req, res) => {
   const { itemType } = req.query;
   const count = await clearTrashArchiveFromDB(itemType as string);
   res.json({ success: true, count, message: `تم إفراغ سلة المحذوفات وحذف ${count} عنصر نهائياً` });
@@ -2557,7 +2910,7 @@ app.get("/api/products", async (req, res) => {
 });
 
 // Add a new product (by Representative)
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", requirePrivileged, async (req, res) => {
   const { id, name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body || {};
 
   if (!name || !price) {
@@ -2587,7 +2940,7 @@ app.post("/api/products", async (req, res) => {
 });
 
 // Batch update product categories (by Representative / Gemini AI Auto-Classification)
-app.put("/api/products/batch-categories", async (req, res) => {
+app.put("/api/products/batch-categories", requirePrivileged, async (req, res) => {
   const { updates } = req.body || {};
   if (!Array.isArray(updates) || updates.length === 0) {
     return res.status(400).json({ error: "قائمة التحديثات مطلوبة." });
@@ -2635,7 +2988,7 @@ app.put("/api/products/batch-categories", async (req, res) => {
 });
 
 // Update product (by Representative)
-app.put("/api/products/:id", async (req, res) => {
+app.put("/api/products/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { name, description, category, price, unit, bonus, image, imageUrl, activeIngredient, dosageForm, barcode, qrCode } = req.body || {};
 
@@ -2664,7 +3017,7 @@ app.put("/api/products/:id", async (req, res) => {
 });
 
 // Delete product
-app.delete("/api/products/:id", async (req, res) => {
+app.delete("/api/products/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const success = await deleteProductFromDB(id);
 
@@ -2679,37 +3032,41 @@ app.delete("/api/products/:id", async (req, res) => {
 // --- STOCK REPORTS API ---
 
 // Batch submit stock remaining levels
-app.post("/api/stock-reports", async (req, res) => {
+app.post("/api/stock-reports", requireAuth, async (req, res) => {
   const { clientId, clientName, entityName, reports } = req.body || {};
+  const effectiveClientId = (req as any).isPrivileged ? clientId : (req as any).authUid;
 
-  if (!clientId || !reports || !Array.isArray(reports)) {
+  if (!effectiveClientId || !reports || !Array.isArray(reports)) {
     return res.status(400).json({ error: "معلومات الجرد غير مكتملة" });
   }
 
-  await saveStockReportToDB(clientId, clientName, entityName, reports);
+  await saveStockReportToDB(effectiveClientId, clientName, entityName, reports);
   res.json({ success: true, message: "تم تسجيل وتحديث المخزون بنجاح" });
 });
 
 // Get stock reports
-app.get("/api/stock-reports", async (req, res) => {
+app.get("/api/stock-reports", requireAuth, async (req, res) => {
   const { clientId } = req.query;
-  const reports = await fetchStockReportsFromDB(clientId as string);
+  const scopedClientId = (req as any).isPrivileged ? (clientId as string) : (req as any).authUid;
+  const reports = await fetchStockReportsFromDB(scopedClientId);
   res.json(reports);
 });
 
 
 // --- ORDERS API ---
 
-app.post("/api/orders", async (req, res) => {
+app.post("/api/orders", requireAuth, async (req, res) => {
   const { clientId, clientName, entityName, items, id: customId } = req.body || {};
+  const isPrivileged = Boolean((req as any).isPrivileged);
+  const effectiveClientId = isPrivileged ? clientId : (req as any).authUid;
 
-  if (!clientId || !items || !Array.isArray(items) || items.length === 0) {
+  if (!effectiveClientId || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "الرجاء تحديد الأصناف والكميات لإنشاء الطلب" });
   }
 
   const newOrder: Order = {
     id: customId || req.body.id || ("ord_" + Math.random().toString(36).substr(2, 9)),
-    clientId,
+    clientId: effectiveClientId,
     clientName: clientName || "عميل غير معروف",
     entityName: entityName || "منشأة غير معروفة",
     items: items.map((item: any) => ({
@@ -2718,7 +3075,7 @@ app.post("/api/orders", async (req, res) => {
       quantity: Number(item.quantity),
       price: item.price || "غير محدد"
     })),
-    status: req.body.status || "pending",
+    status: isPrivileged ? (req.body.status || "pending") : "pending",
     notes: req.body.notes,
     createdAt: req.body.createdAt || new Date().toISOString()
   };
@@ -2728,13 +3085,14 @@ app.post("/api/orders", async (req, res) => {
   res.json({ success: true, order: newOrder });
 });
 
-app.get("/api/orders", async (req, res) => {
+app.get("/api/orders", requireAuth, async (req, res) => {
   const { clientId } = req.query;
-  const orders = await fetchOrdersFromDB(clientId as string);
+  const scopedClientId = (req as any).isPrivileged ? (clientId as string) : (req as any).authUid;
+  const orders = await fetchOrdersFromDB(scopedClientId);
   res.json(orders);
 });
 
-app.patch("/api/orders/:id", async (req, res) => {
+app.patch("/api/orders/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { status, isArchived, order: clientOrder } = req.body || {}; // pending, approved, completed, cancelled
 
@@ -2790,13 +3148,13 @@ app.patch("/api/orders/:id", async (req, res) => {
   }
 });
 
-app.post("/api/orders/archive-completed", async (req, res) => {
+app.post("/api/orders/archive-completed", requirePrivileged, async (req, res) => {
   const clientOrders = Array.isArray(req.body?.orders) ? req.body.orders : undefined;
   const count = await archiveAllCompletedOrdersInDB(clientOrders);
   res.json({ success: true, count, message: `تم نقل ${count} طلبية مسلمة إلى الأرشيف بنجاح` });
 });
 
-app.patch("/api/orders/:id/archive", async (req, res) => {
+app.patch("/api/orders/:id/archive", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const isArchived = req.body?.isArchived !== false;
   const clientOrder = req.body?.order;
@@ -2811,7 +3169,7 @@ app.patch("/api/orders/:id/archive", async (req, res) => {
   });
 });
 
-app.delete("/api/orders/:id", async (req, res) => {
+app.delete("/api/orders/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const clientOrder = req.body?.order;
   const success = await deleteOrderFromDB(id, "د. بلال القيسي", clientOrder);
@@ -2822,7 +3180,7 @@ app.delete("/api/orders/:id", async (req, res) => {
 });
 
 // Send Order Status Update via Email Notification
-app.post("/api/orders/:id/email-update", async (req, res) => {
+app.post("/api/orders/:id/email-update", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { recipientEmail, recipientName, entityName, status, subject, message, repName, repPhone } = req.body || {};
 
@@ -2863,7 +3221,7 @@ app.post("/api/orders/:id/email-update", async (req, res) => {
   });
 });
 
-app.post("/api/orders/archive/clear", async (req, res) => {
+app.post("/api/orders/archive/clear", requirePrivileged, async (req, res) => {
   const clientArchivedOrders = Array.isArray(req.body?.orders) ? req.body.orders : undefined;
   const count = await clearAllArchivedOrdersFromDB("د. بلال القيسي", clientArchivedOrders);
   res.json({ success: true, count, message: `تم إفراغ الأرشيف وحذف ${count} طلبية نهائياً` });
@@ -3039,30 +3397,89 @@ async function sendFcmNotificationToUsers(params: {
       }
     }
 
+    const targetLink = safeData.url || "/";
     const batchRes = (await Promise.race([
       messagingAdmin.sendEachForMulticast({
         tokens,
         notification: { title, body },
-        data: safeData,
+        data: {
+          title,
+          body,
+          url: targetLink,
+          ...safeData,
+        },
         android: {
           ttl: 3600 * 1000,
           collapseKey: "mandoubak_updates",
           notification: {
-            channelId: "messages",
+            channelId: "mandoubak_med_default",
           },
         },
         webpush: {
+          headers: {
+            Urgency: "high",
+            TTL: "86400",
+          },
           notification: {
             title,
             body,
             icon: "/icons/pwa-192x192.png",
+            badge: "/icons/pwa-192x192.png",
             dir: "rtl",
             lang: "ar",
+            tag: safeData.notification_id || "mandoubak-med-notification",
+            renotify: true,
+          },
+          fcmOptions: {
+            link: targetLink,
           },
         },
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("FCM send timeout")), 4000)),
     ])) as any;
+
+    // Prune stale/unregistered tokens returned by FCM
+    if (Array.isArray(batchRes?.responses)) {
+      const deadTokens = new Set<string>();
+      batchRes.responses.forEach((resp: any, idx: number) => {
+        const errCode = resp?.error?.code || "";
+        if (
+          !resp?.success &&
+          (errCode === "messaging/registration-token-not-registered" ||
+            errCode === "messaging/invalid-registration-token")
+        ) {
+          if (tokens[idx]) deadTokens.add(tokens[idx]);
+        }
+      });
+
+      if (deadTokens.size > 0) {
+        try {
+          const localDb = getDB();
+          let changed = false;
+          for (const u of localDb.users || []) {
+            const hadPrimary = u.fcmToken && deadTokens.has(u.fcmToken);
+            const filteredList = Array.isArray(u.fcmTokens)
+              ? u.fcmTokens.filter((t) => !deadTokens.has(t))
+              : undefined;
+            const listChanged = Array.isArray(u.fcmTokens) && filteredList && filteredList.length !== u.fcmTokens.length;
+            if (hadPrimary || listChanged) {
+              changed = true;
+              u.fcmTokens = filteredList || [];
+              u.fcmToken = u.fcmTokens[0] || "";
+              if (isFirebaseEnabled && dbAdmin && u.id) {
+                dbAdmin.collection("users").doc(u.id).set(
+                  { fcmToken: u.fcmToken, fcmTokens: u.fcmTokens },
+                  { merge: true }
+                ).catch(() => {});
+              }
+            }
+          }
+          if (changed) saveDB(localDb);
+        } catch {
+          // Ignore non-critical stale token cleanup errors
+        }
+      }
+    }
 
     return {
       attempted: true,
@@ -3084,13 +3501,14 @@ async function sendFcmNotificationToUsers(params: {
 
 // --- NEW VISITS & NOTIFICATIONS ENDPOINTS ---
 
-app.get("/api/visits", async (req, res) => {
+app.get("/api/visits", requireAuth, async (req, res) => {
   const { clientId } = req.query;
-  const list = await fetchVisitsFromDB(clientId as string);
+  const scopedClientId = (req as any).isPrivileged ? (clientId as string) : (req as any).authUid;
+  const list = await fetchVisitsFromDB(scopedClientId);
   res.json(list);
 });
 
-app.post("/api/visits", async (req, res) => {
+app.post("/api/visits", requirePrivileged, async (req, res) => {
   const { clientId, clientName, entityName, visitDate, notes, summary, tasks } = req.body || {};
 
   if (!clientId || !notes || !visitDate) {
@@ -3113,7 +3531,7 @@ app.post("/api/visits", async (req, res) => {
   res.json({ success: true, visit: newVisit });
 });
 
-app.patch("/api/visits/:id", async (req, res) => {
+app.patch("/api/visits/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const { tasks, summary, notes } = req.body || {};
 
@@ -3132,9 +3550,11 @@ app.patch("/api/visits/:id", async (req, res) => {
   res.json({ success: true, visit });
 });
 
-app.get("/api/notifications", async (req, res) => {
+app.get("/api/notifications", requireAuth, async (req, res) => {
   try {
-    const clientId = req.query.clientId as string | undefined;
+    const clientId = (req as any).isPrivileged
+      ? (req.query.clientId as string | undefined)
+      : ((req as any).authUid as string);
     let list = await fetchNotificationsFromDB(clientId);
     if (clientId) {
       const users = await fetchAllUsersFromDB();
@@ -3147,7 +3567,9 @@ app.get("/api/notifications", async (req, res) => {
   } catch (err: any) {
     console.warn("/api/notifications error, falling back to local store:", err?.message || err);
     const list = getDB().notifications || [];
-    const clientId = req.query.clientId as string | undefined;
+    const clientId = (req as any).isPrivileged
+      ? (req.query.clientId as string | undefined)
+      : ((req as any).authUid as string);
     const targetUser = clientId ? (getDB().users || []).find((u) => u.id === clientId) : undefined;
     const allowTargeted = targetUser?.permissions?.canReceiveTargetedNotifications !== false;
     const filtered = (clientId
@@ -3158,19 +3580,22 @@ app.get("/api/notifications", async (req, res) => {
   }
 });
 
-app.post("/api/fcm/register", async (req, res) => {
+app.post("/api/fcm/register", requireAuth, async (req, res) => {
   const { userId, token } = req.body || {};
   if (!token || typeof token !== "string") {
     return res.status(400).json({ error: "رمز التسجيل (FCM Token) مطلوب" });
   }
-  if (!userId || typeof userId !== "string") {
+  const effectiveUserId = (req as any).isPrivileged && typeof userId === "string" && userId.trim()
+    ? userId.trim()
+    : (req as any).authUid;
+  if (!effectiveUserId || typeof effectiveUserId !== "string") {
     return res.status(400).json({ error: "معرّف المستخدم مطلوب" });
   }
-  await registerUserFcmToken(userId, token);
-  res.json({ success: true, userId, tokenRegistered: true });
+  await registerUserFcmToken(effectiveUserId, token);
+  res.json({ success: true, userId: effectiveUserId, tokenRegistered: true });
 });
 
-app.post("/api/fcm/send", async (req, res) => {
+app.post("/api/fcm/send", requirePrivileged, async (req, res) => {
   const { title, body, token, targetClientId, data } = req.body || {};
   if (!title || !body) {
     return res.status(400).json({ error: "عنوان ونص الإشعار مطلوبان" });
@@ -3185,15 +3610,16 @@ app.post("/api/fcm/send", async (req, res) => {
   res.json({ success: true, fcmDelivery });
 });
 
-app.post("/api/notifications", async (req, res) => {
+app.post("/api/notifications", requirePrivileged, async (req, res) => {
   const { title, message, type, targetClientId, targetClientName } = req.body || {};
 
   if (!title || !message) {
     return res.status(400).json({ error: "عنوان الإشعار ونص الإشعار مطلوبان" });
   }
 
+  const notifId = "n_" + Math.random().toString(36).substr(2, 9);
   const newNotif: Notification = {
-    id: "n_" + Math.random().toString(36).substr(2, 9),
+    id: notifId,
     title: title.trim(),
     message: message.trim(),
     type: type === "target" ? "target" : "broadcast",
@@ -3201,8 +3627,6 @@ app.post("/api/notifications", async (req, res) => {
     targetClientName,
     createdAt: new Date().toISOString()
   };
-
-  await saveNotificationToDB(newNotif);
 
   let skipTargetedFcm = false;
   if (newNotif.type === "target" && newNotif.targetClientId) {
@@ -3238,10 +3662,16 @@ app.post("/api/notifications", async (req, res) => {
           type: newNotif.type,
         },
       });
+
+  if (fcmDelivery.attempted && fcmDelivery.successCount > 0) {
+    newNotif.fcmDispatchedBy = "server";
+  }
+
+  await saveNotificationToDB(newNotif);
   res.json({ success: true, notification: newNotif, fcmDelivery });
 });
 
-app.patch("/api/notifications/:id/archive", async (req, res) => {
+app.patch("/api/notifications/:id/archive", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const isArchived = req.body?.isArchived !== false;
   const now = new Date().toISOString();
@@ -3275,7 +3705,7 @@ app.patch("/api/notifications/:id/archive", async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete("/api/notifications/:id", async (req, res) => {
+app.delete("/api/notifications/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   if (isFirebaseEnabled && dbAdmin) {
     try {
@@ -3297,7 +3727,7 @@ app.delete("/api/notifications/:id", async (req, res) => {
   res.status(404).json({ error: "الإشعار غير موجود" });
 });
 
-app.delete("/api/notifications", async (req, res) => {
+app.delete("/api/notifications", requirePrivileged, async (req, res) => {
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const snap = await dbAdmin.collection("notifications").get();
@@ -3446,13 +3876,14 @@ async function deleteAgreementFromDB(id: string, deletedBy = "د. بلال ال�
   return false;
 }
 
-app.get("/api/agreements", async (req, res) => {
+app.get("/api/agreements", requireAuth, async (req, res) => {
   const { clientId } = req.query;
-  const list = await fetchAgreementsFromDB(clientId as string);
+  const scopedClientId = (req as any).isPrivileged ? (clientId as string) : (req as any).authUid;
+  const list = await fetchAgreementsFromDB(scopedClientId);
   res.json(list);
 });
 
-app.post("/api/agreements", async (req, res) => {
+app.post("/api/agreements", requirePrivileged, async (req, res) => {
   const {
     clientId,
     clientName,
@@ -3501,7 +3932,7 @@ app.post("/api/agreements", async (req, res) => {
   res.json({ success: true, agreement: newAgreement });
 });
 
-app.put("/api/agreements/:id", async (req, res) => {
+app.put("/api/agreements/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const {
     clientId,
@@ -3559,7 +3990,7 @@ app.put("/api/agreements/:id", async (req, res) => {
   res.json({ success: true, agreement: updated });
 });
 
-app.delete("/api/agreements/:id", async (req, res) => {
+app.delete("/api/agreements/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const success = await deleteAgreementFromDB(id);
   if (!success) {
@@ -3661,13 +4092,14 @@ async function deleteComplaintFromDB(id: string, deletedBy = "د. بلال ال�
   return false;
 }
 
-app.get("/api/complaints", async (req, res) => {
+app.get("/api/complaints", requireAuth, async (req, res) => {
   const { clientId } = req.query;
-  const list = await fetchComplaintsFromDB(clientId as string);
+  const scopedClientId = (req as any).isPrivileged ? (clientId as string) : (req as any).authUid;
+  const list = await fetchComplaintsFromDB(scopedClientId);
   res.json(list);
 });
 
-app.post("/api/complaints", async (req, res) => {
+app.post("/api/complaints", requireAuth, async (req, res) => {
   const {
     clientId,
     clientName,
@@ -3711,7 +4143,7 @@ app.post("/api/complaints", async (req, res) => {
   res.json({ success: true, complaint: newComplaint });
 });
 
-app.put("/api/complaints/:id", async (req, res) => {
+app.put("/api/complaints/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const {
     status,
@@ -3746,7 +4178,7 @@ app.put("/api/complaints/:id", async (req, res) => {
   res.json({ success: true, complaint: updated });
 });
 
-app.delete("/api/complaints/:id", async (req, res) => {
+app.delete("/api/complaints/:id", requirePrivileged, async (req, res) => {
   const { id } = req.params;
   const success = await deleteComplaintFromDB(id);
   if (!success) {
@@ -3755,7 +4187,7 @@ app.delete("/api/complaints/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete("/api/complaints", async (req, res) => {
+app.delete("/api/complaints", requirePrivileged, async (req, res) => {
   if (isFirebaseEnabled && dbAdmin) {
     try {
       const snap = await dbAdmin.collection("complaints").get();
@@ -3994,7 +4426,7 @@ async function callOpenRouterChat({
 
 // --- GEMINI AI VISITS ANALYZER API ---
 
-app.post("/api/visits/analyze", async (req, res) => {
+app.post("/api/visits/analyze", requireAuth, async (req, res) => {
   const { notes } = req.body || {};
   if (!notes || notes.trim() === "") {
     return res.status(400).json({ error: "ملاحظات الزيارة مطلوبة للتحليل" });
@@ -4077,7 +4509,7 @@ app.post("/api/visits/analyze", async (req, res) => {
 
 // --- GEMINI AI DRUGS SCIENTIFIC SEARCH API ---
 
-app.post("/api/drugs/scientific-search", async (req, res) => {
+app.post("/api/drugs/scientific-search", requireAuth, async (req, res) => {
   const { drugQuery } = req.body || {};
   if (!drugQuery || drugQuery.trim() === "") {
     return res.status(400).json({ error: "اسم الدواء أو المادة الفعالة مطلوبة للبحث" });
@@ -4212,7 +4644,7 @@ app.post("/api/drugs/scientific-search", async (req, res) => {
 });
 
 // --- ACCREDITED ENGLISH MEDICAL BOARD EXAM GENERATION API ---
-app.post("/api/ai/generate-medical-exam", async (req, res) => {
+app.post("/api/ai/generate-medical-exam", requireAuth, async (req, res) => {
   const { specialty, topic, count = 5, difficulty = "medium" } = req.body || {};
 
   try {
@@ -4408,7 +4840,7 @@ app.get("/api/ai/providers", (req, res) => {
   });
 });
 
-app.post("/api/ai/openrouter/chat", async (req, res) => {
+app.post("/api/ai/openrouter/chat", requireAuth, async (req, res) => {
   const { messages, model, systemInstruction, temperature } = req.body || {};
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة" });
@@ -4454,7 +4886,7 @@ function formatGeminiChatError(err: any): string {
   return msg || "حدث عطل مؤقت أثناء الاتصال بخدمة الذكاء الاصطناعي.";
 }
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", requireAuth, async (req, res) => {
   const { messages, mode = "standard", provider = "auto", openRouterModel, systemInstruction, location } = req.body || {};
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة" });
@@ -4707,7 +5139,7 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // --- GEMINI AUDIO TRANSCRIPTION API ---
-app.post("/api/ai/transcribe-audio", async (req, res) => {
+app.post("/api/ai/transcribe-audio", requireAuth, async (req, res) => {
   const { audioBase64, mimeType = "audio/webm" } = req.body || {};
   if (!audioBase64 || typeof audioBase64 !== "string") {
     return res.status(400).json({ success: false, error: "بيانات الصوت مطلوبة للتفريغ" });
@@ -4755,7 +5187,7 @@ app.post("/api/ai/transcribe-audio", async (req, res) => {
   });
 });
 
-app.post("/api/ai/suggest-category", async (req, res) => {
+app.post("/api/ai/suggest-category", requireAuth, async (req, res) => {
   const { name, productName, activeIngredient, description, availableCategories } = req.body || {};
   const itemName = String(productName || name || "").trim();
   const ingredient = String(activeIngredient || "").trim();
@@ -4780,7 +5212,7 @@ app.post("/api/ai/suggest-category", async (req, res) => {
 });
 
 // Batch auto-classify catalog products into available system categories using Gemini AI
-app.post("/api/ai/classify-catalog", async (req, res) => {
+app.post("/api/ai/classify-catalog", requirePrivileged, async (req, res) => {
   const { products, availableCategories } = req.body || {};
 
   if (!process.env.GEMINI_API_KEY) {
@@ -4920,7 +5352,7 @@ ${itemsPrompt}`;
 });
 
 // Standard Gemini Generate Endpoint per AI Studio @google/genai guidelines
-app.post("/api/gemini/generate", async (req, res) => {
+app.post("/api/gemini/generate", requireAuth, async (req, res) => {
   const { prompt, contents, systemInstruction } = req.body || {};
   const userPrompt = prompt || (typeof contents === "string" ? contents : contents?.parts?.[0]?.text) || "مرحباً";
 
@@ -4958,7 +5390,7 @@ app.post("/api/gemini/generate", async (req, res) => {
 });
 
 // Streaming Gemini API Endpoint (Server-Sent Events) with gemini-4-hydrogen
-app.post("/api/gemini/stream", async (req, res) => {
+app.post("/api/gemini/stream", requireAuth, async (req, res) => {
   const { prompt, contents, systemInstruction } = req.body || {};
   const userPrompt = prompt || (typeof contents === "string" ? contents : contents?.parts?.[0]?.text) || "مرحباً";
 
@@ -5001,7 +5433,7 @@ app.post("/api/gemini/stream", async (req, res) => {
 });
 
 // --- GOOGLE GENAI MODEL INTERACTIONS API (gemini-4-hydrogen + google_search + thinking_level) ---
-app.post("/api/ai/interaction", async (req, res) => {
+app.post("/api/ai/interaction", requireAuth, async (req, res) => {
   const {
     input,
     prompt,
@@ -5096,7 +5528,7 @@ app.post("/api/ai/interaction", async (req, res) => {
 });
 
 // --- GOOGLE GENAI INTERACTIONS AGENT API (ANTIGRAVITY & DEEP RESEARCH) ---
-app.post("/api/ai/agent-interaction", async (req, res) => {
+app.post("/api/ai/agent-interaction", requireAuth, async (req, res) => {
   const { input, prompt, agent = "antigravity-preview-09-2026", background = false } = req.body || {};
   const userInput = input || prompt;
   if (!userInput || typeof userInput !== "string" || userInput.trim() === "") {
@@ -5152,7 +5584,7 @@ app.post("/api/ai/agent-interaction", async (req, res) => {
   }
 });
 
-app.get("/api/ai/agent-interaction/:id", async (req, res) => {
+app.get("/api/ai/agent-interaction/:id", requireAuth, async (req, res) => {
   const { id } = req.params;
   if (!id) {
     return res.status(400).json({ error: "معرف المهمة (interactionId) مطلوب" });
@@ -5203,7 +5635,7 @@ app.get("/api/ai/agent-interaction/:id", async (req, res) => {
 });
 
 // --- GEMINI AI IMAGE GENERATION API ---
-app.post("/api/ai/generate-image", async (req, res) => {
+app.post("/api/ai/generate-image", requireAuth, async (req, res) => {
   const { prompt, aspectRatio = "1:1", imageSize = "1K" } = req.body || {};
   if (!prompt || typeof prompt !== "string" || prompt.trim() === "") {
     return res.status(400).json({ error: "نص التوجيه (Prompt) مطلوب لتوليد الصورة" });
@@ -5272,7 +5704,7 @@ app.post("/api/ai/generate-image", async (req, res) => {
 });
 
 // --- GEMINI AI IMAGE EDITING API ---
-app.post("/api/ai/edit-image", async (req, res) => {
+app.post("/api/ai/edit-image", requireAuth, async (req, res) => {
   const { prompt, imageBase64, mimeType = "image/png" } = req.body || {};
   if (!prompt || !imageBase64) {
     return res.status(400).json({ error: "الصورة والنص التوجيهي مطلوبان لتعديل الصورة" });
@@ -5754,7 +6186,7 @@ app.get(["/gemini-callback", "/api/gemini-callback"], (req, res) => {
   });
 });
 
-app.get("/api/gemini-callback/events", async (req, res) => {
+app.get("/api/gemini-callback/events", requirePrivileged, async (req, res) => {
   const events = await fetchGeminiWebhooksFromDB();
   res.json({
     success: true,
@@ -5763,12 +6195,12 @@ app.get("/api/gemini-callback/events", async (req, res) => {
   });
 });
 
-app.delete("/api/gemini-callback/events", async (req, res) => {
+app.delete("/api/gemini-callback/events", requirePrivileged, async (req, res) => {
   await clearGeminiWebhooksFromDB();
   res.json({ success: true, message: "تم مسح سجل أحداث الويب هوك" });
 });
 
-app.get("/api/gemini-callback/config", (req, res) => {
+app.get("/api/gemini-callback/config", requirePrivileged, (req, res) => {
   const host = req.get("host") || "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
   const protocol = req.protocol === "http" && host.includes("localhost") ? "http" : "https";
   const fullUrl = `${protocol}://${host}/gemini-callback`;
@@ -5800,7 +6232,7 @@ print(f"Created webhook: {webhook.name}, {webhook.id}")`
   });
 });
 
-app.post("/api/gemini-callback/config", async (req, res) => {
+app.post("/api/gemini-callback/config", requirePrivileged, async (req, res) => {
   const { secret } = req.body || {};
   const db = getDB();
   if (!db.settings) db.settings = { ...DEFAULT_SETTINGS };
@@ -5813,7 +6245,7 @@ app.post("/api/gemini-callback/config", async (req, res) => {
   });
 });
 
-app.post("/api/gemini-callback/test", async (req, res) => {
+app.post("/api/gemini-callback/test", requirePrivileged, async (req, res) => {
   const { eventType = "batch.succeeded", batchId, model = "gemini-3.8-flash", shouldSimulateSignature = true } = req.body || {};
 
   const actualBatchId = batchId || `batches/batch_${Date.now().toString(36)}`;
@@ -5883,11 +6315,85 @@ app.post("/api/gemini-callback/test", async (req, res) => {
 });
 
 
-app.post("/api/system/reset", async (req, res) => {
+app.post("/api/system/reset", requirePrivileged, async (req, res) => {
   await resetSystemInDB();
   res.json({ success: true, message: "تم إعادة ضبط النظام بنجاح" });
 });
 
+
+app.post("/api/google-chat/events", (req, res) => {
+  const body = req.body || {};
+  const isWorkspaceAddon = Boolean(body.chat || body.commonEventObject);
+
+  if (isWorkspaceAddon) {
+    const chatEvent = body.chat || {};
+    if (chatEvent.appHomePayload) {
+      return res.json({
+        action: {
+          navigations: [
+            {
+              pushCard: {
+                header: {
+                  title: "مندوبك الطبي - Mandoubak Med",
+                  subtitle: "د. بلال القيسي | نظام المبيعات والطلبيات الدوائية",
+                },
+                sections: [
+                  {
+                    widgets: [
+                      {
+                        textParagraph: {
+                          text: "مرحباً بك في تطبيق مندوبك الطبي عبر Google Chat. يمكنك متابعة الطلبيات والزيارات من المنصة الرئيسية.",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    if (chatEvent.removedFromSpacePayload) {
+      return res.status(200).json({});
+    }
+
+    const incomingText = String(chatEvent.messagePayload?.message?.text || "").trim();
+    const replyText = incomingText
+      ? `تم استلام رسالتك في مندوبك الطبي: "${incomingText}". للمتابعة التفصيلية افتح لوحة التطبيق الرسمية.`
+      : "أهلاً بك في تطبيق مندوبك الطبي (د/ بلال القيسي) على Google Chat!";
+
+    return res.json({
+      hostAppDataAction: {
+        chatDataAction: {
+          createMessageAction: {
+            message: {
+              text: replyText,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const eventType = String(body.type || "").toUpperCase();
+  if (eventType === "REMOVED_FROM_SPACE") {
+    return res.status(200).json({});
+  }
+  if (eventType === "ADDED_TO_SPACE") {
+    return res.json({
+      text: "أهلاً بكم! تم تفعيل بوت مندوبك الطبي (د/ بلال القيسي) في هذه المساحة بنجاح.",
+    });
+  }
+
+  const userText = String(body.message?.text || "").trim();
+  return res.json({
+    text: userText
+      ? `تم استلام استفسارك: "${userText}" — يمكنك إدارته مباشرة من لوحة مندوبك الطبي.`
+      : "مرحباً بك في تطبيق مندوبك الطبي - Mandoubak Med.",
+  });
+});
 
 app.get("/terms", (_req, res) => {
   res.sendFile(path.join(process.cwd(), "public", "terms.html"));
@@ -5922,6 +6428,7 @@ async function startServer() {
     });
   } else {
     try {
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true, hmr: false },
         appType: "spa",
@@ -5948,3 +6455,5 @@ async function startServer() {
 if (!process.env.VERCEL) {
   startServer();
 }
+
+export default app;

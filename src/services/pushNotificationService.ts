@@ -24,28 +24,41 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 export function showLocalNotification(title: string, options?: NotificationOptions) {
-  if ('Notification' in window && Notification.permission === 'granted') {
-    if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
-      navigator.serviceWorker.ready.then((registration) => {
-        registration.showNotification(title, {
-          icon: '/icons/pwa-192x192.png',
-          badge: '/icons/pwa-192x192.png',
-          dir: 'rtl',
-          lang: 'ar',
-          ...options,
-        });
-      }).catch(() => {
-        new Notification(title, {
-          icon: '/icons/pwa-192x192.png',
-          ...options,
-        });
-      });
-    } else {
-      new Notification(title, {
-        icon: '/icons/pwa-192x192.png',
-        ...options,
-      });
+  if (!('Notification' in window) || Notification.permission !== 'granted') {
+    return;
+  }
+
+  const notifOptions: NotificationOptions = {
+    icon: '/icons/pwa-192x192.png',
+    badge: '/icons/pwa-192x192.png',
+    dir: 'rtl',
+    lang: 'ar',
+    ...options,
+  };
+
+  const triggerWebFallback = () => {
+    try {
+      new Notification(title, notifOptions);
+    } catch {
+      // Ignore if browser blocks Notification constructor in favor of ServiceWorker
     }
+  };
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker
+      .getRegistration('/firebase-cloud-messaging-push-scope')
+      .then((fcmReg) => {
+        if (fcmReg && fcmReg.active) {
+          return fcmReg.showNotification(title, notifOptions);
+        }
+        return Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SW ready timeout')), 1200)),
+        ]).then((registration) => registration.showNotification(title, notifOptions));
+      })
+      .catch(triggerWebFallback);
+  } else {
+    triggerWebFallback();
   }
 }
 
@@ -65,6 +78,22 @@ export async function initNativePushNotifications(
 
   if (permStatus.receive !== 'granted') {
     return null;
+  }
+
+  if (Capacitor.getPlatform() === 'android') {
+    try {
+      await PushNotifications.createChannel({
+        id: 'mandoubak_med_default',
+        name: 'إشعارات مندوبك الطبي',
+        description: 'التنبيهات الفورية للطلبيات والعروض والموافقات',
+        importance: 5,
+        visibility: 1,
+        sound: 'default',
+        vibration: true,
+      });
+    } catch {
+      // Ignore if channel already exists or OS version is < Android 8
+    }
   }
 
   const handles: PluginListenerHandle[] = [];

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { authenticatedFetch as fetch } from "../utils/authenticatedFetch";
 import { motion, AnimatePresence } from "motion/react";
 import {
   X,

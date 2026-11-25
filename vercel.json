@@ -4,6 +4,11 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "{dist/server.cjs,firebase-applet-config.json,data-store.json}"
+    }
+  },
   "headers": [
     {
       "source": "/index.html",

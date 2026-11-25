@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { authenticatedFetch as fetch } from "../utils/authenticatedFetch";
 import {
   GraduationCap,
   Award,
