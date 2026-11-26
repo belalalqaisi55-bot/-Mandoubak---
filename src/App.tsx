@@ -201,7 +201,7 @@ export const cleanArabicPhone = (phoneStr: string) => {
 };
 
 // Permanent single official live application URL (الرابط الرسمي والوحيد المعتمد للتطبيق)
-export const OFFICIAL_APP_URL = "https://ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+export const OFFICIAL_APP_URL = "https://mandoubak-med-1.vercel.app";
 
 function getAppLiveUrl(): string {
   // Always and strictly return the single official verified application link
@@ -209,7 +209,7 @@ function getAppLiveUrl(): string {
 }
 
 function getAppDisplayDomain(): string {
-  return "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+  return "mandoubak-med-1.vercel.app";
 }
 
 function formatWhatsAppPhone(phoneStr: string): string {

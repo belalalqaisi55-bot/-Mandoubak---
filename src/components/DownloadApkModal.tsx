@@ -26,7 +26,7 @@ interface DownloadApkModalProps {
 export const DownloadApkModal: React.FC<DownloadApkModalProps> = ({
   isOpen,
   onClose,
-  appUrl = typeof window !== "undefined" ? window.location.origin : "https://ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app",
+  appUrl = typeof window !== "undefined" ? window.location.origin : "https://mandoubak-med-1.vercel.app",
 }) => {
   const { isInstallable, isInstalled, isStandalone, isIOS, isInIframe, triggerInstall } = usePWAInstall();
   const [copied, setCopied] = useState(false);

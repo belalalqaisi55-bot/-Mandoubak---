@@ -13,6 +13,7 @@ const config: CapacitorConfig = {
       'wired-sol-514110-i2.web.app',
       'wired-sol-514110-i2.firebaseapp.com',
       'ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app',
+      'mandoubak-med-1.vercel.app',
       'mandoubak-med-1-belalalqaisi55-afks-projects.vercel.app',
       '*.vercel.app',
       'openrouter.ai',

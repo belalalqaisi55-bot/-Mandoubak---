@@ -4,7 +4,7 @@
  * or as a standalone app, all /api/* calls are routed directly to the production backend server.
  */
 
-export const OFFICIAL_APP_URL = "https://ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+export const OFFICIAL_APP_URL = "https://mandoubak-med-1.vercel.app";
 
 export const BACKEND_URL = typeof window !== "undefined" && window.location && window.location.origin && !window.location.origin.includes("localhost")
   ? window.location.origin

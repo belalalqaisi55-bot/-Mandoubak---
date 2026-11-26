@@ -21,7 +21,7 @@ export const CVBarcodeModal: React.FC<CVBarcodeModalProps> = ({
   const getSecretUrl = () => {
     const origin = typeof window !== "undefined" && window.location.origin 
       ? window.location.origin 
-      : "https://ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+      : "https://mandoubak-med-1.vercel.app";
     // Add a unique timestamp to force browser to reload
     return `${origin}/cv/belal-cv-secret-link`;
   };

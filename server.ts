@@ -6235,7 +6235,7 @@ app.post(["/gemini-callback", "/api/gemini-callback", "/api/gemini/webhook"], ha
 
 // GET handler to check callback status and instructions
 app.get(["/gemini-callback", "/api/gemini-callback"], (req, res) => {
-  const host = req.get("host") || "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+  const host = req.get("host") || "mandoubak-med-1.vercel.app";
   const protocol = req.protocol === "http" && host.includes("localhost") ? "http" : "https";
   const fullUrl = `${protocol}://${host}/gemini-callback`;
   const secretConfigured = Boolean(
@@ -6271,7 +6271,7 @@ app.delete("/api/gemini-callback/events", requirePrivileged, async (req, res) =>
 });
 
 app.get("/api/gemini-callback/config", requirePrivileged, (req, res) => {
-  const host = req.get("host") || "ais-pre-oqwx6mdzcwvrhadryzbxjt-13849160368.europe-west1.run.app";
+  const host = req.get("host") || "mandoubak-med-1.vercel.app";
   const protocol = req.protocol === "http" && host.includes("localhost") ? "http" : "https";
   const fullUrl = `${protocol}://${host}/gemini-callback`;
   const secretConfigured = Boolean(
