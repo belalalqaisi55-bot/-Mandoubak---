@@ -3475,22 +3475,7 @@ export default function App() {
           verifiedUser = data.user;
         }
       } catch {
-        // Fallback to Firestore / local verification below
-      }
-
-      if (!verifiedUser && isFirebaseConfigured && db && pendingApprovalUser.id) {
-        try {
-          const snap = await getDoc(doc(db, "users", pendingApprovalUser.id));
-          if (snap.exists()) {
-            const fireUser = { id: snap.id, ...snap.data() } as User;
-            if (fireUser.confirmationCode && fireUser.confirmationCode.trim() === codeAttempt) {
-              verifiedUser = { ...fireUser, isApproved: true, status: "approved" };
-              await syncToFirebase("users", "set", verifiedUser.id, verifiedUser);
-            }
-          }
-        } catch {
-          // Ignore Firestore fallback error
-        }
+        // Backend verification error handled below
       }
 
       if (verifiedUser) {

@@ -2062,9 +2062,19 @@ async function resetSystemInDB(): Promise<void> {
 async function fetchSettingsFromDB(): Promise<AppSettings> {
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      const doc = await dbAdmin.collection("settings").doc("app_config").get();
-      if (doc.exists) {
-        return { ...DEFAULT_SETTINGS, ...doc.data() as AppSettings };
+      const [publicDoc, secretDoc] = await Promise.all([
+        dbAdmin.collection("settings").doc("app_config").get(),
+        dbAdmin.collection("server_secrets").doc("app_config").get().catch(() => null),
+      ]);
+      if (publicDoc.exists || secretDoc?.exists) {
+        const publicData = (publicDoc.exists ? publicDoc.data() : {}) as Partial<AppSettings>;
+        const secretData = (secretDoc && secretDoc.exists ? secretDoc.data() : {}) as Partial<AppSettings>;
+        return {
+          ...DEFAULT_SETTINGS,
+          ...publicData,
+          ...(secretData.adminPasscodeHash ? { adminPasscodeHash: secretData.adminPasscodeHash } : {}),
+          ...(secretData.geminiWebhookSecret ? { geminiWebhookSecret: secretData.geminiWebhookSecret } : {}),
+        };
       }
     } catch (e: any) {
       console.warn("Firebase operation fallback (settings):", e.message);
@@ -2078,7 +2088,14 @@ async function fetchSettingsFromDB(): Promise<AppSettings> {
 async function saveSettingsToDB(settings: AppSettings): Promise<void> {
   if (isFirebaseEnabled && dbAdmin) {
     try {
-      await dbAdmin.collection("settings").doc("app_config").set(settings, { merge: true });
+      const { adminPasscodeHash, geminiWebhookSecret, ...publicSettings } = settings;
+      await dbAdmin.collection("settings").doc("app_config").set(publicSettings, { merge: true });
+      const secretPatch: Record<string, string> = {};
+      if (adminPasscodeHash) secretPatch.adminPasscodeHash = adminPasscodeHash;
+      if (geminiWebhookSecret) secretPatch.geminiWebhookSecret = geminiWebhookSecret;
+      if (Object.keys(secretPatch).length > 0) {
+        await dbAdmin.collection("server_secrets").doc("app_config").set(secretPatch, { merge: true });
+      }
     } catch (e: any) {
       console.warn("Firebase operation fallback (save settings):", e.message);
       isFirebaseEnabled = false;

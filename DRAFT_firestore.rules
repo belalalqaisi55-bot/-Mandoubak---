@@ -65,6 +65,12 @@ service cloud.firestore {
       );
     }
 
+    function isApprovalRequiredForNewClient() {
+      return !exists(/databases/$(database)/documents/settings/app_config) ||
+        !get(/databases/$(database)/documents/settings/app_config).data.keys().hasAny(['requireApprovalForNewClients']) ||
+        get(/databases/$(database)/documents/settings/app_config).data.requireApprovalForNewClients == true;
+    }
+
     // Schema validation helpers (Validation Blueprints)
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'name', 'role']) &&
@@ -77,6 +83,9 @@ service cloud.firestore {
         (!data.keys().hasAny(['location']) || (data.location is string && data.location.size() <= 256)) &&
         (!data.keys().hasAny(['status']) || data.status in ['approved', 'pending_approval', 'suspended', 'rejected']) &&
         (!data.keys().hasAny(['isApproved']) || data.isApproved is bool) &&
+        (!data.keys().hasAny(['confirmationCode']) || (data.confirmationCode is string && data.confirmationCode.size() <= 32)) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!data.keys().hasAny(['fcmUpdatedAt']) || (data.fcmUpdatedAt is string && data.fcmUpdatedAt.size() <= 64)) &&
         (!data.keys().hasAny(['fcmToken']) || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
         (!data.keys().hasAny(['fcmTokens']) || (data.fcmTokens is list && data.fcmTokens.size() <= 20 && (data.fcmTokens.size() == 0 || data.fcmTokens[0] is string))) &&
         (!data.keys().hasAny(['permissions']) || data.permissions is map);
@@ -139,7 +148,13 @@ service cloud.firestore {
           isOwner(userId) &&
           incoming().id == request.auth.uid &&
           incoming().role in ['pharmacy', 'doctor'] &&
-          !incoming().keys().hasAny(['permissions'])
+          !incoming().keys().hasAny(['permissions']) && (
+            !isApprovalRequiredForNewClient() || (
+              incoming().keys().hasAll(['isApproved', 'status']) &&
+              incoming().isApproved == false &&
+              incoming().status == 'pending_approval'
+            )
+          )
         )
       );
       allow update: if isValidId(userId) && isSignedIn() && isValidUser(incoming()) && (
@@ -147,7 +162,7 @@ service cloud.firestore {
           isOwner(userId) &&
           incoming().id == existing().id &&
           incoming().role == existing().role &&
-          !incoming().diff(existing()).affectedKeys().hasAny(['role', 'isApproved', 'status', 'id', 'permissions'])
+          !incoming().diff(existing()).affectedKeys().hasAny(['role', 'isApproved', 'status', 'id', 'permissions', 'confirmationCode'])
         )
       );
       allow delete: if isValidId(userId) && isPrivileged();
@@ -161,11 +176,11 @@ service cloud.firestore {
       allow delete: if isValidId(productId) && isPrivileged();
     }
 
-    // 3. Settings - Public branding/category read, Rep/Admin write
+    // 3. Settings - Public branding/category read, Rep/Admin write (without server secret fields)
     match /settings/{settingId} {
       allow list: if true;
       allow get: if isValidId(settingId);
-      allow write: if isValidId(settingId) && isPrivileged();
+      allow write: if isValidId(settingId) && isPrivileged() && !incoming().keys().hasAny(['adminPasscodeHash', 'geminiWebhookSecret']);
     }
 
     // 4. Notifications - Signed-in read, Rep/Admin write
@@ -249,6 +264,11 @@ service cloud.firestore {
         isPrivileged() || isDocOwner(existing())
       );
       allow delete: if isValidId(noteId) && (isPrivileged() || isDocOwner(existing()));
+    }
+
+    // 12. Server Secrets - Server/Admin SDK only
+    match /server_secrets/{secretId} {
+      allow read, write: if false;
     }
   }
 }

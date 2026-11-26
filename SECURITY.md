@@ -1,50 +1,36 @@
 # 🔐 معايير الأمان - Security Guidelines
 
-## البيانات الحساسة التي تم حذفها
+## إدارة الأسرار وكلمات المرور
 
-### تحذير مهم:
-✅ تم حذف كلمة السر `Belal302344` من README.md
-✅ تم حذف جميع المفاتيح والأسرار من الملفات العامة
+- **عدم تخزين أي أسرار أو كلمات مرور في الكود المصدري أو ملفات التوثيق:** يتم ضبط كلمة مرور المسؤول ومفاتيح الجلسات والخدمات عبر متغيرات البيئة الآمنة في الخادم فقط.
+- **في بيئات التطوير والنشر (مثل Vercel / Cloud Run):**
+  - اضبط `ADMIN_SECRET` لكلمة مرور المسؤول.
+  - اضبط `SESSION_SECRET` لتوقيع رموز الجلسة (`HMAC-SHA256`).
+  - اضبط مفاتيح API الخاصة بالخدمات الخارجية (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`) في متغيرات البيئة الخادمية فقط دون أي بادئة `VITE_`.
+- **تجزئة كلمة المرور عند الإعداد الأولي:** في حال عدم تعيين `ADMIN_SECRET` في متغيرات البيئة، يدعم التطبيق تعيين كلمة مرور المسؤول لأول مرة عبر `/api/auth/claim-admin` وتُحفظ مُجزّأة (`scrypt`) في مجموعة `server_secrets` المعزولة عن القراءة العامة.
 
-## خطوات الأمان المتخذة:
+## ملفات لا يجب رفعها إلى Git
 
-### 1. تغيير كلمة السر الفورية
-**كلمة السر الجديدة:** `Mandoubk302344$`
-- ضع هذه الكلمة في متغيرات البيئة فقط
-- **لا تضعها أبداً في ملفات Git أو README**
-
-### 2. استخدام متغيرات البيئة
-بدلاً من وضع البيانات الحساسة في الملفات:
-```bash
-# استخدم .env للبيانات الحساسة
-firebase functions:config:set app.admin_secret="Mandoubk302344$"
-firebase deploy --only functions
-```
-
-### 3. ملفات مهمة يجب حذفها من Git History
 ```
 .env
+.env.local
 google-services.json
 firebase-key.json
+*-firebase-adminsdk-*.json
 secrets.json
 ```
 
-## قائمة التحقق (Checklist):
+## قائمة التحقق الأمنية (Checklist)
 
-- [x] حذف البيانات الحساسة من README
-- [x] إنشاء ملف .env.example
-- [ ] تحديث Firebase Cloud Functions بكلمة السر الجديدة
-- [ ] تفعيل Firebase Authentication بشكل صحيح
-- [ ] تحديث قواعد Firestore Rules للإنتاج
-- [ ] إزالة البيانات الحساسة من Git History (إذا لزم الأمر)
-- [ ] استخدام Secret Management في Firebase
+- [x] إزالة كلمات المرور المكشوفة من الكود والملفات العامة
+- [x] تجهيز `.env.example` بدون أسرار حقيقية
+- [x] حماية مسارات الإدارة والتحقق من الجلسات الموقّعة (`Bearer`)
+- [x] تفعيل قواعد `firestore.rules` لمنع الترقية الذاتية أو الموافقة التلقائية على الحسابات
+- [x] عزل أسرار الخادم في `server_secrets` بدلاً من `settings` العامة
+- [x] استخدام Firebase Functions v2 للإشعارات السحابية دون الحاجة لمفاتيح Service Account على الخادم الوسيط
 
-## موارد مفيدة:
+## موارد مفيدة
 
-- [Firebase Security Best Practices](https://firebase.google.com/docs/rules/basics)
+- [Firebase Security Rules](https://firebase.google.com/docs/rules/basics)
 - [OWASP Security Checklist](https://owasp.org/)
 - [Google Cloud Security](https://cloud.google.com/docs/security)
-
----
-
-**آخر تحديث:** 2026-09-07

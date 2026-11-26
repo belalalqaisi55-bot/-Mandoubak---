@@ -200,6 +200,15 @@
         "deletedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["id", "itemType", "title", "originalId", "deletedAt"]
+    },
+    "ServerSecrets": {
+      "title": "ServerSecrets",
+      "description": "Server-only secret hashes and webhook tokens (never readable from clients)",
+      "type": "object",
+      "properties": {
+        "adminPasscodeHash": { "type": "string", "maxLength": 512 },
+        "geminiWebhookSecret": { "type": "string", "maxLength": 512 }
+      }
     }
   },
   "firestore": {
@@ -238,6 +247,10 @@
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/Settings" },
       "description": "Application settings and profile branding"
+    },
+    "/server_secrets/{secretId}": {
+      "schema": { "$ref": "#/entities/ServerSecrets" },
+      "description": "Server-only secret configuration isolated from public settings"
     },
     "/keep_notes/{noteId}": {
       "schema": { "$ref": "#/entities/KeepNote" },
