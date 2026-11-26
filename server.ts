@@ -21,6 +21,7 @@ const ai = new GoogleGenAI({
 import axios from 'axios';
 import qs from 'qs';
 import { DEFAULT_PRODUCTS } from "./src/data/defaultProducts.ts";
+import { isTelegramConfigured, notifyTelegramSafely, sendTelegramAlert } from "./lib/telegramAlert.ts";
 
 dotenv.config();
 process.env.DISABLE_HMR = "true";
@@ -2458,6 +2459,18 @@ app.post("/api/auth/register", async (req, res) => {
     console.warn("Registration notification persist notice:", notifErr?.message || notifErr);
   }
 
+  await notifyTelegramSafely(
+    [
+      `🆕 ${regNotif.title}`,
+      `👤 المسؤول: ${newUser.name}`,
+      contactSummary ? `📞 التواصل: ${contactSummary}` : "",
+      newUser.location ? `📍 الموقع: ${newUser.location}` : "",
+      requiresApproval ? `🔑 رمز التأكيد: ${randomCode}` : "✅ تم التفعيل تلقائياً"
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+
   const sessionToken = !requiresApproval
     ? signAppSessionToken({
         uid: newUser.id,
@@ -3058,6 +3071,16 @@ app.post("/api/stock-reports", requireAuth, async (req, res) => {
   }
 
   await saveStockReportToDB(effectiveClientId, clientName, entityName, reports);
+
+  await notifyTelegramSafely(
+    [
+      "📊 جرد مخزون جديد",
+      `🏥 الجهة: ${entityName || clientName || effectiveClientId}`,
+      `👤 العميل: ${clientName || "غير محدد"}`,
+      `📦 عدد الأصناف المبلّغ عنها: ${reports.length}`
+    ].join("\n")
+  );
+
   res.json({ success: true, message: "تم تسجيل وتحديث المخزون بنجاح" });
 });
 
@@ -3098,6 +3121,25 @@ app.post("/api/orders", requireAuth, async (req, res) => {
   };
 
   await saveOrderToDB(newOrder);
+
+  const itemsPreview = newOrder.items
+    .slice(0, 6)
+    .map((item) => `• ${item.productName || item.productId} × ${item.quantity}`)
+    .join("\n");
+  const extraItemsNote = newOrder.items.length > 6 ? `\n... (+${newOrder.items.length - 6} أصناف أخرى)` : "";
+
+  await notifyTelegramSafely(
+    [
+      `🛒 طلبية جديدة (${newOrder.id})`,
+      `🏥 الجهة: ${newOrder.entityName}`,
+      `👤 العميل: ${newOrder.clientName}`,
+      `📦 الأصناف (${newOrder.items.length}):`,
+      `${itemsPreview}${extraItemsNote}`,
+      newOrder.notes ? `📝 ملاحظات: ${newOrder.notes}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
 
   res.json({ success: true, order: newOrder });
 });
@@ -4157,6 +4199,17 @@ app.post("/api/complaints", requireAuth, async (req, res) => {
   };
 
   await saveComplaintToDB(newComplaint);
+
+  await notifyTelegramSafely(
+    [
+      `📩 ${newComplaint.typeLabel} جديد (${newComplaint.priority})`,
+      `🏥 الجهة: ${newComplaint.entityName}`,
+      `👤 المرسل: ${newComplaint.clientName}`,
+      `📌 العنوان: ${newComplaint.subject}`,
+      `📝 التفاصيل: ${newComplaint.content.slice(0, 300)}${newComplaint.content.length > 300 ? "..." : ""}`
+    ].join("\n")
+  );
+
   res.json({ success: true, complaint: newComplaint });
 });
 
@@ -6410,6 +6463,33 @@ app.post("/api/google-chat/events", (req, res) => {
       ? `تم استلام استفسارك: "${userText}" — يمكنك إدارته مباشرة من لوحة مندوبك الطبي.`
       : "مرحباً بك في تطبيق مندوبك الطبي - Mandoubak Med.",
   });
+});
+
+app.get("/api/telegram/status", requirePrivileged, (_req, res) => {
+  res.json({
+    configured: isTelegramConfigured(),
+    hasBotToken: Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim()),
+    hasChatId: Boolean(process.env.TELEGRAM_CHAT_ID?.trim()),
+  });
+});
+
+app.post("/api/telegram/test", requirePrivileged, async (req, res) => {
+  if (!isTelegramConfigured()) {
+    return res.status(400).json({
+      error: "متغيرات TELEGRAM_BOT_TOKEN أو TELEGRAM_CHAT_ID غير مضبوطة على الخادم.",
+    });
+  }
+  try {
+    const customMsg = typeof req.body?.message === "string" && req.body.message.trim()
+      ? req.body.message.trim()
+      : "✅ اختبار تنبيهات تيليجرام من خادم مندوبك الطبي بنجاح!";
+    const result = await sendTelegramAlert(customMsg);
+    return res.json({ success: true, result });
+  } catch (err: any) {
+    return res.status(502).json({
+      error: err?.message || "تعذر إرسال رسالة الاختبار إلى تيليجرام.",
+    });
+  }
 });
 
 app.get("/terms", (_req, res) => {

@@ -74,6 +74,14 @@
       "destination": "/api"
     },
     {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    },
+    {
+      "source": "/terms",
+      "destination": "/terms.html"
+    },
+    {
       "source": "/((?!api/|_vercel/).*)",
       "destination": "/index.html"
     }
