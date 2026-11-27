@@ -48,6 +48,7 @@ interface SettingsModalProps {
   onToggleBiometric: (enabled: boolean) => void;
   registeredUsers?: User[];
   onUpdateUserPermissions?: (userId: string, permissions: UserPermissions) => Promise<boolean>;
+  onOpenPermissionsManager?: () => void;
   onOpenApkModal?: () => void;
   onOpenDiagnostics?: () => void;
   onOpenGoogleCalendar?: () => void;
@@ -64,6 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleBiometric,
   registeredUsers = [],
   onUpdateUserPermissions,
+  onOpenPermissionsManager,
   onOpenApkModal,
   onOpenDiagnostics,
   onOpenGoogleCalendar,
@@ -554,9 +556,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </p>
                     </div>
                   </div>
-                  <span className="text-3xs font-bold text-teal-800">
-                    {approvedClients.length} عميل معتمد
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-3xs font-bold text-teal-800">
+                      {approvedClients.length} عميل معتمد
+                    </span>
+                    {onOpenPermissionsManager && (
+                      <button
+                        type="button"
+                        onClick={onOpenPermissionsManager}
+                        className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-3xs font-bold text-teal-800 hover:bg-teal-100 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        <span>فتح مدير الأذونات الكامل</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Search & Role Filter */}

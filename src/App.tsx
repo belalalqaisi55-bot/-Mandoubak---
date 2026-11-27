@@ -28,6 +28,7 @@ import { CategoryManagerModal } from "./components/CategoryManagerModal";
 import { OnboardingFlowModal } from "./components/OnboardingFlowModal";
 import { QRScannerModal } from "./components/QRScannerModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { PermissionsManager } from "./components/PermissionsManager";
 import { DownloadApkModal } from "./components/DownloadApkModal";
 import { fetchOnboardingFlow, OnboardingFlowType } from "./services/remoteConfigService";
 import { initNativePushNotifications } from "./services/pushNotificationService";
@@ -601,7 +602,8 @@ export default function App() {
 
   // Navigation state
   const [activeTab, setActiveTab] = useState<"sheet" | "history" | "reports" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "docs" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps">("sheet");
-  const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "docs" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
+  const [repTab, setRepTab] = useState<"orders" | "inventory" | "archive" | "catalog" | "clients" | "permissions" | "visits" | "notifications" | "scientific" | "games" | "agreements" | "complaints" | "docs" | "pediatric" | "loyalty" | "flash" | "exams" | "analytics" | "maps" | "status">("orders");
+  const [focusedPermissionUserId, setFocusedPermissionUserId] = useState<string | null>(null);
   const [visitViewMode, setVisitViewMode] = useState<"list" | "map">("list");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -2146,16 +2148,24 @@ export default function App() {
               dReports = fetchedReports;
             }
           } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "stockReports"), 2500);
+            const isPriv = user?.role === "rep" || user?.role === "admin";
+            const reportsQ = isPriv
+              ? collection(db, "stockReports")
+              : query(collection(db, "stockReports"), where("clientId", "==", user?.id || ""));
+            const snapshot = await getDocsWithTimeout(reportsQ, 2500);
             const fsReports = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as StockReport));
-            dReports = user?.role === "rep" ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
+            dReports = isPriv ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
           }
         } catch (err) {
           if (isFirebaseConfigured && db) {
             try {
-              const snapshot = await getDocsWithTimeout(collection(db, "stockReports"), 2500);
+              const isPriv = user?.role === "rep" || user?.role === "admin";
+              const reportsQ = isPriv
+                ? collection(db, "stockReports")
+                : query(collection(db, "stockReports"), where("clientId", "==", user?.id || ""));
+              const snapshot = await getDocsWithTimeout(reportsQ, 2500);
               const fsReports = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as StockReport));
-              dReports = user?.role === "rep" ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
+              dReports = isPriv ? fsReports : fsReports.filter((r: any) => r.clientId === user?.id || (r as any).userId === user?.id);
             } catch (fsErr) {
               console.warn("Firestore reports fallback err:", fsErr);
             }
@@ -2209,14 +2219,22 @@ export default function App() {
             const dVisits = await rVisits.json();
             if (Array.isArray(dVisits)) setVisits(dVisits);
           } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "visits"), 2500);
+            const isPriv = user?.role === "rep" || user?.role === "admin";
+            const visitsQ = isPriv
+              ? collection(db, "visits")
+              : query(collection(db, "visits"), where("clientId", "==", user?.id || ""));
+            const snapshot = await getDocsWithTimeout(visitsQ, 2500);
             const fsVisits = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Visit));
             setVisits(fsVisits);
           }
         } catch (err) {
           if (isFirebaseConfigured && db) {
             try {
-              const snapshot = await getDocsWithTimeout(collection(db, "visits"), 2500);
+              const isPriv = user?.role === "rep" || user?.role === "admin";
+              const visitsQ = isPriv
+                ? collection(db, "visits")
+                : query(collection(db, "visits"), where("clientId", "==", user?.id || ""));
+              const snapshot = await getDocsWithTimeout(visitsQ, 2500);
               const fsVisits = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Visit));
               setVisits(fsVisits);
             } catch (fsErr) {
@@ -2247,9 +2265,13 @@ export default function App() {
               setAgreements(dAgreements);
             }
           } else if (isFirebaseConfigured && db) {
-            const snapshot = await getDocsWithTimeout(collection(db, "agreements"), 2500);
+            const isPriv = user?.role === "rep" || user?.role === "admin";
+            const agreementsQ = isPriv
+              ? collection(db, "agreements")
+              : query(collection(db, "agreements"), where("clientId", "==", user?.id || ""));
+            const snapshot = await getDocsWithTimeout(agreementsQ, 2500);
             const fsAgreements = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Agreement));
-            const filtered = user?.role === "rep"
+            const filtered = isPriv
               ? fsAgreements
               : fsAgreements.filter((a: any) => a.clientId === user?.id || a.clientPhone === user?.phone);
             setAgreements(filtered);
@@ -2257,9 +2279,13 @@ export default function App() {
         } catch (err) {
           if (isFirebaseConfigured && db) {
             try {
-              const snapshot = await getDocsWithTimeout(collection(db, "agreements"), 2500);
+              const isPriv = user?.role === "rep" || user?.role === "admin";
+              const agreementsQ = isPriv
+                ? collection(db, "agreements")
+                : query(collection(db, "agreements"), where("clientId", "==", user?.id || ""));
+              const snapshot = await getDocsWithTimeout(agreementsQ, 2500);
               const fsAgreements = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Agreement));
-              const filtered = user?.role === "rep"
+              const filtered = isPriv
                 ? fsAgreements
                 : fsAgreements.filter((a: any) => a.clientId === user?.id || a.clientPhone === user?.phone);
               setAgreements(filtered);
@@ -2826,8 +2852,9 @@ export default function App() {
       // Firestore Fallback
       if (isFirebaseConfigured && db) {
         const id = complaintId || `cmp-${Date.now()}`;
-        const newCmpDoc: Complaint = {
+        const newCmpDoc: Complaint & { userId?: string } = {
           id,
+          userId: auth?.currentUser?.uid || complaintData.clientId || user?.id || "",
           clientId: complaintData.clientId || user?.id || "",
           clientName: complaintData.clientName || user?.name || "",
           entityName: complaintData.entityName || user?.entityName || "",
@@ -3084,8 +3111,25 @@ export default function App() {
 
       if (!backendOk && isFirebaseConfigured && db) {
         try {
-          const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 3000);
-          const fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
+          const isPriv = user?.role === "rep" || user?.role === "admin";
+          let fsNotifs: Notification[] = [];
+          if (isPriv) {
+            const snapshot = await getDocsWithTimeout(collection(db, "notifications"), 3000);
+            fsNotifs = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Notification));
+          } else {
+            const targetUid = auth?.currentUser?.uid || user?.id || "";
+            const [broadcastSnap, targetSnap] = await Promise.all([
+              getDocsWithTimeout(query(collection(db, "notifications"), where("type", "==", "broadcast")), 3000),
+              targetUid
+                ? getDocsWithTimeout(query(collection(db, "notifications"), where("targetClientId", "==", targetUid)), 3000)
+                : Promise.resolve({ docs: [] }),
+            ]);
+            const byId = new Map<string, Notification>();
+            [...broadcastSnap.docs, ...targetSnap.docs].forEach((d: any) => {
+              byId.set(d.id, { id: d.id, ...d.data() } as Notification);
+            });
+            fsNotifs = Array.from(byId.values());
+          }
           setNotifications(filterVisibleNotifs(fsNotifs));
         } catch (fsErr) {
           if (!options?.silent) {
@@ -3392,9 +3436,15 @@ export default function App() {
 
       if (isFirebaseConfigured && db && targetUserId) {
         try {
+          const targetUserObj = registeredUsers.find((u) => u.id === targetUserId);
           await setDoc(
             doc(db, "users", targetUserId),
-            { permissions, updatedAt: new Date().toISOString() },
+            {
+              id: targetUserId,
+              name: targetUserObj?.name || targetUserObj?.entityName || "عميل",
+              role: targetUserObj?.role || "pharmacy",
+              permissions,
+            },
             { merge: true }
           );
         } catch (fsErr) {
@@ -5897,6 +5947,10 @@ export default function App() {
 
   // Export orders to CSV
   const handleExportOrdersCSV = () => {
+    if (user?.role !== "rep" && user?.role !== "admin" && user?.permissions?.canExportReports === false) {
+      showError("تم تعطيل صلاحية تصدير البيانات لهذا الحساب من قبل المسؤول.");
+      return;
+    }
     if (orders.length === 0) {
       showError("لا توجد طلبيات لتصديرها");
       return;
@@ -5932,6 +5986,10 @@ export default function App() {
 
   // Export stock reports to CSV
   const handleExportStockReportsCSV = () => {
+    if (user?.role !== "rep" && user?.role !== "admin" && user?.permissions?.canExportReports === false) {
+      showError("تم تعطيل صلاحية تصدير البيانات لهذا الحساب من قبل المسؤول.");
+      return;
+    }
     if (stockReports.length === 0) {
       showError("لا توجد بيانات جرد لتصديرها");
       return;
@@ -7293,6 +7351,17 @@ export default function App() {
                       id="sidebar-rep-clients"
                     />
                     <SidebarNavItem
+                      icon={<KeyRound className="h-4.5 w-4.5 text-teal-700" />}
+                      label="إدارة أذونات المستخدمين"
+                      active={repTab === "permissions"}
+                      onClick={() => {
+                        setFocusedPermissionUserId(null);
+                        setRepTab("permissions");
+                      }}
+                      collapsed={isSidebarCollapsed}
+                      id="sidebar-rep-permissions"
+                    />
+                    <SidebarNavItem
                       icon={<ClipboardList className="h-4.5 w-4.5 text-teal-600" />}
                       label="زيارات المندوب والذكاء 🪄"
                       active={repTab === "visits"}
@@ -7968,6 +8037,16 @@ export default function App() {
                             onClick={() => { setRepTab("clients"); setIsMobileSidebarOpen(false); }}
                           />
                           <SidebarNavItem
+                            icon={<KeyRound className="h-4.5 w-4.5 text-teal-700" />}
+                            label="إدارة أذونات المستخدمين"
+                            active={repTab === "permissions"}
+                            onClick={() => {
+                              setFocusedPermissionUserId(null);
+                              setRepTab("permissions");
+                              setIsMobileSidebarOpen(false);
+                            }}
+                          />
+                          <SidebarNavItem
                             icon={<ClipboardList className="h-4.5 w-4.5 text-teal-600" />}
                             label="زيارات المندوب والذكاء 🪄"
                             active={repTab === "visits"}
@@ -8421,6 +8500,7 @@ export default function App() {
                             {repTab === "archive" && "📦 أرشيف الطلبيات المؤرشفة والمكتملة"}
                             {repTab === "catalog" && "💊 إدارة الأصناف والأسعار"}
                             {repTab === "clients" && "👥 قائمة العملاء والصيدليات المسجلة"}
+                            {repTab === "permissions" && "🔐 إدارة أذونات المستخدمين والصلاحيات"}
                             {repTab === "visits" && "📋 سجل الزيارات الميدانية والذكاء الاصطناعي 🪄"}
                             {repTab === "maps" && "🗺️ خريطة الزيارات الميدانية والتغطية (Google Maps)"}
                             {repTab === "notifications" && "🔔 الإشعارات والتعاميم الموجهة"}
@@ -10229,6 +10309,19 @@ export default function App() {
                           {showImportForm ? "إغلاق الاستيراد" : "استيراد من إكسل (Excel)"}
                         </button>
 
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFocusedPermissionUserId(null);
+                            setRepTab("permissions");
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-all shadow-xs cursor-pointer"
+                          title="فتح واجهة إدارة أذونات المستخدمين لكل عميل"
+                        >
+                          <KeyRound className="h-4 w-4 text-teal-300" />
+                          <span>إدارة الأذونات</span>
+                        </button>
+
                         {uniqueClients.length > 0 && (
                           <button
                             onClick={handleDeleteAllClients}
@@ -10633,6 +10726,18 @@ export default function App() {
 
                                   {/* Actions */}
                                   <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFocusedPermissionUserId(client.id);
+                                        setRepTab("permissions");
+                                      }}
+                                      className="rounded-lg p-1.5 text-teal-700 bg-teal-50/70 hover:bg-teal-100 transition-colors cursor-pointer"
+                                      title="إدارة أذونات هذا المستخدم"
+                                    >
+                                      <KeyRound className="h-3.5 w-3.5" />
+                                    </button>
+
                                     <button
                                       onClick={() => setEditingClient({
                                         id: client.id,
@@ -11355,6 +11460,18 @@ export default function App() {
               {repTab === "exams" && (
                 <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-2xs m-3">
                   <MedicalExamHub userRole="rep" />
+                </div>
+              )}
+
+              {repTab === "permissions" && (
+                <div className="m-3 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                  <PermissionsManager
+                    users={registeredUsers}
+                    onUpdateUserPermissions={handleUpdateUserPermissions}
+                    onRefreshUsers={() => fetchAllRegisteredUsers({ forcePrivileged: true })}
+                    focusedUserId={focusedPermissionUserId}
+                    onClearFocusedUser={() => setFocusedPermissionUserId(null)}
+                  />
                 </div>
               )}
 
@@ -12618,7 +12735,7 @@ export default function App() {
                       <ShoppingCart className="h-5 w-5 text-teal-600" />
                       <span>سلة الطلبيات وكشوفات الجرد المسجلة</span>
                     </div>
-                    {orders.length > 0 && (
+                    {orders.length > 0 && user?.permissions?.canExportReports !== false && (
                       <button
                         onClick={handleExportOrdersCSV}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 px-2.5 py-1 text-2xs font-bold"
@@ -13842,6 +13959,11 @@ export default function App() {
         }}
         registeredUsers={registeredUsers}
         onUpdateUserPermissions={handleUpdateUserPermissions}
+        onOpenPermissionsManager={() => {
+          setIsSettingsModalOpen(false);
+          setFocusedPermissionUserId(null);
+          setRepTab("permissions");
+        }}
         onOpenApkModal={() => setIsDownloadApkModalOpen(true)}
         onOpenGoogleChat={() => setIsGoogleChatOpen(true)}
       />

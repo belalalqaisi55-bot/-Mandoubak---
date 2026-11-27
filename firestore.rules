@@ -65,6 +65,13 @@ service cloud.firestore {
       );
     }
 
+    // Ensures neither userId nor clientId can point to another user on client-created records
+    function isStrictCreatorOwner(data) {
+      return isDocOwner(data) &&
+        (!data.keys().hasAny(['userId']) || data.userId == request.auth.uid) &&
+        (!data.keys().hasAny(['clientId']) || data.clientId == request.auth.uid);
+    }
+
     function isApprovalRequiredForNewClient() {
       return !exists(/databases/$(database)/documents/settings/app_config) ||
         !get(/databases/$(database)/documents/settings/app_config).data.keys().hasAny(['requireApprovalForNewClients']) ||
@@ -77,13 +84,18 @@ service cloud.firestore {
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
         data.name is string && data.name.size() > 0 && data.name.size() <= 128 &&
         data.role in ['pharmacy', 'doctor', 'rep', 'admin'] &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
         (!data.keys().hasAny(['phone']) || (data.phone is string && data.phone.size() <= 32)) &&
         (!data.keys().hasAny(['email']) || (data.email is string && data.email.size() <= 256)) &&
         (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
         (!data.keys().hasAny(['location']) || (data.location is string && data.location.size() <= 256)) &&
+        (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 1000)) &&
+        (!data.keys().hasAny(['avatar']) || (data.avatar is string && data.avatar.size() <= 500000)) &&
         (!data.keys().hasAny(['status']) || data.status in ['approved', 'pending_approval', 'suspended', 'rejected']) &&
         (!data.keys().hasAny(['isApproved']) || data.isApproved is bool) &&
+        (!data.keys().hasAny(['deviceRegistered']) || data.deviceRegistered is bool) &&
         (!data.keys().hasAny(['confirmationCode']) || (data.confirmationCode is string && data.confirmationCode.size() <= 32)) &&
+        (!data.keys().hasAny(['orcidId']) || (data.orcidId is string && data.orcidId.size() <= 64)) &&
         (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
         (!data.keys().hasAny(['fcmUpdatedAt']) || (data.fcmUpdatedAt is string && data.fcmUpdatedAt.size() <= 64)) &&
         (!data.keys().hasAny(['fcmToken']) || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
@@ -95,12 +107,48 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'name']) &&
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
         data.name is string && data.name.size() > 0 && data.name.size() <= 256 &&
+        (!data.keys().hasAny(['scientificName']) || (data.scientificName is string && data.scientificName.size() <= 256)) &&
+        (!data.keys().hasAny(['activeIngredient']) || (data.activeIngredient is string && data.activeIngredient.size() <= 256)) &&
+        (!data.keys().hasAny(['dosageForm']) || (data.dosageForm is string && data.dosageForm.size() <= 128)) &&
         (!data.keys().hasAny(['category']) || (data.category is string && data.category.size() <= 128)) &&
-        (!data.keys().hasAny(['description']) || (data.description is string && data.description.size() <= 2000)) &&
+        (!data.keys().hasAny(['price']) || (data.price is string && data.price.size() <= 64)) &&
+        (!data.keys().hasAny(['unit']) || (data.unit is string && data.unit.size() <= 64)) &&
         (!data.keys().hasAny(['bonus']) || (data.bonus is string && data.bonus.size() <= 128)) &&
+        (!data.keys().hasAny(['description']) || (data.description is string && data.description.size() <= 2000)) &&
+        (!data.keys().hasAny(['image']) || (data.image is string && data.image.size() <= 500000)) &&
         (!data.keys().hasAny(['imageUrl']) || (data.imageUrl is string && data.imageUrl.size() <= 2048)) &&
+        (!data.keys().hasAny(['qrCode']) || (data.qrCode is string && data.qrCode.size() <= 256)) &&
+        (!data.keys().hasAny(['barcode']) || (data.barcode is string && data.barcode.size() <= 128)) &&
         (!data.keys().hasAny(['stock']) || (data.stock is number && data.stock >= 0)) &&
-        (!data.keys().hasAny(['lowStockThreshold']) || (data.lowStockThreshold is number && data.lowStockThreshold >= 0));
+        (!data.keys().hasAny(['lowStockThreshold']) || (data.lowStockThreshold is number && data.lowStockThreshold >= 0)) &&
+        (!data.keys().hasAny(['isAvailable']) || data.isAvailable is bool) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64));
+    }
+
+    function isValidSettings(data) {
+      return !data.keys().hasAny(['adminPasscodeHash', 'geminiWebhookSecret']) &&
+        (!data.keys().hasAny(['requireApprovalForNewClients']) || data.requireApprovalForNewClients is bool) &&
+        (!data.keys().hasAny(['requireApprovalForNewAccounts']) || data.requireApprovalForNewAccounts is bool) &&
+        (!data.keys().hasAny(['singlePhonePerDevice']) || data.singlePhonePerDevice is bool) &&
+        (!data.keys().hasAny(['autoApproveKnownNumbers']) || data.autoApproveKnownNumbers is bool) &&
+        (!data.keys().hasAny(['enableVisitTracking']) || data.enableVisitTracking is bool) &&
+        (!data.keys().hasAny(['drProfileAvatar']) || (data.drProfileAvatar is string && data.drProfileAvatar.size() <= 500000)) &&
+        (!data.keys().hasAny(['productCategories']) || (data.productCategories is list && data.productCategories.size() <= 100 && (data.productCategories.size() == 0 || data.productCategories[0] is string))) &&
+        (!data.keys().hasAny(['categoryColors']) || data.categoryColors is map);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'title', 'message']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 128 &&
+        data.message is string && data.message.size() > 0 && data.message.size() <= 1000 &&
+        (!data.keys().hasAny(['type']) || data.type in ['broadcast', 'target']) &&
+        (!data.keys().hasAny(['targetClientId']) || (data.targetClientId is string && data.targetClientId.size() <= 128)) &&
+        (!data.keys().hasAny(['targetUserId']) || (data.targetUserId is string && data.targetUserId.size() <= 128)) &&
+        (!data.keys().hasAny(['targetClientName']) || (data.targetClientName is string && data.targetClientName.size() <= 128)) &&
+        (!data.keys().hasAny(['isArchived']) || data.isArchived is bool) &&
+        (!data.keys().hasAny(['archivedAt']) || (data.archivedAt is string && data.archivedAt.size() <= 64)) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64));
     }
 
     function isValidOrder(data) {
@@ -112,6 +160,13 @@ service cloud.firestore {
         (!data.keys().hasAny(['clientName']) || (data.clientName is string && data.clientName.size() <= 128)) &&
         (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
         (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 1000)) &&
+        (!data.keys().hasAny(['isArchived']) || data.isArchived is bool) &&
+        (!data.keys().hasAny(['archivedAt']) || (data.archivedAt is string && data.archivedAt.size() <= 64)) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!data.keys().hasAny(['respondedAt']) || (data.respondedAt is string && data.respondedAt.size() <= 64)) &&
+        (!data.keys().hasAny(['approvedAt']) || (data.approvedAt is string && data.approvedAt.size() <= 64)) &&
+        (!data.keys().hasAny(['completedAt']) || (data.completedAt is string && data.completedAt.size() <= 64)) &&
+        (!data.keys().hasAny(['updatedAt']) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
         (!data.keys().hasAny(['items']) || (data.items is list && data.items.size() > 0 && data.items.size() <= 100 && data.items[0] is map));
     }
 
@@ -122,7 +177,50 @@ service cloud.firestore {
         data.remainingQty is number && data.remainingQty >= 0 &&
         (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
         (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
-        (!data.keys().hasAny(['repNotes']) || (data.repNotes is string && data.repNotes.size() <= 1000));
+        (!data.keys().hasAny(['clientName']) || (data.clientName is string && data.clientName.size() <= 128)) &&
+        (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
+        (!data.keys().hasAny(['productName']) || (data.productName is string && data.productName.size() <= 256)) &&
+        (!data.keys().hasAny(['repNotes']) || (data.repNotes is string && data.repNotes.size() <= 1000)) &&
+        (!data.keys().hasAny(['reportedAt']) || (data.reportedAt is string && data.reportedAt.size() <= 64));
+    }
+
+    function isValidVisit(data) {
+      return data.keys().hasAll(['id', 'clientName', 'entityName']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.clientName is string && data.clientName.size() <= 128 &&
+        data.entityName is string && data.entityName.size() <= 128 &&
+        (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['clientType']) || data.clientType in ['pharmacy', 'doctor']) &&
+        (!data.keys().hasAny(['status']) || data.status in ['scheduled', 'completed', 'in_progress', 'cancelled']) &&
+        (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 1000)) &&
+        (!data.keys().hasAny(['summary']) || (data.summary is string && data.summary.size() <= 2000)) &&
+        (!data.keys().hasAny(['tasks']) || (data.tasks is list && data.tasks.size() <= 50 && (data.tasks.size() == 0 || data.tasks[0] is map))) &&
+        (!data.keys().hasAny(['visitDate']) || (data.visitDate is string && data.visitDate.size() <= 64)) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64));
+    }
+
+    function isValidAgreement(data) {
+      return data.keys().hasAll(['id', 'clientId', 'details', 'status']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.clientId is string && data.clientId.size() > 0 && data.clientId.size() <= 128 &&
+        data.details is string && data.details.size() > 0 && data.details.size() <= 3000 &&
+        data.status in ['pending', 'delivered', 'cancelled'] &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['clientName']) || (data.clientName is string && data.clientName.size() <= 128)) &&
+        (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
+        (!data.keys().hasAny(['clientPhone']) || (data.clientPhone is string && data.clientPhone.size() <= 32)) &&
+        (!data.keys().hasAny(['type']) || data.type in ['bonus', 'samples', 'gift_support', 'discount_terms', 'other']) &&
+        (!data.keys().hasAny(['typeLabel']) || (data.typeLabel is string && data.typeLabel.size() <= 64)) &&
+        (!data.keys().hasAny(['deliveredDetails']) || (data.deliveredDetails is string && data.deliveredDetails.size() <= 3000)) &&
+        (!data.keys().hasAny(['deliveredBy']) || (data.deliveredBy is string && data.deliveredBy.size() <= 128)) &&
+        (!data.keys().hasAny(['invoiceNumber']) || (data.invoiceNumber is string && data.invoiceNumber.size() <= 64)) &&
+        (!data.keys().hasAny(['invoiceAttachment']) || (data.invoiceAttachment is string && data.invoiceAttachment.size() <= 500000)) &&
+        (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 1000)) &&
+        (!data.keys().hasAny(['agreementDate']) || (data.agreementDate is string && data.agreementDate.size() <= 64)) &&
+        (!data.keys().hasAny(['deliveredAt']) || (data.deliveredAt is string && data.deliveredAt.size() <= 64)) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!data.keys().hasAny(['updatedAt']) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
 
     function isValidComplaint(data) {
@@ -130,15 +228,40 @@ service cloud.firestore {
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
         data.subject is string && data.subject.size() <= 256 &&
         data.content is string && data.content.size() > 0 && data.content.size() <= 3000 &&
-        (!data.keys().hasAny(['status']) || data.status in ['pending', 'in_progress', 'reviewed', 'resolved', 'closed']);
+        (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['clientName']) || (data.clientName is string && data.clientName.size() <= 128)) &&
+        (!data.keys().hasAny(['entityName']) || (data.entityName is string && data.entityName.size() <= 128)) &&
+        (!data.keys().hasAny(['clientPhone']) || (data.clientPhone is string && data.clientPhone.size() <= 32)) &&
+        (!data.keys().hasAny(['status']) || data.status in ['pending', 'in_progress', 'reviewed', 'resolved', 'closed']) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!data.keys().hasAny(['updatedAt']) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
 
     function isValidKeepNote(data) {
       return data.keys().hasAll(['id', 'title']) &&
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
         data.title is string && data.title.size() <= 256 &&
+        (!data.keys().hasAny(['userId']) || (data.userId is string && data.userId.size() <= 128)) &&
+        (!data.keys().hasAny(['clientId']) || (data.clientId is string && data.clientId.size() <= 128)) &&
         (!data.keys().hasAny(['content']) || (data.content is string && data.content.size() <= 10000)) &&
-        (!data.keys().hasAny(['labels']) || (data.labels is list && data.labels.size() <= 20 && (data.labels.size() == 0 || data.labels[0] is string)));
+        (!data.keys().hasAny(['color']) || (data.color is string && data.color.size() <= 64)) &&
+        (!data.keys().hasAny(['isPinned']) || data.isPinned is bool) &&
+        (!data.keys().hasAny(['isArchived']) || data.isArchived is bool) &&
+        (!data.keys().hasAny(['labels']) || (data.labels is list && data.labels.size() <= 20 && (data.labels.size() == 0 || data.labels[0] is string))) &&
+        (!data.keys().hasAny(['createdAt']) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!data.keys().hasAny(['updatedAt']) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidTrashItem(data) {
+      return data.keys().hasAll(['id', 'itemType', 'title', 'originalId', 'deletedAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.itemType in ['order', 'agreement', 'product', 'client', 'complaint', 'category', 'other'] &&
+        data.title is string && data.title.size() <= 256 &&
+        data.originalId is string && data.originalId.size() > 0 && data.originalId.size() <= 128 &&
+        data.deletedAt is string && data.deletedAt.size() <= 64 &&
+        (!data.keys().hasAny(['subtitle']) || (data.subtitle is string && data.subtitle.size() <= 256)) &&
+        (!data.keys().hasAny(['deletedBy']) || (data.deletedBy is string && data.deletedBy.size() <= 128));
     }
 
     // 1. Users - Strict PII isolation & anti-privilege-escalation
@@ -164,7 +287,7 @@ service cloud.firestore {
           isOwner(userId) &&
           incoming().id == existing().id &&
           incoming().role == existing().role &&
-          !incoming().diff(existing()).affectedKeys().hasAny(['role', 'isApproved', 'status', 'id', 'permissions', 'confirmationCode'])
+          !incoming().diff(existing()).affectedKeys().hasAny(['role', 'isApproved', 'status', 'id', 'permissions', 'confirmationCode', 'createdAt'])
         )
       );
       allow delete: if isValidId(userId) && isPrivileged();
@@ -182,14 +305,30 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow list: if true;
       allow get: if isValidId(settingId);
-      allow write: if isValidId(settingId) && isPrivileged() && !incoming().keys().hasAny(['adminPasscodeHash', 'geminiWebhookSecret']);
+      allow create, update: if isValidId(settingId) && isPrivileged() && isValidSettings(incoming());
+      allow delete: if isValidId(settingId) && isPrivileged();
     }
 
-    // 4. Notifications - Signed-in read, Rep/Admin write
+    // 4. Notifications - Scoped broadcast/target read, Rep/Admin write
     match /notifications/{notificationId} {
-      allow list: if isSignedIn();
-      allow get: if isValidId(notificationId) && isSignedIn();
-      allow write: if isValidId(notificationId) && isPrivileged();
+      allow list: if isPrivileged() || (
+        isSignedIn() && (
+          resource.data.type == 'broadcast' ||
+          resource.data.targetClientId == request.auth.uid ||
+          resource.data.targetUserId == request.auth.uid
+        )
+      );
+      allow get: if isValidId(notificationId) && (
+        isPrivileged() || (
+          isSignedIn() && (
+            existing().type == 'broadcast' ||
+            (existing().keys().hasAny(['targetClientId']) && existing().targetClientId == request.auth.uid) ||
+            (existing().keys().hasAny(['targetUserId']) && existing().targetUserId == request.auth.uid)
+          )
+        )
+      );
+      allow create, update: if isValidId(notificationId) && isPrivileged() && isValidNotification(incoming());
+      allow delete: if isValidId(notificationId) && isPrivileged();
     }
 
     // 5. Orders - Owner read/create pending, Rep/Admin full management
@@ -199,7 +338,7 @@ service cloud.firestore {
       );
       allow get: if isValidId(orderId) && (isPrivileged() || isDocOwner(existing()));
       allow create: if isValidId(orderId) && isSignedIn() && isValidOrder(incoming()) && (
-        isPrivileged() || (isDocOwner(incoming()) && incoming().status == 'pending')
+        isPrivileged() || (isStrictCreatorOwner(incoming()) && incoming().status == 'pending')
       );
       allow update: if isValidId(orderId) && isSignedIn() && isValidOrder(incoming()) && isPrivileged();
       allow delete: if isValidId(orderId) && isPrivileged();
@@ -212,7 +351,7 @@ service cloud.firestore {
       );
       allow get: if isValidId(reportId) && (isPrivileged() || isDocOwner(existing()));
       allow create: if isValidId(reportId) && isSignedIn() && isValidStockReport(incoming()) && (
-        isPrivileged() || isDocOwner(incoming())
+        isPrivileged() || isStrictCreatorOwner(incoming())
       );
       allow update: if isValidId(reportId) && isSignedIn() && isValidStockReport(incoming()) && isPrivileged();
       allow delete: if isValidId(reportId) && isPrivileged();
@@ -224,7 +363,8 @@ service cloud.firestore {
         isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
       );
       allow get: if isValidId(visitId) && (isPrivileged() || isDocOwner(existing()));
-      allow write: if isValidId(visitId) && isPrivileged();
+      allow create, update: if isValidId(visitId) && isPrivileged() && isValidVisit(incoming());
+      allow delete: if isValidId(visitId) && isPrivileged();
     }
 
     // 8. Agreements - Owner read, Rep/Admin write
@@ -233,7 +373,8 @@ service cloud.firestore {
         isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
       );
       allow get: if isValidId(agreementId) && (isPrivileged() || isDocOwner(existing()));
-      allow write: if isValidId(agreementId) && isPrivileged();
+      allow create, update: if isValidId(agreementId) && isPrivileged() && isValidAgreement(incoming());
+      allow delete: if isValidId(agreementId) && isPrivileged();
     }
 
     // 9. Complaints - Owner read/create, Rep/Admin update/delete
@@ -243,7 +384,7 @@ service cloud.firestore {
       );
       allow get: if isValidId(complaintId) && (isPrivileged() || isDocOwner(existing()));
       allow create: if isValidId(complaintId) && isSignedIn() && isValidComplaint(incoming()) && (
-        isPrivileged() || isDocOwner(incoming())
+        isPrivileged() || isStrictCreatorOwner(incoming())
       );
       allow update: if isValidId(complaintId) && isSignedIn() && isValidComplaint(incoming()) && isPrivileged();
       allow delete: if isValidId(complaintId) && isPrivileged();
@@ -252,18 +393,25 @@ service cloud.firestore {
     // 10. Admin Recycle Bin
     match /trash_archive/{itemId} {
       allow list: if isPrivileged();
-      allow get, write: if isValidId(itemId) && isPrivileged();
+      allow get: if isValidId(itemId) && isPrivileged();
+      allow create, update: if isValidId(itemId) && isPrivileged() && isValidTrashItem(incoming());
+      allow delete: if isValidId(itemId) && isPrivileged();
     }
 
     // 11. Keep Notes
     match /keep_notes/{noteId} {
-      allow list: if isPrivileged() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow list: if isPrivileged() || (
+        isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.clientId == request.auth.uid)
+      );
       allow get: if isValidId(noteId) && (isPrivileged() || isDocOwner(existing()));
       allow create: if isValidId(noteId) && isSignedIn() && isValidKeepNote(incoming()) && (
-        isPrivileged() || isDocOwner(incoming())
+        isPrivileged() || isStrictCreatorOwner(incoming())
       );
       allow update: if isValidId(noteId) && isSignedIn() && isValidKeepNote(incoming()) && (
-        isPrivileged() || isDocOwner(existing())
+        isPrivileged() || (
+          isDocOwner(existing()) &&
+          !incoming().diff(existing()).affectedKeys().hasAny(['id', 'userId', 'clientId', 'createdAt'])
+        )
       );
       allow delete: if isValidId(noteId) && (isPrivileged() || isDocOwner(existing()));
     }

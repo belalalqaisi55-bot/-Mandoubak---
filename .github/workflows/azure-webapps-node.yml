@@ -17,9 +17,9 @@
 # For more information on the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
 # For more samples to get started with GitHub Action workflows to deploy to Azure: https://github.com/Azure/actions-workflow-samples
 
+# Disabled automatic push trigger because the app is deployed on Vercel.
+# To deploy manually to Azure in the future, run via GitHub Actions "workflow_dispatch".
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
 
 env:

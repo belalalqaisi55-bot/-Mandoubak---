@@ -6,17 +6,21 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
         "phone": { "type": "string", "maxLength": 32 },
         "email": { "type": "string", "maxLength": 256 },
         "name": { "type": "string", "maxLength": 128 },
-        "role": { "type": "string", "enum": ["pharmacy", "doctor", "rep"] },
+        "role": { "type": "string", "enum": ["pharmacy", "doctor", "rep", "admin"] },
         "entityName": { "type": "string", "maxLength": 128 },
         "location": { "type": "string", "maxLength": 256 },
-        "avatar": { "type": "string" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "avatar": { "type": "string", "maxLength": 500000 },
         "isApproved": { "type": "boolean" },
         "status": { "type": "string", "enum": ["approved", "pending_approval", "suspended", "rejected"] },
         "confirmationCode": { "type": "string", "maxLength": 32 },
+        "deviceRegistered": { "type": "boolean" },
         "fcmToken": { "type": "string", "maxLength": 512 },
+        "fcmTokens": { "type": "array" },
         "fcmUpdatedAt": { "type": "string", "maxLength": 64 },
         "permissions": { "type": "object", "description": "Granular feature permissions managed by the representative" },
         "createdAt": { "type": "string", "maxLength": 64 }
@@ -29,13 +33,19 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
-        "name": { "type": "string", "maxLength": 128 },
-        "scientificName": { "type": "string", "maxLength": 128 },
-        "category": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 256 },
+        "scientificName": { "type": "string", "maxLength": 256 },
+        "activeIngredient": { "type": "string", "maxLength": 256 },
+        "dosageForm": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "maxLength": 128 },
         "price": { "type": "string", "maxLength": 64 },
+        "unit": { "type": "string", "maxLength": 64 },
         "bonus": { "type": "string", "maxLength": 128 },
         "description": { "type": "string", "maxLength": 2000 },
+        "image": { "type": "string", "maxLength": 500000 },
         "imageUrl": { "type": "string", "maxLength": 2048 },
+        "qrCode": { "type": "string", "maxLength": 256 },
+        "barcode": { "type": "string", "maxLength": 128 },
         "stock": { "type": "number" },
         "lowStockThreshold": { "type": "number" },
         "isAvailable": { "type": "boolean" },
@@ -75,6 +85,8 @@
         "total": { "type": "number" },
         "status": { "type": "string", "enum": ["pending", "approved", "processing", "completed", "cancelled"] },
         "notes": { "type": "string", "maxLength": 1000 },
+        "isArchived": { "type": "boolean" },
+        "archivedAt": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "maxLength": 64 },
         "respondedAt": { "type": "string", "maxLength": 64 },
         "approvedAt": { "type": "string", "maxLength": 64 },
@@ -90,10 +102,16 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "clientId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
         "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
         "clientType": { "type": "string", "enum": ["pharmacy", "doctor"] },
+        "repId": { "type": "string", "maxLength": 128 },
+        "repName": { "type": "string", "maxLength": 128 },
         "notes": { "type": "string", "maxLength": 1000 },
+        "summary": { "type": "string", "maxLength": 2000 },
+        "tasks": { "type": "array" },
+        "status": { "type": "string", "enum": ["scheduled", "completed", "in_progress", "cancelled"] },
         "visitDate": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
@@ -110,6 +128,9 @@
         "type": { "type": "string", "enum": ["broadcast", "target"] },
         "targetClientId": { "type": "string", "maxLength": 128 },
         "targetUserId": { "type": "string", "maxLength": 128 },
+        "targetClientName": { "type": "string", "maxLength": 128 },
+        "isArchived": { "type": "boolean" },
+        "archivedAt": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "title", "message"]
@@ -121,6 +142,7 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "clientId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
         "clientName": { "type": "string", "maxLength": 128 },
         "entityName": { "type": "string", "maxLength": 128 },
         "clientPhone": { "type": "string", "maxLength": 32 },
@@ -154,20 +176,24 @@
         "subject": { "type": "string", "maxLength": 256 },
         "content": { "type": "string", "maxLength": 3000 },
         "status": { "type": "string", "enum": ["pending", "in_progress", "reviewed", "resolved", "closed"] },
-        "createdAt": { "type": "string", "maxLength": 64 }
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "subject", "content"]
     },
     "Settings": {
       "title": "Settings",
-      "description": "System settings and global profile avatar synchronization",
+      "description": "System settings, catalog categories, and global profile avatar synchronization",
       "type": "object",
       "properties": {
         "requireApprovalForNewClients": { "type": "boolean" },
+        "requireApprovalForNewAccounts": { "type": "boolean" },
         "singlePhonePerDevice": { "type": "boolean" },
         "autoApproveKnownNumbers": { "type": "boolean" },
         "enableVisitTracking": { "type": "boolean" },
-        "drProfileAvatar": { "type": "string" }
+        "drProfileAvatar": { "type": "string", "maxLength": 500000 },
+        "productCategories": { "type": "array" },
+        "categoryColors": { "type": "object" }
       }
     },
     "KeepNote": {
@@ -176,12 +202,15 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "clientId": { "type": "string", "maxLength": 128 },
         "title": { "type": "string", "maxLength": 256 },
         "content": { "type": "string", "maxLength": 10000 },
         "color": { "type": "string", "maxLength": 64 },
         "isPinned": { "type": "boolean" },
         "isArchived": { "type": "boolean" },
         "labels": { "type": "array" },
+        "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "title"]
