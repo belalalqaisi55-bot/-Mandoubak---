@@ -1030,6 +1030,7 @@ export default function App() {
   const [aiSingleSuggestingId, setAiSingleSuggestingId] = useState<string | null>(null);
   const [aiShowOnlyChanges, setAiShowOnlyChanges] = useState(true);
   const [aiApplyDetectedIngredient, setAiApplyDetectedIngredient] = useState(true);
+  const [aiAllowNewCategories, setAiAllowNewCategories] = useState(true);
   const [aiClassificationScope, setAiClassificationScope] = useState<"general" | "all" | null>(null);
   const [aiCatalogSuggestions, setAiCatalogSuggestions] = useState<
     Array<{
@@ -1037,6 +1038,7 @@ export default function App() {
       productName: string;
       currentCategory: string;
       suggestedCategory: string;
+      isNewCategory?: boolean;
       detectedActiveIngredient: string;
       currentActiveIngredient?: string;
       confidence: string;
@@ -5238,6 +5240,7 @@ export default function App() {
             currentCategory: p.category || "عام",
           })),
           availableCategories,
+          allowNewCategories: aiAllowNewCategories,
         }),
       });
       const data = await response.json();
@@ -5250,7 +5253,8 @@ export default function App() {
         const src = productMap.get(item.id);
         const currentCat = (src?.category || "عام").trim();
         const suggestedCat = String(item.suggestedCategory || currentCat).trim();
-        const hasChange = suggestedCat !== currentCat;
+        const isNewCat = Boolean(item.isNewCategory) || !availableCategories.includes(suggestedCat);
+        const hasChange = suggestedCat !== currentCat || isNewCat;
         const fillsIngredient =
           !src?.activeIngredient?.trim() && Boolean(String(item.detectedActiveIngredient || "").trim());
         return {
@@ -5258,6 +5262,7 @@ export default function App() {
           productName: src?.name || item.id,
           currentCategory: currentCat,
           suggestedCategory: suggestedCat,
+          isNewCategory: isNewCat,
           detectedActiveIngredient: String(item.detectedActiveIngredient || "").trim(),
           currentActiveIngredient: src?.activeIngredient || "",
           confidence: String(item.confidence || "متوسطة").trim(),
@@ -5266,13 +5271,20 @@ export default function App() {
         };
       });
 
-      const anyChanges = mapped.some((m: any) => m.suggestedCategory !== m.currentCategory);
+      const anyChanges = mapped.some(
+        (m: any) => m.suggestedCategory !== m.currentCategory || m.isNewCategory || (!m.currentActiveIngredient && m.detectedActiveIngredient)
+      );
       setAiShowOnlyChanges(anyChanges);
       setAiCatalogSuggestions(mapped);
       const changedCount = mapped.filter((m: any) => m.suggestedCategory !== m.currentCategory).length;
+      const newCatsCount = Array.from(
+        new Set(mapped.filter((m: any) => m.isNewCategory && m.suggestedCategory).map((m: any) => m.suggestedCategory))
+      ).length;
       showSuccess(
-        changedCount > 0
-          ? `حلّل Gemini AI ${mapped.length} صنفاً واقترح تحديث تصنيف ${changedCount} صنفاً.`
+        changedCount > 0 || newCatsCount > 0
+          ? `حلّل Gemini AI ${mapped.length} صنفاً واقترح تحديث ${changedCount} صنفاً${
+              newCatsCount > 0 ? ` مع ${newCatsCount} تصنيفاً جديداً مقترحاً` : ""
+            }.`
           : `حلّل Gemini AI ${mapped.length} صنفاً ووجد أن تصنيفاتها الحالية مطابقة.`
       );
     } catch (e: any) {
@@ -5292,6 +5304,18 @@ export default function App() {
     setAiApplyingCatalog(true);
     try {
       const selectedMap = new Map(selectedItems.map((i) => [i.id, i]));
+      const newCategoriesToAdd = Array.from(
+        new Set(
+          selectedItems
+            .map((i) => i.suggestedCategory.trim())
+            .filter((cat) => cat && !availableCategories.includes(cat))
+        )
+      );
+
+      if (newCategoriesToAdd.length > 0) {
+        await saveProductCategories([...availableCategories, ...newCategoriesToAdd]);
+      }
+
       const updatedList: Product[] = [];
       const payloadUpdates: Array<{ id: string; category: string; activeIngredient?: string }> = [];
 
@@ -5328,7 +5352,10 @@ export default function App() {
         await fetch("/api/products/batch-categories", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ updates: payloadUpdates }),
+          body: JSON.stringify({
+            updates: payloadUpdates,
+            newCategories: newCategoriesToAdd,
+          }),
         });
       } catch (netErr) {
         console.warn("Backend batch category update error:", netErr);
@@ -5336,7 +5363,11 @@ export default function App() {
 
       setAiCatalogSuggestions([]);
       setAiClassificationScope(null);
-      showSuccess(`تم تحديث وحفظ تصنيف ${updatedList.length} صنفاً بنجاح في الكتالوج`);
+      showSuccess(
+        `تم تحديث وحفظ تصنيف ${updatedList.length} صنفاً بنجاح في قاعدة البيانات${
+          newCategoriesToAdd.length > 0 ? ` وإضافة ${newCategoriesToAdd.length} تصنيفاً جديداً` : ""
+        }`
+      );
     } catch (e: any) {
       showError(e?.message || "حدث خطأ أثناء تطبيق التصنيفات");
     } finally {
@@ -5355,6 +5386,7 @@ export default function App() {
           activeIngredient: prod.activeIngredient || "",
           description: prod.description || "",
           availableCategories,
+          allowNewCategories: aiAllowNewCategories,
         }),
       });
       const data = await response.json();
@@ -5363,6 +5395,9 @@ export default function App() {
       }
 
       const nextCategory = String(data.category).trim();
+      if (nextCategory && !availableCategories.includes(nextCategory)) {
+        await saveProductCategories([...availableCategories, nextCategory]);
+      }
       const nextIngredient =
         !prod.activeIngredient?.trim() && data.detectedActiveIngredient
           ? String(data.detectedActiveIngredient).trim()
@@ -9502,7 +9537,7 @@ export default function App() {
                     </button>
                   </form>
 
-                  {/* Gemini AI Catalog Auto-Classification Bar & Review Panel */}
+                  {/* Smart Catalog Classification (التصنيف الذكي للكتالوج) */}
                   {(() => {
                     const generalCount = products.filter(
                       (p) => !p.category || p.category.trim() === "" || p.category.trim() === "عام"
@@ -9510,9 +9545,19 @@ export default function App() {
                     const changedSuggestionsCount = aiCatalogSuggestions.filter(
                       (s) => s.suggestedCategory !== s.currentCategory
                     ).length;
+                    const newSuggestedCategories = Array.from(
+                      new Set(
+                        aiCatalogSuggestions
+                          .filter((s) => s.suggestedCategory && !availableCategories.includes(s.suggestedCategory))
+                          .map((s) => s.suggestedCategory)
+                      )
+                    );
                     const displayedSuggestions = aiShowOnlyChanges
                       ? aiCatalogSuggestions.filter(
-                          (s) => s.suggestedCategory !== s.currentCategory || (!s.currentActiveIngredient && s.detectedActiveIngredient)
+                          (s) =>
+                            s.suggestedCategory !== s.currentCategory ||
+                            Boolean(s.isNewCategory) ||
+                            (!s.currentActiveIngredient && s.detectedActiveIngredient)
                         )
                       : aiCatalogSuggestions;
                     const selectedCount = aiCatalogSuggestions.filter((s) => s.selected).length;
@@ -9520,18 +9565,27 @@ export default function App() {
                     return (
                       <div className="rounded-2xl border border-indigo-200 bg-gradient-to-l from-indigo-50/70 via-white to-teal-50/50 p-3.5 sm:p-4 shadow-2xs space-y-3">
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                          <div className="space-y-0.5">
+                          <div className="space-y-1">
                             <div className="flex items-center gap-2">
                               <div className="h-7 w-7 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
                                 <Wand2 className="h-4 w-4" />
                               </div>
                               <h4 className="text-sm font-black text-slate-900">
-                                تصنيف أصناف الكتالوج تلقائياً عبر Gemini AI
+                                التصنيف الذكي للكتالوج (Gemini AI)
                               </h4>
                             </div>
                             <p className="text-2xs text-slate-600 pr-9">
-                              تحليل أسماء الأدوية والمستحضرات في القائمة وتوزيعها تلقائياً على الفئات المتاحة ({availableCategories.length} فئة) لتقليل الإدخال اليدوي.
+                              تحليل أسماء الأصناف والمواد الفعالة تلقائياً وتوزيعها على التصنيفات المتاحة ({availableCategories.length} تصنيفاً) أو اقتراح تصنيفات جديدة، مع تحديث قاعدة البيانات فور موافقتك.
                             </p>
+                            <label className="inline-flex items-center gap-1.5 pr-9 pt-0.5 text-3xs font-bold text-indigo-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={aiAllowNewCategories}
+                                onChange={(e) => setAiAllowNewCategories(e.target.checked)}
+                                className="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <span>اقتراح تصنيفات جديدة تلقائياً عند الحاجة</span>
+                            </label>
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2 pr-9 md:pr-0">
@@ -9575,6 +9629,11 @@ export default function App() {
                                 <span className="text-3xs text-indigo-700 font-bold">
                                   • تغييرات مقترحة: {changedSuggestionsCount}
                                 </span>
+                                {newSuggestedCategories.length > 0 && (
+                                  <span className="text-3xs text-amber-700 font-bold">
+                                    • تصنيفات جديدة مقترحة: {newSuggestedCategories.length}
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex flex-wrap items-center gap-2">
@@ -9616,6 +9675,13 @@ export default function App() {
                               </div>
                             </div>
 
+                            {newSuggestedCategories.length > 0 && (
+                              <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-3xs text-amber-900">
+                                <span className="font-black">تصنيفات جديدة سيُضاف اعتمادها لقائمة النظام تلقائياً: </span>
+                                <span className="font-bold">{newSuggestedCategories.join(" • ")}</span>
+                              </div>
+                            )}
+
                             {displayedSuggestions.length === 0 ? (
                               <div className="p-4 text-center text-xs text-slate-500">
                                 جميع الأصناف المحلّلة مطابقة لتصنيفاتها الحالية. يمكنك الضغط على "عرض كل النتائج" لمراجعتها.
@@ -9624,6 +9690,10 @@ export default function App() {
                               <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
                                 {displayedSuggestions.map((item) => {
                                   const isChanged = item.suggestedCategory !== item.currentCategory;
+                                  const isNewCat = !availableCategories.includes(item.suggestedCategory);
+                                  const rowOptions = isNewCat
+                                    ? [item.suggestedCategory, ...availableCategories]
+                                    : availableCategories;
                                   return (
                                     <div
                                       key={`ai-cat-${item.id}`}
@@ -9672,7 +9742,12 @@ export default function App() {
                                             setAiCatalogSuggestions((prev) =>
                                               prev.map((s) =>
                                                 s.id === item.id
-                                                  ? { ...s, suggestedCategory: e.target.value, selected: true }
+                                                  ? {
+                                                      ...s,
+                                                      suggestedCategory: e.target.value,
+                                                      isNewCategory: !availableCategories.includes(e.target.value),
+                                                      selected: true,
+                                                    }
                                                   : s
                                               )
                                             )
@@ -9683,15 +9758,17 @@ export default function App() {
                                           }}
                                           className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-2xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none cursor-pointer"
                                         >
-                                          {availableCategories.map((cat) => (
+                                          {rowOptions.map((cat) => (
                                             <option key={cat} value={cat}>
-                                              {cat}
+                                              {!availableCategories.includes(cat) ? `${cat} (جديد)` : cat}
                                             </option>
                                           ))}
                                         </select>
-                                        {isChanged && (
+                                        {isNewCat ? (
+                                          <span className="text-3xs font-bold text-amber-700">جديد</span>
+                                        ) : isChanged ? (
                                           <span className="text-3xs font-bold text-emerald-700">تحديث</span>
-                                        )}
+                                        ) : null}
                                       </div>
                                     </div>
                                   );

@@ -351,15 +351,22 @@ const DEFAULT_CATALOG_CATEGORIES = [
   "أدوية الطوارئ والمحاليل",
 ];
 
-function normalizeCatalogCategory(suggested: string | undefined, availableCategories: string[]): string {
+function resolveCatalogCategory(
+  suggested: string | undefined,
+  availableCategories: string[],
+  allowNewCategories = false
+): { category: string; isNewCategory: boolean } {
   const validCategories = availableCategories.length > 0 ? availableCategories : DEFAULT_CATALOG_CATEGORIES;
   const raw = String(suggested || "").trim().replace(/^["'`«]+|["'`»]+$/g, "");
   if (!raw) {
-    return validCategories.includes("عام") ? "عام" : validCategories[0];
+    return {
+      category: validCategories.includes("عام") ? "عام" : validCategories[0],
+      isNewCategory: false,
+    };
   }
 
   const exact = validCategories.find((c) => c.trim() === raw);
-  if (exact) return exact;
+  if (exact) return { category: exact, isNewCategory: false };
 
   const normalizeAr = (str: string) =>
     str
@@ -372,15 +379,26 @@ function normalizeCatalogCategory(suggested: string | undefined, availableCatego
 
   const normRaw = normalizeAr(raw);
   const normExact = validCategories.find((c) => normalizeAr(c) === normRaw);
-  if (normExact) return normExact;
+  if (normExact) return { category: normExact, isNewCategory: false };
 
   const partial = validCategories.find((c) => {
     const nc = normalizeAr(c);
     return nc.length > 1 && (normRaw.includes(nc) || nc.includes(normRaw));
   });
-  if (partial) return partial;
+  if (partial) return { category: partial, isNewCategory: false };
 
-  return validCategories.includes("عام") ? "عام" : validCategories[0];
+  if (allowNewCategories && raw.length >= 2 && raw.length <= 60 && normRaw !== "عام") {
+    return { category: raw, isNewCategory: true };
+  }
+
+  return {
+    category: validCategories.includes("عام") ? "عام" : validCategories[0],
+    isNewCategory: false,
+  };
+}
+
+function normalizeCatalogCategory(suggested: string | undefined, availableCategories: string[]): string {
+  return resolveCatalogCategory(suggested, availableCategories, false).category;
 }
 
 async function classifySingleProductWithGemini(params: {
@@ -388,6 +406,7 @@ async function classifySingleProductWithGemini(params: {
   activeIngredient?: string;
   description?: string;
   availableCategories?: string[];
+  allowNewCategories?: boolean;
 }) {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("مفتاح Gemini API غير مهيأ على الخادم.");
@@ -398,12 +417,16 @@ async function classifySingleProductWithGemini(params: {
       ? Array.from(new Set(params.availableCategories.map((c) => String(c || "").trim()).filter(Boolean)))
       : DEFAULT_CATALOG_CATEGORIES;
 
-  const prompt = `حلّل بيانات الصنف الطبي التالي واختر له التصنيف الأنسب حصراً من قائمة الفئات المتاحة في النظام:
+  const allowNew = Boolean(params.allowNewCategories);
+
+  const prompt = `حلّل بيانات الصنف الطبي التالي واختر له التصنيف الأنسب من قائمة الفئات المتاحة في النظام${
+    allowNew ? "، أو اقترح تصنيفاً طبياً جديداً ومختصراً إذا لم تتطابق أي فئة متاحة بدقة" : " حصراً"
+  }:
 - اسم الصنف: ${params.name || "غير محدد"}
 - المادة الفعالة: ${params.activeIngredient || "غير محددة"}
 - الوصف / دواعي الاستخدام: ${params.description || "غير متوفر"}
 
-الفئات المتاحة في النظام (اختر واحدة منها فقط بالنص المطابق):
+الفئات المتاحة في النظام:
 ${categoriesList.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}`;
 
   const { response, modelUsed } = await robustGenerateContent(
@@ -412,15 +435,22 @@ ${categoriesList.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}`;
     prompt,
     {
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      systemInstruction:
-        "أنت صيدلاني إكلينيكي خبير بتصنيف المستحضرات الدوائية والطبية في الصيدليات. يجب اختيار فئة واحدة مطابقة تماماً لقائمة الفئات المتاحة في النظام، وتحديد المادة الفعالة العلمية بدقة إن أمكن، وكتابة سبب مختصر بالعربية.",
+      systemInstruction: allowNew
+        ? "أنت صيدلاني إكلينيكي خبير بتصنيف المستحضرات الدوائية والطبية. اختر الفئة الأنسب من القائمة المتاحة أولاً؛ وإذا لم يناسب الصنف أي فئة متاحة بدقة، اقترح اسماً عربياً موجزاً لتصنيف جديد مناسب واضبط isNewCategory على true. استنتج المادة الفعالة العلمية بدقة واكتب سبباً مختصراً بالعربية."
+        : "أنت صيدلاني إكلينيكي خبير بتصنيف المستحضرات الدوائية والطبية في الصيدليات. يجب اختيار فئة واحدة مطابقة تماماً لقائمة الفئات المتاحة في النظام، وتحديد المادة الفعالة العلمية بدقة إن أمكن، وكتابة سبب مختصر بالعربية.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
         properties: {
           category: {
             type: Type.STRING,
-            description: "اسم الفئة المختارة بالنص المطابق من قائمة الفئات المتاحة.",
+            description: allowNew
+              ? "اسم الفئة المختارة من القائمة المتاحة أو اسم تصنيف جديد مختصر بالعربية."
+              : "اسم الفئة المختارة بالنص المطابق من قائمة الفئات المتاحة.",
+          },
+          isNewCategory: {
+            type: Type.BOOLEAN,
+            description: "true إذا كان التصنيف جديداً وغير موجود في القائمة المتاحة، وfalse إذا كان موجوداً.",
           },
           detectedActiveIngredient: {
             type: Type.STRING,
@@ -442,10 +472,11 @@ ${categoriesList.map((c, idx) => `${idx + 1}. ${c}`).join("\n")}`;
   );
 
   const parsed = JSON.parse((response.text ?? "{}").trim());
-  const normalizedCategory = normalizeCatalogCategory(parsed?.category, categoriesList);
+  const resolved = resolveCatalogCategory(parsed?.category, categoriesList, allowNew);
 
   return {
-    category: normalizedCategory,
+    category: resolved.category,
+    isNewCategory: resolved.isNewCategory,
     detectedActiveIngredient: String(parsed?.detectedActiveIngredient || "").trim(),
     confidence: String(parsed?.confidence || "عالية").trim(),
     reason: String(parsed?.reason || "").trim(),
@@ -2971,16 +3002,19 @@ app.post("/api/products", requirePrivileged, async (req, res) => {
 
 // Batch update product categories (by Representative / Gemini AI Auto-Classification)
 app.put("/api/products/batch-categories", requirePrivileged, async (req, res) => {
-  const { updates } = req.body || {};
+  const { updates, newCategories } = req.body || {};
   if (!Array.isArray(updates) || updates.length === 0) {
     return res.status(400).json({ error: "قائمة التحديثات مطلوبة." });
   }
 
   const updateMap = new Map<string, { category: string; activeIngredient?: string }>();
+  const usedCategories = new Set<string>();
   for (const item of updates) {
     if (item && typeof item.id === "string" && typeof item.category === "string" && item.category.trim()) {
+      const cat = item.category.trim();
+      usedCategories.add(cat);
       updateMap.set(item.id, {
-        category: item.category.trim(),
+        category: cat,
         activeIngredient:
           typeof item.activeIngredient === "string" && item.activeIngredient.trim()
             ? item.activeIngredient.trim()
@@ -3010,10 +3044,27 @@ app.put("/api/products/batch-categories", requirePrivileged, async (req, res) =>
     updatedProducts.push(updatedProduct);
   }
 
+  // Persist any newly approved categories into app_config settings
+  const currentSettings = await fetchSettingsFromDB();
+  const existingCats = Array.isArray(currentSettings.productCategories) && currentSettings.productCategories.length > 0
+    ? currentSettings.productCategories
+    : DEFAULT_CATALOG_CATEGORIES;
+  const extraNewCats = Array.isArray(newCategories)
+    ? newCategories.map((c: any) => String(c || "").trim()).filter(Boolean)
+    : [];
+  const mergedCategories = Array.from(new Set([...existingCats, ...extraNewCats, ...Array.from(usedCategories)]));
+  if (mergedCategories.length > existingCats.length) {
+    await saveSettingsToDB({
+      ...currentSettings,
+      productCategories: mergedCategories,
+    });
+  }
+
   res.json({
     success: true,
     updatedCount: updatedProducts.length,
     products: updatedProducts,
+    updatedCategories: mergedCategories,
   });
 });
 
@@ -5258,7 +5309,7 @@ app.post("/api/ai/transcribe-audio", requireAuth, async (req, res) => {
 });
 
 app.post("/api/ai/suggest-category", requireAuth, async (req, res) => {
-  const { name, productName, activeIngredient, description, availableCategories } = req.body || {};
+  const { name, productName, activeIngredient, description, availableCategories, allowNewCategories = true } = req.body || {};
   const itemName = String(productName || name || "").trim();
   const ingredient = String(activeIngredient || "").trim();
   const desc = String(description || "").trim();
@@ -5273,6 +5324,7 @@ app.post("/api/ai/suggest-category", requireAuth, async (req, res) => {
       activeIngredient: ingredient,
       description: desc,
       availableCategories,
+      allowNewCategories: Boolean(allowNewCategories),
     });
     res.json({ success: true, ...result });
   } catch (err: any) {
@@ -5281,9 +5333,9 @@ app.post("/api/ai/suggest-category", requireAuth, async (req, res) => {
   }
 });
 
-// Batch auto-classify catalog products into available system categories using Gemini AI
+// Batch auto-classify catalog products into available system categories or suggest new categories using Gemini AI
 app.post("/api/ai/classify-catalog", requirePrivileged, async (req, res) => {
-  const { products, availableCategories } = req.body || {};
+  const { products, availableCategories, allowNewCategories = true } = req.body || {};
 
   if (!process.env.GEMINI_API_KEY) {
     return res.status(500).json({ error: "مفتاح Gemini API غير مهيأ على الخادم." });
@@ -5293,6 +5345,7 @@ app.post("/api/ai/classify-catalog", requirePrivileged, async (req, res) => {
     return res.status(400).json({ error: "يرجى توفير قائمة الأصناف المراد تحليلها وتصنيفها." });
   }
 
+  const allowNew = Boolean(allowNewCategories);
   const categoriesList =
     Array.isArray(availableCategories) && availableCategories.length > 0
       ? Array.from(new Set(availableCategories.map((c) => String(c || "").trim()).filter(Boolean)))
@@ -5317,10 +5370,12 @@ app.post("/api/ai/classify-catalog", requirePrivileged, async (req, res) => {
     const allResults: Array<{
       id: string;
       suggestedCategory: string;
+      isNewCategory: boolean;
       detectedActiveIngredient: string;
       confidence: string;
       reason: string;
     }> = [];
+    const suggestedNewSet = new Set<string>();
     let lastModelUsed = "gemini-4-hydrogen";
 
     for (let i = 0; i < sanitizedProducts.length; i += BATCH_SIZE) {
@@ -5334,10 +5389,14 @@ app.post("/api/ai/classify-catalog", requirePrivileged, async (req, res) => {
         )
         .join("\n");
 
-      const prompt = `قم بتحليل أسماء الأصناف الطبية التالية في كتالوج الصيدليات والمستودعات الطبية، وصنّف كل صنف تلقائياً إلى أنسب فئة من قائمة الفئات المتاحة في النظام.
+      const prompt = `قم بتحليل أسماء الأصناف والمواد الفعالة التالية في كتالوج الصيدليات والمستودعات الطبية، وصنّف كل صنف تلقائياً إلى أنسب فئة من قائمة الفئات المتاحة في النظام${
+        allowNew
+          ? "، أو اقترح اسماً عربياً واضحاً ومختصراً لتصنيف جديد إذا لم يناسب أي تصنيف متاح طبيعة الصنف بدقة"
+          : ""
+      }.
 
-قائمة الفئات المتاحة في النظام (يجب اختيار الفئة من هذه القائمة حصراً وبنفس النص):
-${categoriesList.map((c, idx) => `- ${c}`).join("\n")}
+قائمة الفئات المتاحة في النظام${allowNew ? " (يفضل الاختيار منها كلما أمكن)" : " (يجب اختيار الفئة من هذه القائمة حصراً وبنفس النص)"}:
+${categoriesList.map((c) => `- ${c}`).join("\n")}
 
 قائمة الأصناف المطلوب تصنيفها (${chunk.length} صنف):
 ${itemsPrompt}`;
@@ -5348,8 +5407,9 @@ ${itemsPrompt}`;
         prompt,
         {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          systemInstruction:
-            "أنت خبير صيدلاني متخصص في تصنيف الأدوية والمستلزمات الطبية. حلّل اسم الدواء التجاري والشكل الصيدلاني والتركيز والمادة الفعالة (إن وجدت) واختر لكل صنف أنسب فئة من القائمة المتاحة فقط. أرجع مصفوفة JSON مطابقة للمخطط تحتوي على كل معرف id تم إرساله.",
+          systemInstruction: allowNew
+            ? "أنت خبير صيدلاني متخصص في تصنيف الأدوية والمستلزمات الطبية. حلّل اسم الدواء التجاري والمادة الفعالة والشكل الصيدلاني والتركيز؛ اختر لكل صنف أنسب فئة من القائمة المتاحة أولاً، وإذا لم توجد فئة متاحة دقيقة (مثل مستلزمات أسنان أو عناية بالبشرة أو أدوية أعصاب وغيرها)، اقترح تصنيفاً جديداً موجزاً بالعربية (من كلمتين إلى 4 كلمات) واضبط isNewCategory على true. أرجع مصفوفة JSON مطابقة للمخطط لكل معرف id."
+            : "أنت خبير صيدلاني متخصص في تصنيف الأدوية والمستلزمات الطبية. حلّل اسم الدواء التجاري والشكل الصيدلاني والتركيز والمادة الفعالة (إن وجدت) واختر لكل صنف أنسب فئة من القائمة المتاحة فقط. أرجع مصفوفة JSON مطابقة للمخطط تحتوي على كل معرف id تم إرساله.",
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
@@ -5362,7 +5422,13 @@ ${itemsPrompt}`;
                 },
                 suggestedCategory: {
                   type: Type.STRING,
-                  description: "اسم الفئة المقترحة بالنص المطابق من الفئات المتاحة.",
+                  description: allowNew
+                    ? "اسم الفئة من القائمة المتاحة أو اسم تصنيف جديد مختصر بالعربية."
+                    : "اسم الفئة المقترحة بالنص المطابق من الفئات المتاحة.",
+                },
+                isNewCategory: {
+                  type: Type.BOOLEAN,
+                  description: "true إذا كانت الفئة المقترحة جديدة وغير موجودة في القائمة المتاحة، وfalse خلاف ذلك.",
                 },
                 detectedActiveIngredient: {
                   type: Type.STRING,
@@ -5396,12 +5462,21 @@ ${itemsPrompt}`;
 
         for (const srcItem of chunk) {
           const match = resultById.get(srcItem.id);
+          const resolved = resolveCatalogCategory(
+            match?.suggestedCategory || srcItem.currentCategory,
+            categoriesList,
+            allowNew
+          );
+          if (resolved.isNewCategory) {
+            suggestedNewSet.add(resolved.category);
+          }
           allResults.push({
             id: srcItem.id,
-            suggestedCategory: normalizeCatalogCategory(match?.suggestedCategory || srcItem.currentCategory, categoriesList),
+            suggestedCategory: resolved.category,
+            isNewCategory: resolved.isNewCategory,
             detectedActiveIngredient: String(match?.detectedActiveIngredient || "").trim(),
             confidence: String(match?.confidence || "متوسطة").trim(),
-            reason: String(match?.reason || "تصنيف بناءً على الاسم الدوائي المتاح").trim(),
+            reason: String(match?.reason || "تصنيف بناءً على الاسم الدوائي والمادة الفعالة").trim(),
           });
         }
       }
@@ -5411,6 +5486,7 @@ ${itemsPrompt}`;
       success: true,
       model: lastModelUsed,
       totalProcessed: allResults.length,
+      suggestedNewCategories: Array.from(suggestedNewSet),
       classifications: allResults,
     });
   } catch (err: any) {
