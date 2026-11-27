@@ -238,12 +238,8 @@ if (isFirebaseConfigured) {
         });
     }
 
-    // Attempt silent anonymous sign-in so Firestore has a valid auth session
-    if (auth && !auth.currentUser) {
-      signInAnonymously(auth).catch(() => {
-        // Silently ignore if offline or anonymous auth disabled
-      });
-    }
+    // Do not auto-create anonymous users on page boot; wait for explicit login or registration
+    // (ensureAnonymousFirebaseUid handles anonymous session creation only when registering a client).
   } catch (err) {
     console.warn("Firebase SDK initialization fallback:", err);
   }
